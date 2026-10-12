@@ -6,6 +6,16 @@
 
 namespace ItemPreview
 {
+    struct BlurMask
+    {
+        ImVec2 center{};
+        ImVec2 radii{};
+    };
+
+    // Multiplicador único da área protegida pelo blur. Aumente este valor
+    // caso itens maiores ainda recebam blur nas extremidades.
+    inline constexpr float kBlurMaskGlobalScale = 4.0f;
+
     bool Show(
         RE::TESForm* form,
         std::uint16_t uniqueID = 0,
@@ -14,6 +24,8 @@ namespace ItemPreview
     void Update();
     void Hide();
     bool IsVisible();
+    // Retorna a elipse dinâmica do preview no espaço virtual do HUD.
+    bool GetBlurMask(BlurMask& a_mask);
 
     // Posição no HUD (em pixels de tela) onde o item 3D deve projetar.
     // Chame ANTES de Update() no mesmo frame, ou ele mantém a última

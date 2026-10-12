@@ -75,6 +75,71 @@ namespace ItemPreview
 
         static constexpr float kPreloadScale = 0.01f;
         static constexpr float kTargetRadius = 10.0f;
+        // O preview normalizado com raio 10 ocupa visualmente cerca de 64 px
+        // no HUD virtual. A máscara acompanha a mesma escala do modelo.
+        static constexpr float kBlurMaskBaseRadius = 64.0f;
+        static constexpr float kBlurMaskHorizontalAspect = 1.15f;
+
+        float GetPreviewVisualFactor()
+        {
+            float visualFactor = 1.0f;
+            Config::ItemPreviewCategory category =
+                Config::ItemPreviewCategory::Misc;
+
+            if (g_form)
+            {
+                if (g_form->As<RE::AlchemyItem>())
+                {
+                    visualFactor = 0.55f;
+                    category = Config::ItemPreviewCategory::Potion;
+                }
+                // ScrollItem herda SpellItem e precisa ser testado antes.
+                else if (g_form->As<RE::ScrollItem>())
+                {
+                    category = Config::ItemPreviewCategory::Scroll;
+                }
+                else if (g_form->As<RE::SpellItem>())
+                {
+                    visualFactor = 1.50f;
+                    category = Config::ItemPreviewCategory::Spell;
+                }
+                else if (g_form->As<RE::TESObjectWEAP>())
+                {
+                    visualFactor = 1.2f;
+                    category = Config::ItemPreviewCategory::Weapon;
+                }
+                else if (g_form->As<RE::TESObjectARMO>())
+                {
+                    category = Config::ItemPreviewCategory::Armor;
+                }
+                else if (g_form->As<RE::TESAmmo>())
+                {
+                    visualFactor = 1.2f;
+                    category = Config::ItemPreviewCategory::Ammo;
+                }
+                else if (g_form->As<RE::TESObjectBOOK>())
+                {
+                    visualFactor = 1.1f;
+                    category = Config::ItemPreviewCategory::Book;
+                }
+                else if (g_form->As<RE::TESKey>())
+                {
+                    category = Config::ItemPreviewCategory::Key;
+                }
+                else if (g_form->As<RE::TESSoulGem>())
+                {
+                    category = Config::ItemPreviewCategory::SoulGem;
+                }
+                else if (g_form->As<RE::IngredientItem>())
+                {
+                    visualFactor = 1.1f;
+                    category = Config::ItemPreviewCategory::Ingredient;
+                }
+            }
+
+            return visualFactor *
+                Config::GetItemPreviewCategoryMultiplier(category);
+        }
 
         // ============================================================
         // HELPERS
@@ -220,72 +285,7 @@ namespace ItemPreview
             // AJUSTE VISUAL POR CATEGORIA
             // ============================================================
 
-            float visualFactor = 1.0f;
-            Config::ItemPreviewCategory category =
-                Config::ItemPreviewCategory::Misc;
-
-            if (g_form)
-            {
-                if (g_form->As<RE::AlchemyItem>())
-                {
-                    visualFactor = 0.55f;
-                    category = Config::ItemPreviewCategory::Potion;
-                }
-                // ScrollItem herda SpellItem. Ele precisa ser identificado
-                // antes para que seu próprio multiplicador seja aplicado.
-                else if (g_form->As<RE::ScrollItem>())
-                {
-                    visualFactor = 1.0f;
-                    category = Config::ItemPreviewCategory::Scroll;
-                }
-                else if (g_form->As<RE::SpellItem>())
-                {
-                    visualFactor = 1.50f;
-                    category = Config::ItemPreviewCategory::Spell;
-                }
-                else if (g_form->As<RE::TESObjectWEAP>())
-                {
-                    visualFactor = 1.2f;
-                    category = Config::ItemPreviewCategory::Weapon;
-                }
-                else if (g_form->As<RE::TESObjectARMO>())
-                {
-                    visualFactor = 1.0f;
-                    category = Config::ItemPreviewCategory::Armor;
-                }
-                else if (g_form->As<RE::TESAmmo>())
-                {
-                    visualFactor = 1.2f;
-                    category = Config::ItemPreviewCategory::Ammo;
-                }
-                else if (g_form->As<RE::TESObjectBOOK>())
-                {
-                    visualFactor = 1.1f;
-                    category = Config::ItemPreviewCategory::Book;
-                }
-                else if (g_form->As<RE::TESKey>())
-                {
-                    visualFactor = 1.0f;
-                    category = Config::ItemPreviewCategory::Key;
-                }
-                else if (g_form->As<RE::TESSoulGem>())
-                {
-                    visualFactor = 1.0f;
-                    category = Config::ItemPreviewCategory::SoulGem;
-                }
-                else if (g_form->As<RE::IngredientItem>())
-                {
-                    visualFactor = 1.1f;
-                    category = Config::ItemPreviewCategory::Ingredient;
-                }
-                else if (g_form->As<RE::TESObjectMISC>())
-                {
-                    visualFactor = 1.0f;
-                    category = Config::ItemPreviewCategory::Misc;
-                }
-            }
-
-            visualFactor *= Config::GetItemPreviewCategoryMultiplier(category);
+            const float visualFactor = GetPreviewVisualFactor();
 
             const float targetRadius =
                 kTargetRadius * visualFactor * g_sizeScale;
@@ -879,6 +879,21 @@ namespace ItemPreview
     bool IsVisible()
     {
         return g_visible;
+    }
+
+    bool GetBlurMask(BlurMask& a_mask)
+    {
+        if (!g_visible || !g_hasHudPos || !g_modelReady)
+            return false;
+
+        const float radius = kBlurMaskBaseRadius * g_sizeScale *
+            GetPreviewVisualFactor() * kBlurMaskGlobalScale;
+        if (!std::isfinite(radius) || radius <= 0.0f)
+            return false;
+
+        a_mask.center = g_hudPos;
+        a_mask.radii = ImVec2(radius * kBlurMaskHorizontalAspect, radius);
+        return true;
     }
 
     RE::TESForm* GetCurrentForm()

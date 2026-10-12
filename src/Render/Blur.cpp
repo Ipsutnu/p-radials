@@ -1,6 +1,8 @@
 #include "PCH.h"
 #include "Blur.h"
+#include "Item.h"
 #include "Logger.h"
+#include "Resolution.h"
 
 #include <d3dcompiler.h>
 #include <wrl/client.h>
@@ -18,7 +20,21 @@ namespace Blur
             float directionX = 0.0f;
             float directionY = 0.0f;
             float strength = 0.0f;
-            float padding[3]{};
+            float maskEnabled = 0.0f;
+            float maskCenterX = 0.0f;
+            float maskCenterY = 0.0f;
+            float maskRadiusX = 1.0f;
+            float maskRadiusY = 1.0f;
+            float padding[2]{};
+        };
+
+        struct PreviewMaskData
+        {
+            float enabled = 0.0f;
+            float centerX = 0.0f;
+            float centerY = 0.0f;
+            float radiusX = 1.0f;
+            float radiusY = 1.0f;
         };
 
         ID3D11Device* g_device = nullptr;
@@ -37,6 +53,13 @@ namespace Blur
         bool g_loggedNoTarget = false;
         bool g_loggedTargetFailure = false;
         bool g_loggedCallerTarget = false;
+        PreviewMaskData g_previewMask;
+        float g_animatedMaskRadiusX = 0.0f;
+        float g_animatedMaskRadiusY = 0.0f;
+        bool g_hasAnimatedPreviewMask = false;
+        float g_lastMaskCenterX = 0.5f;
+        float g_lastMaskCenterY = 0.5f;
+        int g_lastMaskAnimationFrame = -1;
 
         ComPtr<ID3D11Texture2D> g_sceneTexture;
         ComPtr<ID3D11ShaderResourceView> g_sceneView;
@@ -59,6 +82,9 @@ namespace Blur
 
         constexpr float kFadeInSpeed = 4.5f;
         constexpr float kFadeOutSpeed = 3.5f;
+        // Velocidade com que a proteção do preview alcança seu novo tamanho.
+        constexpr float kPreviewMaskResizeSpeed = 4.0f;
+        constexpr float kPreviewMaskCloseSpeed = 3.0f;
         constexpr UINT kDownsample = 4;
 
         void ReleaseSizedResources()
@@ -118,7 +144,10 @@ namespace Blur
                     float2 texelSize;
                     float2 direction;
                     float strength;
-                    float3 padding;
+                    float maskEnabled;
+                    float2 maskCenter;
+                    float2 maskRadii;
+                    float2 padding;
                 };
                 float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET
                 {
@@ -139,23 +168,36 @@ namespace Blur
                     float2 texelSize;
                     float2 direction;
                     float strength;
-                    float3 padding;
+                    float maskEnabled;
+                    float2 maskCenter;
+                    float2 maskRadii;
+                    float2 padding;
                 };
                 float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET
                 {
                     float3 sharp = sharpTexture.Sample(sceneSampler, uv).rgb;
                     float3 blurred = blurTexture.Sample(sceneSampler, uv).rgb;
 
-                    // Distância calculada em pixels: a máscara permanece um
-                    // círculo real em ultrawide e em telas mais quadradas.
+                    // Mantém a proteção circular central original.
                     float2 pixelDelta = (uv - float2(0.5, 0.5)) / texelSize;
-                    float shortestSide = min(1.0 / texelSize.x, 1.0 / texelSize.y);
+                    float shortestSide = min(1.0 / texelSize.x,
+                        1.0 / texelSize.y);
                     float clearRadius = shortestSide * 0.145;
                     float softEdge = shortestSide * 0.225;
-                    float outsideCenter = smoothstep(clearRadius,
-                                                     clearRadius + softEdge,
-                                                     length(pixelDelta));
-                    float blurAmount = saturate(strength) * outsideCenter;
+                    float maskAmount = smoothstep(clearRadius,
+                        clearRadius + softEdge, length(pixelDelta));
+
+                    // A elipse do preview é uma segunda área protegida. O
+                    // menor fator vence, preservando ambas as máscaras.
+                    if (maskEnabled > 0.5)
+                    {
+                        float2 ellipse = (uv - maskCenter) / maskRadii;
+                        // Dureza 0: nenhuma parte da borda é abrupta. A
+                        // transição do nítido para o blur ocupa a elipse toda.
+                        maskAmount = min(maskAmount,
+                            smoothstep(0.0, 1.0, length(ellipse)));
+                    }
+                    float blurAmount = saturate(strength) * maskAmount;
                     return float4(lerp(sharp, blurred, blurAmount), 1.0);
                 })";
 
@@ -311,8 +353,109 @@ namespace Blur
                     D3D11_MAP_WRITE_DISCARD, 0, &mapped)))
                 return;
             auto* data = static_cast<BlurConstants*>(mapped.pData);
-            *data = { texelX, texelY, directionX, directionY, strength, {} };
+            *data = { texelX, texelY, directionX, directionY, strength,
+                g_previewMask.enabled, g_previewMask.centerX,
+                g_previewMask.centerY, g_previewMask.radiusX,
+                g_previewMask.radiusY, {} };
             g_context->Unmap(g_constants.Get(), 0);
+        }
+
+        void UpdatePreviewMask(float deltaTime)
+        {
+            g_previewMask = {};
+
+            ItemPreview::BlurMask mask{};
+            const bool hasPreviewMask = ItemPreview::GetBlurMask(mask) &&
+                g_width != 0 && g_height != 0;
+
+            // O Frame Generation pode apresentar a mesma UI mais de uma vez.
+            // Avançar a interpolação só em um frame ImGui novo impede que
+            // apresentações extras acelerem a animação.
+            const int frame = ImGui::GetFrameCount();
+            const bool advanceAnimation = frame != g_lastMaskAnimationFrame;
+            if (advanceAnimation)
+                g_lastMaskAnimationFrame = frame;
+            const auto animateRadii = [&](float targetX, float targetY,
+                float speed) {
+                if (!advanceAnimation)
+                    return;
+                const float dt = std::clamp(deltaTime, 0.0f, 0.05f);
+                const float factor = 1.0f - std::exp(-speed * dt);
+                g_animatedMaskRadiusX += (targetX -
+                    g_animatedMaskRadiusX) * factor;
+                g_animatedMaskRadiusY += (targetY -
+                    g_animatedMaskRadiusY) * factor;
+            };
+
+            if (!hasPreviewMask)
+            {
+                if (!g_hasAnimatedPreviewMask)
+                    return;
+
+                if (ItemPreview::IsVisible())
+                {
+                    // A troca do item tem uma janela curta sem geometria
+                    // pronta. Conservamos a última máscara nessa janela.
+                    g_previewMask.enabled = 1.0f;
+                    g_previewMask.centerX = g_lastMaskCenterX;
+                    g_previewMask.centerY = g_lastMaskCenterY;
+                    g_previewMask.radiusX = g_animatedMaskRadiusX;
+                    g_previewMask.radiusY = g_animatedMaskRadiusY;
+                    return;
+                }
+
+                // Sem item selecionado, a proteção se fecha devagar e o blur
+                // volta a ocupar a região que ela estava preservando.
+                animateRadii(0.0f, 0.0f, kPreviewMaskCloseSpeed);
+                if (g_animatedMaskRadiusX <= 0.0001f &&
+                    g_animatedMaskRadiusY <= 0.0001f)
+                {
+                    g_animatedMaskRadiusX = 0.0f;
+                    g_animatedMaskRadiusY = 0.0f;
+                    g_hasAnimatedPreviewMask = false;
+                    return;
+                }
+
+                g_previewMask.enabled = 1.0f;
+                g_previewMask.centerX = g_lastMaskCenterX;
+                g_previewMask.centerY = g_lastMaskCenterY;
+                g_previewMask.radiusX = g_animatedMaskRadiusX;
+                g_previewMask.radiusY = g_animatedMaskRadiusY;
+                return;
+            }
+
+            const ImVec2 center = Resolution::ToRender(mask.center);
+            const ImVec2 edge = Resolution::ToRender(
+                ImVec2(mask.center.x + mask.radii.x,
+                    mask.center.y + mask.radii.y));
+            const float radiusX = std::abs(edge.x - center.x);
+            const float radiusY = std::abs(edge.y - center.y);
+            if (radiusX <= 0.0f || radiusY <= 0.0f)
+                return;
+
+            const float targetRadiusX = radiusX /
+                static_cast<float>(g_width);
+            const float targetRadiusY = radiusY /
+                static_cast<float>(g_height);
+            if (!g_hasAnimatedPreviewMask)
+            {
+                g_animatedMaskRadiusX = targetRadiusX;
+                g_animatedMaskRadiusY = targetRadiusY;
+                g_hasAnimatedPreviewMask = true;
+            }
+            else
+            {
+                animateRadii(targetRadiusX, targetRadiusY,
+                    kPreviewMaskResizeSpeed);
+            }
+
+            g_lastMaskCenterX = center.x / static_cast<float>(g_width);
+            g_lastMaskCenterY = center.y / static_cast<float>(g_height);
+            g_previewMask.enabled = 1.0f;
+            g_previewMask.centerX = g_lastMaskCenterX;
+            g_previewMask.centerY = g_lastMaskCenterY;
+            g_previewMask.radiusX = g_animatedMaskRadiusX;
+            g_previewMask.radiusY = g_animatedMaskRadiusY;
         }
 
         void DrawPass(ID3D11RenderTargetView* target,
@@ -429,6 +572,8 @@ namespace Blur
         if (!CreateSizedResources(backBuffer))
             return;
 
+        UpdatePreviewMask(deltaTime);
+
         D3D11_TEXTURE2D_DESC backDesc{};
         backBuffer->GetDesc(&backDesc);
         if (backDesc.SampleDesc.Count > 1)
@@ -495,6 +640,13 @@ namespace Blur
         g_loggedNoTarget = false;
         g_loggedTargetFailure = false;
         g_loggedCallerTarget = false;
+        g_previewMask = {};
+        g_animatedMaskRadiusX = 0.0f;
+        g_animatedMaskRadiusY = 0.0f;
+        g_hasAnimatedPreviewMask = false;
+        g_lastMaskCenterX = 0.5f;
+        g_lastMaskCenterY = 0.5f;
+        g_lastMaskAnimationFrame = -1;
     }
 
     float Strength()
