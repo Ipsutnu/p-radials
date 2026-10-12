@@ -15594,6 +15594,7 @@ namespace Menu
             );
         g_sideScrollStardustEnergy = std::min(
             3.0f, g_sideScrollStardustEnergy + 0.72f);
+        TrackMagicEffects::NudgeGameplayAuraRotation(g_sideScrollDirection);
 
         // ============================================================
         // CAUDA -> PRINCIPAL
@@ -18426,12 +18427,15 @@ namespace Menu
             }
         }
 
-        // Aura puramente decorativa do trilho custom no gameplay e no preview
+        // Aura puramente decorativa dos radiais side no gameplay e no preview
         // do WheelSettings. Não participa do circuito, seleção, input ou animação.
+        // No Legacy ela só existe quando Special Effects está ligado; Custom
+        // preserva a aura discreta que já possuía sem a opção.
         TrackMagicEffects::DrawGameplayAura(draw, center, radius, leftSide,
             radialShape, alpha, static_cast<float>(ImGui::GetTime()),
-            customTrack && (g_radialMode == RadialMode::Gameplay ||
-                SettingsMenu::WheelSettingsMenu::IsOpen()),
+            (customTrack || Config::g_specialEffects) &&
+                (g_radialMode == RadialMode::Gameplay ||
+                    SettingsMenu::WheelSettingsMenu::IsOpen()),
             Config::g_specialEffects);
         
         // No inventário, mesmo vazio, o radial continua existindo

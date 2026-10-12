@@ -3,6 +3,7 @@
 #include "Animation/RadialShape.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 
 namespace
@@ -26,6 +27,27 @@ namespace
     bool g_releaseValid = true;
     bool g_gameplayWasActive = false;
     float g_gameplayPulse = 0.0f;
+    std::array<float, 4> g_gameplaySparkAngles{};
+    std::array<float, 4> g_gameplaySparkVelocities{};
+    bool g_gameplaySparkMotionInitialized = false;
+    unsigned int g_gameplaySparkOpenSeed = 0;
+    int g_gameplaySparkUpdateFrame = -1;
+
+    float SparkPulse(unsigned int value)
+    {
+        // Gerador determinístico pequeno: evita depender de estado do jogo
+        // para dar um novo impulso sutil a cada abertura do radial.
+        value = value * 1664525u + 1013904223u;
+        return static_cast<float>((value >> 8u) & 0xFFFFu) / 65535.0f;
+    }
+
+    void NudgeSparkVelocities(float impulse)
+    {
+        constexpr float kMaxVelocity = 5.0f;
+        for (float& velocity : g_gameplaySparkVelocities)
+            velocity = std::clamp(velocity + impulse,
+                -kMaxVelocity, kMaxVelocity);
+    }
 
     ImU32 WithAlpha(ImU32 color, float alpha)
     {
@@ -82,6 +104,22 @@ namespace TrackMagicEffects
         g_releasePulse = 0.0f;
         g_gameplayWasActive = false;
         g_gameplayPulse = 0.0f;
+        g_gameplaySparkAngles = {};
+        g_gameplaySparkVelocities = {};
+        g_gameplaySparkMotionInitialized = false;
+        g_gameplaySparkOpenSeed = 0;
+        g_gameplaySparkUpdateFrame = -1;
+    }
+
+    void NudgeGameplayAuraRotation(int direction)
+    {
+        if (direction == 0)
+            return;
+
+        // Altera a velocidade física persistente, não um offset temporário.
+        // Assim o scroll contrário freia, para e por fim inverte o giro.
+        constexpr float kScrollImpulse = 0.42f;
+        NudgeSparkVelocities(direction < 0 ? -kScrollImpulse : kScrollImpulse);
     }
 
     void DrawEditorLiveStroke(ImDrawList* draw,
@@ -203,9 +241,35 @@ namespace TrackMagicEffects
         {
             g_gameplayPulse = 1.0f;
             g_gameplayWasActive = true;
+            if (!g_gameplaySparkMotionInitialized)
+            {
+                // Os quatro pontos partem em velocidades distintas, como
+                // antes, mas estas passam a ser livres para o scroll alterar.
+                for (int i = 0; i < 4; ++i)
+                {
+                    g_gameplaySparkAngles[i] = static_cast<float>(i) * 1.5708f;
+                    g_gameplaySparkVelocities[i] = 0.90f + static_cast<float>(i) * 0.08f;
+                }
+                g_gameplaySparkMotionInitialized = true;
+            }
+
+            // Pequeno pulso aleatório por abertura, sem redefinir o sentido
+            // que o jogador já estabeleceu usando o scroll.
+            const float pulse = 0.12f + SparkPulse(++g_gameplaySparkOpenSeed) * 0.16f;
+            const float signedPulse = (SparkPulse(g_gameplaySparkOpenSeed + 41u) < 0.5f)
+                ? -pulse : pulse;
+            NudgeSparkVelocities(signedPulse);
         }
 
         const float visibility = std::clamp(alpha, 0.0f, 1.0f);
+        const int frame = ImGui::GetFrameCount();
+        if (g_gameplaySparkUpdateFrame != frame)
+        {
+            const float dt = std::min(ImGui::GetIO().DeltaTime, 0.05f);
+            for (int i = 0; i < 4; ++i)
+                g_gameplaySparkAngles[i] += g_gameplaySparkVelocities[i] * dt;
+            g_gameplaySparkUpdateFrame = frame;
+        }
         const auto outline = RadialShape::Outline(shape, center,
             radius + 6.0f, leftSide, 96);
         if (outline.size() > 1)
@@ -221,7 +285,7 @@ namespace TrackMagicEffects
         {
             for (int i = 0; i < 4; ++i)
             {
-                const float angle = time * (0.9f + i * 0.08f) + i * 1.5708f;
+                const float angle = g_gameplaySparkAngles[i];
                 const ImVec2 point = RadialShape::PositionAtAngle(shape, center,
                     radius + 6.0f, angle);
                 const float twinkle = 0.55f + 0.45f * std::sin(time * 7.0f + i);

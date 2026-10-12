@@ -22,6 +22,10 @@ namespace TrackMagicEffects
     void TriggerEditorRelease(const std::vector<ImVec2>& points, bool valid);
     void DrawEditorRelease(ImDrawList* draw, float deltaTime);
 
+    // Impulso visual independente do seletor: o scroll só influencia o
+    // deslocamento angular extra das faíscas, nunca o radial em si.
+    void NudgeGameplayAuraRotation(int direction);
+
     void DrawGameplayAura(ImDrawList* draw, const ImVec2& center,
         float radius, bool leftSide, RadialShape::Style shape,
         float alpha, float time, bool active, bool showSparks);
