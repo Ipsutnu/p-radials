@@ -2,6 +2,7 @@
 #include "Animation/Track/TrackEditor.h"
 #include "Animation/Track/TrackGeometry.h"
 #include "Animation/Track/TrackLayout.h"
+#include "Animation/Track/TrackMagicEffects.h"
 #include "Animation/RadialShape.h"
 #include "Config.h"
 #include "Language.h"
@@ -1089,6 +1090,7 @@ namespace TrackEditor
     void Open()
     {
         Track::BeginEdit();
+        TrackMagicEffects::Reset();
         g_open = true;
         g_selectedID = -1;
         g_selectedPort = -1;
@@ -1159,6 +1161,7 @@ namespace TrackEditor
         g_frozenPreviewMainPositions.clear();
         g_previewSlotsFrozen = false;
         g_historyActionPending = false;
+        TrackMagicEffects::Reset();
     }
 
     bool IsOpen() { return g_open; }
@@ -1167,6 +1170,9 @@ namespace TrackEditor
         const std::vector<PreviewIcon>& icons, int mainVisibleCount)
     {
         auto* draw = ImGui::GetForegroundDrawList();
+        const float magicTime = static_cast<float>(ImGui::GetTime());
+        const float magicDelta = ImGui::GetIO().DeltaTime > 0.0f
+            ? ImGui::GetIO().DeltaTime : 1.0f / 60.0f;
         const ImVec2 viewportMin = Resolution::ToVirtual(ImVec2(0.0f, 0.0f));
         const ImVec2 viewportMax = Resolution::ToVirtual(Resolution::GetRealSize());
         g_viewportMin = viewportMin;
@@ -1615,6 +1621,8 @@ namespace TrackEditor
         {
             const auto points = Track::SamplePiece(piece, center, radius, 36);
             const bool selected = piece.id == g_selectedID;
+            TrackMagicEffects::DrawEditorRegisteredEdge(draw, points,
+                g_drawing, magicTime);
             const float whitePreviewOpacity =
                 g_activeSlider == EditorSlider::OverflowOpacity
                 ? std::clamp(Track::CustomLayout().lineOpacity, 0.0f, 100.0f) * 0.01f
@@ -1928,10 +1936,10 @@ namespace TrackEditor
         {
             if (g_drawPoints.empty() || Track::Distance(g_drawPoints.back(), mouse) > 5.0f)
                 g_drawPoints.push_back(mouse);
-            if (g_drawPoints.size() > 1)
-                draw->AddPolyline(g_drawPoints.data(), static_cast<int>(g_drawPoints.size()),
-                    IM_COL32(245, 215, 135, 255), 0, 3.0f);
+            TrackMagicEffects::DrawEditorLiveStroke(draw, g_drawPoints,
+                mouse, magicTime);
         }
+        TrackMagicEffects::DrawEditorRelease(draw, magicDelta);
         if (g_gateDragging)
         {
             g_gateMouse = mouse;
@@ -2564,7 +2572,11 @@ namespace TrackEditor
         if (button == 0 && g_dragging) SnapSelected();
         if (button == 0 && g_drawing)
         {
+            const auto releasedStroke = g_drawPoints;
             FinishFreeDraw();
+            std::string validationReason;
+            TrackMagicEffects::TriggerEditorRelease(releasedStroke,
+                Track::IsValid(Track::CustomLayout(), &validationReason));
             g_drawing = false;
             g_freeDrawTool = false;
             g_geometryDrawTool = false;

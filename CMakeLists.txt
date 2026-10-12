@@ -60,6 +60,7 @@ add_commonlibsse_plugin(${PROJECT_NAME}
         src/Animation/Track/TrackGeometry.cpp
         src/Animation/Track/TrackLayout.cpp
         src/Animation/Track/TrackEditor.cpp
+        src/Animation/Track/TrackMagicEffects.cpp
         src/Animation/Track/TrackMovement.cpp
         src/Render/Icon.cpp
         src/Render/IconCustom.cpp

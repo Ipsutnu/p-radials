@@ -76,6 +76,7 @@ namespace Config
     extern bool g_slowTimeCentral;
     extern bool g_slowTimeBottom;
     extern bool g_slowTimeDraw;
+    extern bool g_specialEffects;
     extern bool g_blurTop;
     extern bool g_blurCentral;
     extern bool g_blurBottom;

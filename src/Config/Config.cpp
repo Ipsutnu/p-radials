@@ -33,6 +33,7 @@ namespace Config
     bool g_slowTimeCentral = true;
     bool g_slowTimeBottom = true;
     bool g_slowTimeDraw = false;
+    bool g_specialEffects = false;
     bool g_blurTop = false;
     bool g_blurCentral = false;
     bool g_blurBottom = false;
@@ -1012,6 +1013,7 @@ namespace Config
                 else if (key == "SlowTimeCentral") g_slowTimeCentral = ParseEnabled(value);
                 else if (key == "SlowTimeBottom") g_slowTimeBottom = ParseEnabled(value);
                 else if (key == "SlowTimeDraw") g_slowTimeDraw = ParseEnabled(value);
+                else if (key == "SpecialEffects") g_specialEffects = ParseEnabled(value);
                 else if (key == "BlurTop") g_blurTop = ParseEnabled(value);
                 else if (key == "BlurCentral") g_blurCentral = ParseEnabled(value);
                 else if (key == "BlurBottom") g_blurBottom = ParseEnabled(value);
@@ -1088,6 +1090,7 @@ namespace Config
                 else if (key == "SlowTimeCentral") g_slowTimeCentral = ParseEnabled(value);
                 else if (key == "SlowTimeBottom") g_slowTimeBottom = ParseEnabled(value);
                 else if (key == "SlowTimeDraw") g_slowTimeDraw = ParseEnabled(value);
+                else if (key == "SpecialEffects") g_specialEffects = ParseEnabled(value);
                 else if (key == "BlurTop") g_blurTop = ParseEnabled(value);
                 else if (key == "BlurCentral") g_blurCentral = ParseEnabled(value);
                 else if (key == "BlurBottom") g_blurBottom = ParseEnabled(value);
@@ -1388,6 +1391,7 @@ namespace Config
         g_slowTimeCentral = true;
         g_slowTimeBottom = true;
         g_slowTimeDraw = false;
+        g_specialEffects = false;
         g_blurTop = false;
         g_blurCentral = false;
         g_blurBottom = false;
@@ -1522,6 +1526,7 @@ namespace Config
         SetIniValue(lines, "Gameplay", "SlowTimeCentral", g_slowTimeCentral ? "1" : "0");
         SetIniValue(lines, "Gameplay", "SlowTimeBottom", g_slowTimeBottom ? "1" : "0");
         SetIniValue(lines, "Gameplay", "SlowTimeDraw", g_slowTimeDraw ? "1" : "0");
+        SetIniValue(lines, "Gameplay", "SpecialEffects", g_specialEffects ? "1" : "0");
         SetIniValue(lines, "Gameplay", "BlurTop", g_blurTop ? "1" : "0");
         SetIniValue(lines, "Gameplay", "BlurCentral", g_blurCentral ? "1" : "0");
         SetIniValue(lines, "Gameplay", "BlurBottom", g_blurBottom ? "1" : "0");

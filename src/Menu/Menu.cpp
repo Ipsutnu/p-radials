@@ -19,6 +19,7 @@
 #include "Animation/OverflowMechanism.h"
 #include "Animation/Track/TrackLayout.h"
 #include "Animation/Track/TrackEditor.h"
+#include "Animation/Track/TrackMagicEffects.h"
 #include "Animation/Track/TrackMovement.h"
 #include "Language.h"
 #include "Serialization.h"
@@ -553,6 +554,9 @@ namespace Menu
     static ImVec2 g_fastDragButtonCenter{};
     static float g_fastDragButtonRadius = 12.0f;
     static float g_fastDragButtonHoverT = 0.0f;
+    static ImVec2 g_specialEffectsButtonCenter{};
+    static float g_specialEffectsButtonRadius = 12.0f;
+    static float g_specialEffectsButtonHoverT = 0.0f;
 
     // ============================================================
 
@@ -4475,6 +4479,8 @@ namespace Menu
         
             addRect({ g_slowTimeSliderMin, g_slowTimeSliderMax });
             addRect(g_slowTimeResetHitbox);
+            add(g_specialEffectsButtonCenter,
+                std::max(12.0f, g_specialEffectsButtonRadius));
             addRect({ g_radialShapeButtonMin, g_radialShapeButtonMax });
             addRect({ g_trackModeButtonMin, g_trackModeButtonMax });
             addRect({ g_trackEditorButtonMin, g_trackEditorButtonMax });
@@ -5260,6 +5266,8 @@ namespace Menu
         
             targets.push_back({ g_slowTimeSliderMin, g_slowTimeSliderMax });
             targets.push_back(g_slowTimeResetHitbox);
+            addCircle(g_specialEffectsButtonCenter,
+                std::max(g_specialEffectsButtonRadius, 18.0f));
         
             for (const auto& center : g_gameplayIconButtonCenters)
                 addCircle(center, std::max(g_gameplayIconButtonRadius, 18.0f));
@@ -18330,6 +18338,7 @@ namespace Menu
                 }
             }
         }
+
         else
         {
             const auto outerOutline = RadialShape::Outline(
@@ -18347,6 +18356,14 @@ namespace Menu
                     FadeColor(IM_COL32(255, 255, 255, 55), alpha), ImDrawFlags_Closed, 1.5f);
             }
         }
+
+        // Aura puramente decorativa do trilho custom no gameplay e no preview
+        // do WheelSettings. Não participa do circuito, seleção, input ou animação.
+        TrackMagicEffects::DrawGameplayAura(draw, center, radius, leftSide,
+            radialShape, alpha, static_cast<float>(ImGui::GetTime()),
+            customTrack && (g_radialMode == RadialMode::Gameplay ||
+                SettingsMenu::WheelSettingsMenu::IsOpen()),
+            Config::g_specialEffects);
         
         // No inventário, mesmo vazio, o radial continua existindo
         // como área de drop.
@@ -22547,6 +22564,19 @@ namespace Menu
             }
         }
 
+        const float specialEffectsDx =
+            g_settingsMousePos.x - g_specialEffectsButtonCenter.x;
+        const float specialEffectsDy =
+            g_settingsMousePos.y - g_specialEffectsButtonCenter.y;
+        const float specialEffectsRadius = g_specialEffectsButtonRadius + 3.0f;
+        if (specialEffectsDx * specialEffectsDx + specialEffectsDy * specialEffectsDy <=
+            specialEffectsRadius * specialEffectsRadius)
+        {
+            Config::g_specialEffects = !Config::g_specialEffects;
+            Config::SaveConfig();
+            return true;
+        }
+
         const float fastDragDx = g_settingsMousePos.x - g_fastDragButtonCenter.x;
         
         const float fastDragDy = g_settingsMousePos.y - g_fastDragButtonCenter.y;
@@ -23625,11 +23655,39 @@ namespace Menu
                 white, blurScopeTooltip, alpha);
         }
 
-        // Mantém as seções seguintes abaixo do slider de slowtime. Antes,
-        // ICONS ainda usava uma coordenada antiga e era desenhado por cima
-        // do multiplicador depois que o bloco de Blur foi adicionado.
-    
-        const float iconsTitleY = slowTrackY + 40.0f * controlScale;
+        const float specialEffectsOptionY = slowTrackY + 33.0f * controlScale;
+        g_specialEffectsButtonRadius = buttonRadius;
+        g_specialEffectsButtonCenter = ImVec2(
+            x + 13.0f * controlScale, specialEffectsOptionY);
+
+        const float specialEffectsDx =
+            g_settingsMousePos.x - g_specialEffectsButtonCenter.x;
+        const float specialEffectsDy =
+            g_settingsMousePos.y - g_specialEffectsButtonCenter.y;
+        const bool specialEffectsHovered =
+            specialEffectsDx * specialEffectsDx + specialEffectsDy * specialEffectsDy <=
+            buttonRadius * buttonRadius;
+        g_specialEffectsButtonHoverT = AnimateSettingsValue(
+            g_specialEffectsButtonHoverT, specialEffectsHovered ? 1.0f : 0.0f,
+            12.0f, ImGui::GetIO().DeltaTime);
+
+        draw->AddCircleFilled(g_specialEffectsButtonCenter,
+            buttonRadius + g_specialEffectsButtonHoverT * 2.0f,
+            FadeColor(Config::g_specialEffects
+                ? IM_COL32(235, 235, 235, 140)
+                : IM_COL32(20, 20, 25, 235), alpha), 48);
+        draw->AddCircle(g_specialEffectsButtonCenter,
+            buttonRadius + g_specialEffectsButtonHoverT * 2.0f,
+            FadeColor(IM_COL32(255, 255, 255,
+                static_cast<int>(90.0f + 140.0f * g_specialEffectsButtonHoverT)), alpha),
+            48, 1.5f);
+        DrawTextWithShadow(draw,
+            ImVec2(g_specialEffectsButtonCenter.x + buttonRadius + 12.0f,
+                specialEffectsOptionY - ImGui::GetFontSize() * 0.5f),
+            white, Language::Get("special_effects").c_str(), alpha);
+
+        // Mantém as seções seguintes abaixo dos controles de slowtime.
+        const float iconsTitleY = specialEffectsOptionY + 34.0f * controlScale;
     
         const float inventoryTitleY =
             iconsTitleY + (32.0f + 4.0f * 32.0f) * controlScale;
