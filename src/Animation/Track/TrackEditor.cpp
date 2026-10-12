@@ -91,6 +91,12 @@ namespace
     bool g_gizmoCenterInitialized = false;
     bool g_presetNameOpen = false;
     bool g_presetListOpen = false;
+    // Painel compacto à esquerda das ações do editor. Ele abre sempre
+    // recolhido para não competir com a área de edição do circuito.
+    bool g_radialsSubmenuOpen = false;
+    bool g_overflowSubmenuOpen = false;
+    float g_radialsSubmenuT = 0.0f;
+    float g_overflowSubmenuT = 0.0f;
     enum class PresetNameAction { SaveCurrent, RenamePreset };
     PresetNameAction g_presetNameAction = PresetNameAction::SaveCurrent;
     std::string g_presetSource;
@@ -124,12 +130,14 @@ namespace
         g_duplicateSelectedButton,
         g_radialQuantitySlider, g_radialStretchSlider, g_ghostItemsSlider,
         g_radialOpacitySlider, g_radialShapeSlider, g_radialRotationSlider, g_brushSizeSlider,
+        g_radialShapeReset, g_radialRotationReset, g_radialQuantityReset,
+        g_radialStretchReset, g_radialOpacityReset, g_overflowOpacityReset,
         g_brushHardnessSlider, g_eraseRadialButton, g_centerReverseFlow,
         g_resetRadialDrawing, g_eraserRadialMode, g_eraserOverflowMode,
         g_gizmoPanel, g_gizmoMove, g_gizmoRotate, g_gizmoDelete, g_gizmoMirror,
         g_gizmoScaleUp, g_gizmoScaleDown,
         g_save, g_cancel, g_presetSave, g_presetLoad, g_presetReset,
-        g_presetOK, g_presetCancel;
+        g_presetOK, g_presetCancel, g_radialsSubmenu, g_overflowSubmenu;
     Rect g_addEntry, g_addExit, g_autoFlow, g_reverseFlow, g_invertPiece, g_flipPoles;
     constexpr std::array<Track::PieceKind, 18> kPieceKinds{
         Track::PieceKind::Straight, Track::PieceKind::ArcUp,
@@ -902,10 +910,20 @@ namespace
         draw->AddRect(rect.min, rect.max, IM_COL32(75, 75, 80, 120), 5.0f);
     }
 
+    // Rótulos dourados precisam permanecer legíveis tanto sobre o canvas claro
+    // quanto sobre os traços e peças do editor.
+    void GoldText(ImDrawList* draw, const ImVec2& position, ImU32 color,
+        const char* text)
+    {
+        draw->AddText(ImVec2(position.x + 1.4f, position.y + 1.6f),
+            IM_COL32(3, 5, 8, 205), text);
+        draw->AddText(position, color, text);
+    }
+
     void ValueSlider(ImDrawList* draw, const Rect& rect, const char* label,
         float value, float minimum, float maximum, bool integer)
     {
-        draw->AddText(ImVec2(rect.min.x, rect.min.y - 24.0f),
+        GoldText(draw, ImVec2(rect.min.x, rect.min.y - 24.0f),
             IM_COL32(225, 207, 165, 255), label);
         draw->AddRectFilled(rect.min, rect.max, IM_COL32(28, 29, 35, 210), 5.0f);
         const float t = std::clamp((value - minimum) /
@@ -1131,6 +1149,10 @@ namespace TrackEditor
         g_portControls.clear();
         g_presetNameOpen = false;
         g_presetListOpen = false;
+        g_radialsSubmenuOpen = false;
+        g_overflowSubmenuOpen = false;
+        g_radialsSubmenuT = 0.0f;
+        g_overflowSubmenuT = 0.0f;
         g_pan = ImVec2(0.0f, 0.0f);
         g_zoom = 1.0f;
     }
@@ -1185,10 +1207,13 @@ namespace TrackEditor
         const float viewportHeight = viewportMax.y - viewportMin.y;
         const float panelWidth = 390.0f;
         const float panelX = viewportMax.x - panelWidth;
-        g_panelLeft = panelX;
+        const float secondaryPanelWidth = 390.0f;
+        const float secondaryPanelX = panelX - secondaryPanelWidth - 14.0f;
+        // O canvas respeita os dois painéis da direita.
+        g_panelLeft = secondaryPanelX;
         const float ox = panelX + 20.0f;
         const float top = viewportMin.y;
-        draw->AddText(ImVec2(ox, top + 20.0f),
+        GoldText(draw, ImVec2(ox, top + 20.0f),
             IM_COL32(225, 207, 165, 255), Tr("custom_radial_editor"));
 
         g_selectButton = {};
@@ -1218,17 +1243,116 @@ namespace TrackEditor
         g_reset = { ImVec2(ox, top + 138), ImVec2(ox + 350, top + 172) };
         Button(draw, g_reset, Tr("reset_view"));
 
-        const float contentHeight = 1940.0f;
+        // Painel secundário: os controles do radial ficam ao lado das ações
+        // de preset/zoom, sem ocupar a lista de ferramentas do editor.
+        const float submenuWidth = secondaryPanelWidth - 40.0f;
+        const float submenuRight = panelX - 14.0f;
+        const float submenuX = submenuRight - submenuWidth;
+        const float submenuClosedWidth = submenuWidth * 0.5f;
+        const float submenuDt = std::min(ImGui::GetIO().DeltaTime, 0.05f);
+        const float submenuBlend = 1.0f - std::exp(-11.0f * submenuDt);
+        g_radialsSubmenuT += ((g_radialsSubmenuOpen ? 1.0f : 0.0f) -
+            g_radialsSubmenuT) * submenuBlend;
+        g_overflowSubmenuT += ((g_overflowSubmenuOpen ? 1.0f : 0.0f) -
+            g_overflowSubmenuT) * submenuBlend;
+        const auto smoothstep = [](float value) {
+            value = std::clamp(value, 0.0f, 1.0f);
+            return value * value * (3.0f - 2.0f * value);
+        };
+        // Primeiro o botão cresce horizontalmente; então o conteúdo desce.
+        const auto headerWidth = [&](float value) {
+            return submenuClosedWidth + (submenuWidth - submenuClosedWidth) *
+                smoothstep(value / 0.48f);
+        };
+        const auto contentT = [&](float value) {
+            return smoothstep((value - 0.44f) / 0.56f);
+        };
+        const float radialsContentT = contentT(g_radialsSubmenuT);
+        const float overflowContentT = contentT(g_overflowSubmenuT);
+        float submenuY = top + 54.0f;
+        
+        const auto submenuHeader = [&](Rect& rect, const char* label,
+            bool open, float width) {
+        
+            rect = { ImVec2(submenuRight - width, submenuY),
+                ImVec2(submenuRight, submenuY + 34.0f) };
+        
+            draw->AddRectFilled(rect.min, rect.max,
+                open ? IM_COL32(26, 28, 34, 82) : IM_COL32(26, 28, 34, 230), 5.0f);
+        
+            //draw->AddRect(rect.min, rect.max, IM_COL32(190, 160, 96, 195), 5.0f);
+        
+            GoldText(draw, ImVec2(rect.min.x + 14.0f, rect.min.y + 8.0f),
+                IM_COL32(232, 216, 177, 255), label);
+        
+            GoldText(draw, ImVec2(rect.max.x - 23.0f, rect.min.y + 7.0f),
+                IM_COL32(232, 216, 177, 255), open ? "-" : "+");
+        };
+        
+        submenuHeader(g_radialsSubmenu, Tr("radials"), g_radialsSubmenuOpen,
+            headerWidth(g_radialsSubmenuT));
+        submenuY += 44.0f;
+        const float submenuSliderMaxX = submenuRight - 30.0f;
+        const auto setResetRect = [&](Rect& reset, float trackY) {
+            reset = { ImVec2(submenuRight - 24.0f, trackY - 10.0f),
+                ImVec2(submenuRight - 4.0f, trackY + 10.0f) };
+        };
+        g_radialShapeSlider = {};
+        g_radialRotationSlider = {};
+        g_radialQuantitySlider = {};
+        g_radialStretchSlider = {};
+        g_radialOpacitySlider = {};
+        g_radialShapeReset = {};
+        g_radialRotationReset = {};
+        g_radialQuantityReset = {};
+        g_radialStretchReset = {};
+        g_radialOpacityReset = {};
+        if (radialsContentT > 0.001f)
+        {
+            g_radialShapeSlider = { ImVec2(submenuX, submenuY + 20.0f),
+                ImVec2(submenuSliderMaxX, submenuY + 42.0f) };
+            g_radialRotationSlider = { ImVec2(submenuX, submenuY + 82.0f),
+                ImVec2(submenuSliderMaxX, submenuY + 104.0f) };
+            g_radialQuantitySlider = { ImVec2(submenuX, submenuY + 144.0f),
+                ImVec2(submenuSliderMaxX, submenuY + 166.0f) };
+            g_radialStretchSlider = { ImVec2(submenuX, submenuY + 206.0f),
+                ImVec2(submenuSliderMaxX, submenuY + 228.0f) };
+            g_radialOpacitySlider = { ImVec2(submenuX, submenuY + 268.0f),
+                ImVec2(submenuSliderMaxX, submenuY + 290.0f) };
+            setResetRect(g_radialShapeReset, submenuY + 31.0f);
+            setResetRect(g_radialRotationReset, submenuY + 93.0f);
+            setResetRect(g_radialQuantityReset, submenuY + 155.0f);
+            setResetRect(g_radialStretchReset, submenuY + 217.0f);
+            setResetRect(g_radialOpacityReset, submenuY + 279.0f);
+            submenuY += 302.0f * radialsContentT;
+        }
+        submenuHeader(g_overflowSubmenu, Tr("overflow"), g_overflowSubmenuOpen,
+            headerWidth(g_overflowSubmenuT));
+        submenuY += 44.0f;
+        g_lineOpacitySlider = {};
+        g_overflowOpacityReset = {};
+        if (overflowContentT > 0.001f)
+        {
+            g_lineOpacitySlider = { ImVec2(submenuX, submenuY + 20.0f),
+                ImVec2(submenuSliderMaxX, submenuY + 42.0f) };
+            setResetRect(g_overflowOpacityReset, submenuY + 31.0f);
+        }
+
+        // Controle fixo acima do estado do circuito e de OK/Cancelar.
+		g_ghostItemsSlider = { ImVec2(ox, viewportMax.y - 164.0f),
+			ImVec2(ox + 350.0f, viewportMax.y - 142.0f) };
+
+        const float contentHeight = 1460.0f;
         const float visibleHeight = std::max(1.0f, viewportHeight - 280.0f);
         const float maxScroll = std::max(0.0f, contentHeight - visibleHeight);
         g_panelMaxScroll = maxScroll;
         g_panelScroll = std::clamp(g_panelScroll, 0.0f, maxScroll);
         const float sy = -g_panelScroll;
         g_panelClipTop = top + 190.0f;
-        g_panelClipBottom = viewportMax.y - 142.0f;
+        g_panelClipBottom = viewportMax.y - 198.0f;
         draw->PushClipRect(ImVec2(panelX, g_panelClipTop),
             ImVec2(viewportMax.x, g_panelClipBottom), true);
-        draw->AddText(ImVec2(ox, top + 202 + sy), IM_COL32(225, 207, 165, 255), Tr("pieces"));
+        GoldText(draw, ImVec2(ox, top + 202 + sy), IM_COL32(225, 207, 165, 255), Tr("pieces"));
         draw->AddLine(ImVec2(ox + 72, top + 212 + sy), ImVec2(ox + 350, top + 212 + sy),
             IM_COL32(190, 150, 70, 210), 1.2f);
         g_drawPathButton = { ImVec2(ox + 127, top + 244 + sy), ImVec2(ox + 223, top + 340 + sy) };
@@ -1241,7 +1365,7 @@ namespace TrackEditor
             ImVec2(drawPathCenter.x + 7, drawPathCenter.y + 18),
             ImVec2(drawPathCenter.x + 19, drawPathCenter.y - 8), 20);
         draw->PathStroke(IM_COL32(245, 238, 218, 245), 0, 2.5f);
-        draw->AddText(ImVec2(ox + 235, top + 282 + sy),
+        GoldText(draw, ImVec2(ox + 235, top + 282 + sy),
             IM_COL32(225, 207, 165, 255), Tr("draw_path"));
         g_smoothDrawButton = { ImVec2(ox + 12, top + 268 + sy),
             ImVec2(ox + 112, top + 316 + sy) };
@@ -1296,33 +1420,24 @@ namespace TrackEditor
             ImVec2(ox + 35, top + 1142 + sy), ImVec2(ox + 315, top + 1184 + sy) };
         Button(draw, g_flipPoles, Tr("clear_terminals"));
 
-        draw->AddText(ImVec2(ox, top + 1194 + sy),
-            IM_COL32(225, 207, 165, 255), Tr("radial_editor_section"));
-        draw->AddLine(ImVec2(ox + 72, top + 1204 + sy),
-            ImVec2(ox + 350, top + 1204 + sy), IM_COL32(190, 150, 70, 210), 1.2f);
-        g_radialShapeSlider = {
-            ImVec2(ox, top + 1242 + sy), ImVec2(ox + 350, top + 1264 + sy) };
-        g_radialRotationSlider = {
-            ImVec2(ox, top + 1324 + sy), ImVec2(ox + 350, top + 1346 + sy) };
-
         g_resetRadialDrawing = {
-            ImVec2(ox, top + 1385 + sy), ImVec2(ox + 32, top + 1417 + sy) };
+            ImVec2(ox, top + 1201 + sy), ImVec2(ox + 32, top + 1233 + sy) };
         g_eraseRadialButton = {
-            ImVec2(ox + 42, top + 1380 + sy), ImVec2(ox + 225, top + 1422 + sy) };
+            ImVec2(ox + 42, top + 1196 + sy), ImVec2(ox + 225, top + 1238 + sy) };
         g_eraserRadialMode = {
-            ImVec2(ox + 234, top + 1377 + sy), ImVec2(ox + 350, top + 1399 + sy) };
+            ImVec2(ox + 234, top + 1193 + sy), ImVec2(ox + 350, top + 1215 + sy) };
         g_eraserOverflowMode = {
-            ImVec2(ox + 234, top + 1401 + sy), ImVec2(ox + 350, top + 1423 + sy) };
+            ImVec2(ox + 234, top + 1217 + sy), ImVec2(ox + 350, top + 1239 + sy) };
         Button(draw, g_eraseRadialButton, Tr("editor_eraser"), g_eraseTool, true);
         g_resetRadialFlash = std::max(0.0f,
             g_resetRadialFlash - ImGui::GetIO().DeltaTime);
         const bool resetLit = g_resetRadialFlash > 0.0f;
-        draw->AddCircleFilled(ImVec2(ox + 16, top + 1401 + sy), 13.0f,
+        draw->AddCircleFilled(ImVec2(ox + 16, top + 1217 + sy), 13.0f,
             resetLit ? IM_COL32(242, 242, 238, 245) : IM_COL32(48, 49, 55, 245), 28);
-        draw->AddCircle(ImVec2(ox + 16, top + 1401 + sy), 14.0f,
+        draw->AddCircle(ImVec2(ox + 16, top + 1217 + sy), 14.0f,
             IM_COL32(120, 115, 105, 230), 28, 1.4f);
         if (Inside(mouse, g_resetRadialDrawing))
-            draw->AddText(ImVec2(ox, top + 1358 + sy),
+            GoldText(draw, ImVec2(ox, top + 1174 + sy),
                 IM_COL32(240, 230, 205, 255), Tr("reset"));
         const auto drawEraserMode = [&](const Rect& rect, bool selected,
             const char* label) {
@@ -1334,7 +1449,7 @@ namespace TrackEditor
             if (selected && g_eraseTool)
                 draw->AddCircleFilled(circle, 4.0f,
                     IM_COL32(225, 200, 135, 255), 20);
-            draw->AddText(ImVec2(rect.min.x + 22.0f, rect.min.y + 3.0f),
+            GoldText(draw, ImVec2(rect.min.x + 22.0f, rect.min.y + 3.0f),
                 enabled, label);
         };
         drawEraserMode(g_eraserRadialMode, !g_eraseOverflowMode,
@@ -1342,19 +1457,9 @@ namespace TrackEditor
         drawEraserMode(g_eraserOverflowMode, g_eraseOverflowMode,
             Tr("eraser_overflow_mode"));
         g_brushSizeSlider = {
-            ImVec2(ox, top + 1462 + sy), ImVec2(ox + 350, top + 1484 + sy) };
+            ImVec2(ox, top + 1278 + sy), ImVec2(ox + 350, top + 1300 + sy) };
         g_brushHardnessSlider = {
-            ImVec2(ox, top + 1524 + sy), ImVec2(ox + 350, top + 1546 + sy) };
-        g_radialOpacitySlider = {
-            ImVec2(ox, top + 1586 + sy), ImVec2(ox + 350, top + 1608 + sy) };
-        g_lineOpacitySlider = {
-            ImVec2(ox, top + 1648 + sy), ImVec2(ox + 350, top + 1670 + sy) };
-        g_radialQuantitySlider = {
-            ImVec2(ox, top + 1710 + sy), ImVec2(ox + 350, top + 1732 + sy) };
-        g_radialStretchSlider = {
-            ImVec2(ox, top + 1772 + sy), ImVec2(ox + 350, top + 1794 + sy) };
-        g_ghostItemsSlider = {
-            ImVec2(ox, top + 1834 + sy), ImVec2(ox + 350, top + 1856 + sy) };
+            ImVec2(ox, top + 1340 + sy), ImVec2(ox + 350, top + 1362 + sy) };
         const auto sliderValue = [&](const Rect& rect, float minimum, float maximum) {
             return minimum + std::clamp(
                 (mouse.x - rect.min.x) / (rect.max.x - rect.min.x), 0.0f, 1.0f) *
@@ -1427,69 +1532,115 @@ namespace TrackEditor
             DisabledValueSlider(draw, g_brushHardnessSlider, Tr("eraser_hardness"));
         }
 
-        draw->AddText(ImVec2(g_radialShapeSlider.min.x,
-            g_radialShapeSlider.min.y - 24.0f), IM_COL32(225, 207, 165, 255),
-            Language::Get("radial_shape").c_str());
-        draw->AddRectFilled(g_radialShapeSlider.min, g_radialShapeSlider.max,
-            IM_COL32(28, 29, 35, 220), 5.0f);
-        const int shapeCount = RadialShape::Count();
-        const int selectedShape = std::clamp(
-            Config::g_radialShape, 0, shapeCount - 1);
-        const float shapeCell = (g_radialShapeSlider.max.x -
-            g_radialShapeSlider.min.x) / static_cast<float>(shapeCount);
-        draw->AddRectFilled(
-            ImVec2(g_radialShapeSlider.min.x + shapeCell * selectedShape + 1.0f,
-                g_radialShapeSlider.min.y + 2.0f),
-            ImVec2(g_radialShapeSlider.min.x + shapeCell * (selectedShape + 1) - 1.0f,
-                g_radialShapeSlider.max.y - 2.0f),
-            IM_COL32(220, 210, 185, 235), 2.0f);
-        for (int i = 0; i <= shapeCount; ++i)
-        {
-            const float x = g_radialShapeSlider.min.x + shapeCell * i;
-            draw->AddLine(ImVec2(x, g_radialShapeSlider.min.y + 5.0f),
-                ImVec2(x, g_radialShapeSlider.max.y - 5.0f),
-                IM_COL32(160, 160, 165, 180), 1.0f);
-        }
-        const char* shapeName = ShapeDisplayName(
-            static_cast<RadialShape::Style>(selectedShape));
-        const ImVec2 shapeNameSize = ImGui::CalcTextSize(shapeName);
-        draw->AddText(ImVec2(ox + (350.0f - shapeNameSize.x) * 0.5f,
-            g_radialShapeSlider.max.y + 7.0f), IM_COL32(225, 220, 205, 255), shapeName);
         if (g_activeSlider == EditorSlider::OverflowOpacity)
             Track::CustomLayout().lineOpacity = std::clamp(
                 (mouse.x - g_lineOpacitySlider.min.x) /
                 (g_lineOpacitySlider.max.x - g_lineOpacitySlider.min.x) * 100.0f,
                 0.0f, 100.0f);
-        draw->AddRectFilled(g_lineOpacitySlider.min, g_lineOpacitySlider.max,
-            IM_COL32(28, 29, 35, 210), 5.0f);
-        const float opacityX = g_lineOpacitySlider.min.x +
-            (g_lineOpacitySlider.max.x - g_lineOpacitySlider.min.x) *
-            Track::CustomLayout().lineOpacity * 0.01f;
-        draw->AddRectFilled(g_lineOpacitySlider.min,
-            ImVec2(opacityX, g_lineOpacitySlider.max.y), IM_COL32(210, 195, 155, 220), 5.0f);
-        draw->AddRect(g_lineOpacitySlider.min, g_lineOpacitySlider.max,
-            IM_COL32(220, 210, 185, 190), 5.0f);
-        draw->AddText(ImVec2(g_lineOpacitySlider.min.x,
-            g_lineOpacitySlider.min.y - 24.0f), IM_COL32(225, 207, 165, 255),
-            Tr("overflow_line_opacity"));
-        ValueSlider(draw, g_radialRotationSlider, Tr("radial_rotation"),
-            Track::CustomLayout().radialRotation * 57.2957795f, -180.0f, 180.0f, true);
-        ValueSlider(draw, g_radialOpacitySlider, Tr("radial_line_opacity"),
-            Track::CustomLayout().radialLineOpacity, 0.0f, 100.0f, false);
-        ValueSlider(draw, g_radialQuantitySlider, Tr("main_radial_items"),
-            Config::g_radialQuantity, 3.0f, 50.0f, true);
-        ValueSlider(draw, g_radialStretchSlider, Tr("main_radial_stretch"),
-            Config::g_radialStretch, 0.0f, 100.0f, false);
-        ValueSlider(draw, g_ghostItemsSlider, Tr("editor_ghost_items"),
-            static_cast<float>(g_previewGhostItems), 0.0f, 50.0f, true);
-        draw->AddText(ImVec2(ox, top + 1896 + sy), IM_COL32(180, 180, 185, 255),
+        draw->AddText(ImVec2(ox, top + 1410 + sy), IM_COL32(180, 180, 185, 255),
             Tr("editor_instructions"));
         draw->PopClipRect();
+
+        // Conteúdo dos dois submenus, renderizado após atualizar os valores.
+        const auto drawSubmenuReset = [&](const Rect& rect) {
+            const ImVec2 center((rect.min.x + rect.max.x) * 0.5f,
+                (rect.min.y + rect.max.y) * 0.5f);
+            const bool hovered = Inside(mouse, rect);
+            draw->AddCircleFilled(center, 5.0f,
+                hovered ? IM_COL32(245, 245, 245, 245) : IM_COL32(218, 218, 218, 210), 20);
+            draw->AddCircle(center, 6.5f, IM_COL32(130, 126, 118, hovered ? 225 : 140),
+                20, 1.0f);
+        };
+        if (radialsContentT > 0.001f)
+        {
+            draw->PushClipRect(ImVec2(submenuX, g_radialShapeSlider.min.y - 26.0f),
+                ImVec2(submenuX + submenuWidth,
+                    g_radialShapeSlider.min.y - 26.0f + 316.0f * radialsContentT), true);
+            GoldText(draw, ImVec2(g_radialShapeSlider.min.x,
+                g_radialShapeSlider.min.y - 24.0f), IM_COL32(225, 207, 165, 255),
+                Language::Get("radial_shape").c_str());
+            const float shapeTrackY = (g_radialShapeSlider.min.y +
+                g_radialShapeSlider.max.y) * 0.5f;
+            constexpr float shapeTrackInset = 5.0f;
+            constexpr float shapeTrackHalfHeight = 8.0f;
+            const float shapeTrackMinX = g_radialShapeSlider.min.x + shapeTrackInset;
+            const float shapeTrackMaxX = g_radialShapeSlider.max.x - shapeTrackInset;
+            draw->AddRectFilled(ImVec2(shapeTrackMinX, shapeTrackY - shapeTrackHalfHeight),
+                ImVec2(shapeTrackMaxX, shapeTrackY + shapeTrackHalfHeight),
+                IM_COL32(28, 29, 35, 220), 5.0f);
+            draw->AddRect(ImVec2(shapeTrackMinX, shapeTrackY - shapeTrackHalfHeight),
+                ImVec2(shapeTrackMaxX, shapeTrackY + shapeTrackHalfHeight),
+                IM_COL32(145, 145, 150, 150), 5.0f, 0, 1.2f);
+            const int shapeCount = RadialShape::Count();
+            const int selectedShape = std::clamp(
+                Config::g_radialShape, 0, shapeCount - 1);
+            const float shapeCell = (shapeTrackMaxX - shapeTrackMinX) /
+                static_cast<float>(shapeCount);
+            draw->AddRectFilled(
+                ImVec2(shapeTrackMinX + shapeCell * selectedShape + 0.5f,
+                    shapeTrackY - shapeTrackHalfHeight + 0.5f),
+                ImVec2(shapeTrackMinX + shapeCell * (selectedShape + 1) - 0.2f,
+                    shapeTrackY + shapeTrackHalfHeight - 0.2f),
+                IM_COL32(220, 210, 185, 235), 2.0f);
+            for (int i = 0; i <= shapeCount; ++i)
+            {
+                const float x = shapeTrackMinX + shapeCell * i;
+                draw->AddLine(ImVec2(x, shapeTrackY - 5.0f),
+                    ImVec2(x, shapeTrackY + 5.0f),
+                    IM_COL32(160, 160, 165, 180), 1.0f);
+            }
+            const char* shapeName = ShapeDisplayName(
+                static_cast<RadialShape::Style>(selectedShape));
+            const ImVec2 shapeNameSize = ImGui::CalcTextSize(shapeName);
+            GoldText(draw, ImVec2(g_radialShapeSlider.min.x +
+                ((g_radialShapeSlider.max.x - g_radialShapeSlider.min.x) - shapeNameSize.x) * 0.5f,
+                g_radialShapeSlider.max.y + 7.0f), IM_COL32(225, 220, 205, 255), shapeName);
+            drawSubmenuReset(g_radialShapeReset);
+            ValueSlider(draw, g_radialRotationSlider, Tr("radial_rotation"),
+                Track::CustomLayout().radialRotation * 57.2957795f, -180.0f, 180.0f, true);
+            drawSubmenuReset(g_radialRotationReset);
+            ValueSlider(draw, g_radialQuantitySlider, Tr("main_radial_items"),
+                Config::g_radialQuantity, 3.0f, 50.0f, true);
+            drawSubmenuReset(g_radialQuantityReset);
+            ValueSlider(draw, g_radialStretchSlider, Tr("main_radial_stretch"),
+                Config::g_radialStretch, 0.0f, 100.0f, false);
+            drawSubmenuReset(g_radialStretchReset);
+            ValueSlider(draw, g_radialOpacitySlider, Tr("radial_line_opacity"),
+                Track::CustomLayout().radialLineOpacity, 0.0f, 100.0f, false);
+            drawSubmenuReset(g_radialOpacityReset);
+            draw->PopClipRect();
+        }
+
+        GoldText(draw, ImVec2(g_ghostItemsSlider.min.x,
+            g_ghostItemsSlider.min.y - 24.0f), IM_COL32(225, 207, 165, 255),
+            Tr("editor_ghost_items"));
+        ValueSlider(draw, g_ghostItemsSlider, "",
+            static_cast<float>(g_previewGhostItems), 0.0f, 50.0f, true);
+        if (overflowContentT > 0.001f)
+        {
+            draw->PushClipRect(ImVec2(submenuX, g_lineOpacitySlider.min.y - 26.0f),
+                ImVec2(submenuX + submenuWidth,
+                    g_lineOpacitySlider.min.y - 26.0f + 64.0f * overflowContentT), true);
+            draw->AddRectFilled(g_lineOpacitySlider.min, g_lineOpacitySlider.max,
+                IM_COL32(28, 29, 35, 210), 5.0f);
+            const float opacityX = g_lineOpacitySlider.min.x +
+                (g_lineOpacitySlider.max.x - g_lineOpacitySlider.min.x) *
+                Track::CustomLayout().lineOpacity * 0.01f;
+            draw->AddRectFilled(g_lineOpacitySlider.min,
+                ImVec2(opacityX, g_lineOpacitySlider.max.y), IM_COL32(210, 195, 155, 220), 5.0f);
+            draw->AddRect(g_lineOpacitySlider.min, g_lineOpacitySlider.max,
+                IM_COL32(220, 210, 185, 190), 5.0f);
+            GoldText(draw, ImVec2(g_lineOpacitySlider.min.x,
+                g_lineOpacitySlider.min.y - 24.0f), IM_COL32(225, 207, 165, 255),
+                Tr("overflow_line_opacity"));
+            drawSubmenuReset(g_overflowOpacityReset);
+            draw->PopClipRect();
+        }
 
         if (maxScroll > 0.0f)
         {
             const float trackTop = top + 197.0f;
-            const float trackBottom = viewportMax.y - 150.0f;
+            const float trackBottom = viewportMax.y - 206.0f;
             g_scrollTrackTop = trackTop;
             g_scrollTrackBottom = trackBottom;
             const float thumbHeight = std::max(28.0f,
@@ -1517,7 +1668,7 @@ namespace TrackEditor
         const bool valid = Track::IsValid(Track::CustomLayout(), &reason);
         g_save = { ImVec2(ox, viewportMax.y - 92), ImVec2(ox + 170, viewportMax.y - 50) };
         g_cancel = { ImVec2(ox + 180, viewportMax.y - 92), ImVec2(ox + 350, viewportMax.y - 50) };
-        TransparentButton(draw, g_save, valid ? Tr("save") : Tr("invalid"), valid);
+        TransparentButton(draw, g_save, valid ? Tr("editor_confirm") : Tr("invalid"), valid);
         Button(draw, g_cancel, Tr("cancel"));
         draw->AddText(ImVec2(ox, viewportMax.y - 126), valid ? IM_COL32(145, 220, 155, 255) :
             IM_COL32(230, 130, 120, 255), valid ? Tr("circuit_ready") : ValidationReason(reason));
@@ -1568,13 +1719,13 @@ namespace TrackEditor
         };
         if (clockwise)
         {
-            centerHalf(-1.5707963f, 1.5707963f, IM_COL32(245, 245, 240, 245));
-            centerHalf(1.5707963f, 4.7123890f, IM_COL32(22, 24, 29, 245));
+            centerHalf(-1.5707963f, 1.5707963f, IM_COL32(245, 245, 240, 204));
+            centerHalf(1.5707963f, 4.7123890f, IM_COL32(26, 28, 34, 245));
         }
         else
         {
-            centerHalf(-1.5707963f, 1.5707963f, IM_COL32(22, 24, 29, 245));
-            centerHalf(1.5707963f, 4.7123890f, IM_COL32(245, 245, 240, 245));
+            centerHalf(-1.5707963f, 1.5707963f, IM_COL32(26, 28, 34, 245));
+            centerHalf(1.5707963f, 4.7123890f, IM_COL32(245, 245, 240, 204));
         }
         draw->AddCircle(center, 17.0f, IM_COL32(225, 205, 155, 220), 32, 1.5f);
         if (g_dragging)
@@ -2038,7 +2189,7 @@ namespace TrackEditor
                 ImVec2(g_panelLeft - 24.0f, g_viewportMin.y + 150.0f + height) };
             draw->AddRectFilled(box.min, box.max, IM_COL32(15, 17, 22, 242), 8.0f);
             draw->AddRect(box.min, box.max, IM_COL32(205, 185, 140, 210), 8.0f);
-            draw->AddText(ImVec2(box.min.x + 18, box.min.y + 15),
+            GoldText(draw, ImVec2(box.min.x + 18, box.min.y + 15),
                 IM_COL32(235, 220, 185, 255), Tr("load_preset"));
             float y = box.min.y + 48.0f;
             const char* hoveredActionHint = nullptr;
@@ -2090,7 +2241,7 @@ namespace TrackEditor
                     ImVec2(hintMin.x + hintSize.x + 5.0f,
                         hintMin.y + hintSize.y + 3.0f),
                     IM_COL32(12, 14, 18, 252), 3.0f);
-                draw->AddText(hintMin, IM_COL32(235, 225, 205, 255),
+                GoldText(draw, hintMin, IM_COL32(235, 225, 205, 255),
                     hoveredActionHint);
             }
         }
@@ -2102,7 +2253,7 @@ namespace TrackEditor
                 ImVec2(dialogCenter.x + 210, dialogCenter.y + 85) };
             draw->AddRectFilled(box.min, box.max, IM_COL32(14, 16, 21, 248), 8.0f);
             draw->AddRect(box.min, box.max, IM_COL32(220, 195, 140, 230), 8.0f, 0, 1.5f);
-            draw->AddText(ImVec2(box.min.x + 18, box.min.y + 16),
+            GoldText(draw, ImVec2(box.min.x + 18, box.min.y + 16),
                 IM_COL32(235, 220, 185, 255), Tr("preset_name"));
             const Rect field{ ImVec2(box.min.x + 18, box.min.y + 48),
                 ImVec2(box.max.x - 18, box.min.y + 83) };
@@ -2217,6 +2368,23 @@ namespace TrackEditor
             if (Track::CommitEdit()) { Config::g_customRadial = true; Config::SaveConfig(); g_open = false; }
             return true;
         }
+        if (Inside(mouse, g_radialsSubmenu))
+        {
+            g_radialsSubmenuOpen = !g_radialsSubmenuOpen;
+            g_activeSlider = EditorSlider::None;
+            return true;
+        }
+        if (Inside(mouse, g_overflowSubmenu))
+        {
+            g_overflowSubmenuOpen = !g_overflowSubmenuOpen;
+            g_activeSlider = EditorSlider::None;
+            return true;
+        }
+        if (Inside(mouse, g_ghostItemsSlider))
+        {
+            g_activeSlider = EditorSlider::GhostItems;
+            return true;
+        }
         if (Inside(mouse, g_zoomOut)) { g_zoom = std::max(0.35f, g_zoom - 0.1f); return true; }
         if (Inside(mouse, g_zoomIn)) { g_zoom = std::min(2.5f, g_zoom + 0.1f); return true; }
         if (Inside(mouse, g_reset)) { g_zoom = 1.0f; g_pan = {}; return true; }
@@ -2252,32 +2420,68 @@ namespace TrackEditor
         }
         const bool insideScrollableClip = mouse.y >= g_panelClipTop &&
             mouse.y <= g_panelClipBottom;
-        if (insideScrollableClip && Inside(mouse, g_radialQuantitySlider))
+        if (g_radialsSubmenuT > 0.98f && Inside(mouse, g_radialShapeReset))
+        {
+            Config::g_radialShape = static_cast<int>(RadialShape::Style::ClassicOrbit);
+            return true;
+        }
+        if (g_radialsSubmenuT > 0.98f && Inside(mouse, g_radialRotationReset))
+        {
+            auto& layout = Track::CustomLayout();
+            const float delta = -layout.radialRotation;
+            const float c = std::cos(delta);
+            const float s = std::sin(delta);
+            for (auto& piece : layout.pieces)
+            {
+                const ImVec2 position = piece.position;
+                piece.position = ImVec2(position.x * c - position.y * s,
+                    position.x * s + position.y * c);
+                piece.rotation += delta;
+            }
+            layout.radialRotation = 0.0f;
+            return true;
+        }
+        if (g_radialsSubmenuT > 0.98f && Inside(mouse, g_radialQuantityReset))
+        {
+            Config::g_radialQuantity = Config::kDefaultRadialQuantity;
+            return true;
+        }
+        if (g_radialsSubmenuT > 0.98f && Inside(mouse, g_radialStretchReset))
+        {
+            Config::g_radialStretch = Config::kDefaultRadialStretch;
+            return true;
+        }
+        if (g_radialsSubmenuT > 0.98f && Inside(mouse, g_radialOpacityReset))
+        {
+            Track::CustomLayout().radialLineOpacity = 100.0f;
+            return true;
+        }
+        if (g_overflowSubmenuT > 0.98f && Inside(mouse, g_overflowOpacityReset))
+        {
+            Track::CustomLayout().lineOpacity = 100.0f;
+            return true;
+        }
+        if (g_radialsSubmenuT > 0.98f && Inside(mouse, g_radialQuantitySlider))
         {
             g_activeSlider = EditorSlider::RadialQuantity;
             return true;
         }
-        if (insideScrollableClip && Inside(mouse, g_radialStretchSlider))
+        if (g_radialsSubmenuT > 0.98f && Inside(mouse, g_radialStretchSlider))
         {
             g_activeSlider = EditorSlider::RadialStretch;
             return true;
         }
-        if (insideScrollableClip && Inside(mouse, g_ghostItemsSlider))
-        {
-            g_activeSlider = EditorSlider::GhostItems;
-            return true;
-        }
-        if (insideScrollableClip && Inside(mouse, g_radialOpacitySlider))
+        if (g_radialsSubmenuT > 0.98f && Inside(mouse, g_radialOpacitySlider))
         {
             g_activeSlider = EditorSlider::RadialOpacity;
             return true;
         }
-        if (insideScrollableClip && Inside(mouse, g_radialShapeSlider))
+        if (g_radialsSubmenuT > 0.98f && Inside(mouse, g_radialShapeSlider))
         {
             g_activeSlider = EditorSlider::RadialShape;
             return true;
         }
-        if (insideScrollableClip && Inside(mouse, g_radialRotationSlider))
+        if (g_radialsSubmenuT > 0.98f && Inside(mouse, g_radialRotationSlider))
         {
             g_activeSlider = EditorSlider::RadialRotation;
             return true;
@@ -2292,7 +2496,7 @@ namespace TrackEditor
             g_activeSlider = EditorSlider::BrushHardness;
             return true;
         }
-        if (insideScrollableClip && Inside(mouse, g_lineOpacitySlider))
+        if (g_overflowSubmenuT > 0.98f && Inside(mouse, g_lineOpacitySlider))
         {
             g_activeSlider = EditorSlider::OverflowOpacity;
             return true;
