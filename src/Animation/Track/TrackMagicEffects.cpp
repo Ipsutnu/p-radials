@@ -119,7 +119,7 @@ namespace TrackMagicEffects
         // Altera a velocidade física persistente, não um offset temporário.
         // Assim o scroll contrário freia, para e por fim inverte o giro.
         constexpr float kScrollImpulse = 0.42f;
-        NudgeSparkVelocities(direction < 0 ? -kScrollImpulse : kScrollImpulse);
+        NudgeSparkVelocities(direction < 0 ? kScrollImpulse : -kScrollImpulse);
     }
 
     void DrawEditorLiveStroke(ImDrawList* draw,
