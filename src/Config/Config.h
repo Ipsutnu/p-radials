@@ -145,6 +145,12 @@ namespace Config
     extern float g_bottomOpacity;
     extern float g_fontSizeScale;
     extern float g_drawMarkDistance;
+    extern bool g_drawEffectsGameplay;
+    extern bool g_drawEffectsEditor;
+    extern int g_drawEdgeEffectStyle;
+    extern float g_drawEdgeEffectSize;
+    extern float g_drawEdgeEffectOpacity;
+    extern bool g_showDrawMark;
     extern int g_fontFamily;
     extern float g_sideRadialPosition;
     extern float g_topVerticalPosition;
@@ -202,6 +208,8 @@ namespace Config
     // Distância extra, em pixels virtuais, entre o marcador de Draw e a
     // borda do slot. Zero deixa o marcador tangente à borda.
     inline constexpr float kDefaultDrawMarkDistance = 0.0f;
+    inline constexpr float kDefaultDrawEdgeEffectSize = 100.0f;
+    inline constexpr float kDefaultDrawEdgeEffectOpacity = 100.0f;
     inline constexpr float kDefaultSideRadialPosition = 56.0f;
     inline constexpr float kDefaultTopVerticalPosition = 13.05f;
     inline constexpr float kDefaultBottomVerticalPosition = 45.76f;

@@ -20,6 +20,7 @@
 #include "Animation/Track/TrackLayout.h"
 #include "Animation/Track/TrackEditor.h"
 #include "Animation/Track/TrackMagicEffects.h"
+#include "Animation/QuickDrawMagicEffects.h"
 #include "Animation/Track/TrackMovement.h"
 #include "Language.h"
 #include "Serialization.h"
@@ -646,6 +647,8 @@ namespace Menu
     {
         FontSize,
         DrawMarkDistance,
+        DrawEdgeEffectSize,
+        DrawEdgeEffectOpacity,
         ItemOpacity,
         RadialLineOpacity,
         GeneralItemSize,
@@ -756,6 +759,11 @@ namespace Menu
     static ImVec2 g_stardustButtonCenter{};
     static float g_stardustButtonRadius = 0.0f;
     static float g_stardustButtonHoverT = 0.0f;
+    static std::array<ImVec2, 3> g_drawToggleButtonCenters{};
+    static std::array<float, 3> g_drawToggleButtonRadii{};
+    static std::array<float, 3> g_drawToggleButtonHoverT{};
+    static LayoutSliderHitbox g_drawEdgeEffectStyleHitbox{};
+    static bool g_drawEdgeEffectStyleDragging = false;
 
     struct LanguageOptionHitbox
     {
@@ -803,7 +811,6 @@ namespace Menu
         ItemBottom,
         ItemBottomSlot,
         ItemBottomIcon,
-        Draw,
         Radial,
         Top,
         Bottom,
@@ -4231,6 +4238,8 @@ namespace Menu
                     case LayoutSlider::BottomIconOpacity: Config::g_bottomItemStyle.iconOpacity = Config::kDefaultBaseIconOpacity; break;
                     case LayoutSlider::FontSize: Config::g_fontSizeScale = Config::kDefaultFontSizeScale; break;
                     case LayoutSlider::DrawMarkDistance: Config::g_drawMarkDistance = Config::kDefaultDrawMarkDistance; break;
+                    case LayoutSlider::DrawEdgeEffectSize: Config::g_drawEdgeEffectSize = Config::kDefaultDrawEdgeEffectSize; break;
+                    case LayoutSlider::DrawEdgeEffectOpacity: Config::g_drawEdgeEffectOpacity = Config::kDefaultDrawEdgeEffectOpacity; break;
                     case LayoutSlider::SidePosition: Config::g_sideRadialPosition = Config::kDefaultSideRadialPosition; break;
                     case LayoutSlider::TopPosition: Config::g_topVerticalPosition = Config::kDefaultTopVerticalPosition; break;
                     case LayoutSlider::BottomPosition: Config::g_bottomVerticalPosition = Config::kDefaultBottomVerticalPosition; break;
@@ -4301,11 +4310,12 @@ namespace Menu
 
         if (g_radialShapeSliderDragging ||
             g_radialAnimationSliderDragging ||
-            g_slowTimeSliderDragging)
+            g_slowTimeSliderDragging || g_drawEdgeEffectStyleDragging)
         {
             g_radialShapeSliderDragging = false;
             g_radialAnimationSliderDragging = false;
             g_slowTimeSliderDragging = false;
+            g_drawEdgeEffectStyleDragging = false;
             Config::SaveConfig();
             return;
         }
@@ -4481,6 +4491,15 @@ namespace Menu
             addRect(g_slowTimeResetHitbox);
             add(g_specialEffectsButtonCenter,
                 std::max(12.0f, g_specialEffectsButtonRadius));
+            for (const auto& center : g_drawToggleButtonCenters)
+                add(center, 18.0f);
+            addRect(g_drawEdgeEffectStyleHitbox);
+            addRect(g_layoutSliderHitboxes[
+                static_cast<std::size_t>(LayoutSlider::DrawEdgeEffectSize)]);
+            addRect(g_layoutSliderHitboxes[
+                static_cast<std::size_t>(LayoutSlider::DrawEdgeEffectOpacity)]);
+            addRect(g_layoutSliderHitboxes[
+                static_cast<std::size_t>(LayoutSlider::DrawMarkDistance)]);
             addRect({ g_radialShapeButtonMin, g_radialShapeButtonMax });
             addRect({ g_trackModeButtonMin, g_trackModeButtonMax });
             addRect({ g_trackEditorButtonMin, g_trackEditorButtonMax });
@@ -4513,6 +4532,9 @@ namespace Menu
         
             add(g_gameplayPreviewButtonCenter, std::max(12.0f, g_gameplayPreviewButtonRadius));
             add(g_gameplayDescriptionButtonCenter, std::max(12.0f, g_gameplayDescriptionButtonRadius));
+            for (std::size_t i = 0; i < g_drawToggleButtonCenters.size(); ++i)
+                add(g_drawToggleButtonCenters[i], std::max(12.0f, g_drawToggleButtonRadii[i]));
+            addRect(g_drawEdgeEffectStyleHitbox);
         
             for (const auto& hitbox : g_layoutSliderHitboxes) addRect(hitbox);
             for (const auto& hitbox : g_layoutResetHitboxes) addRect(hitbox);
@@ -5268,6 +5290,15 @@ namespace Menu
             targets.push_back(g_slowTimeResetHitbox);
             addCircle(g_specialEffectsButtonCenter,
                 std::max(g_specialEffectsButtonRadius, 18.0f));
+            for (const auto& center : g_drawToggleButtonCenters)
+                addCircle(center, 18.0f);
+            targets.push_back(g_drawEdgeEffectStyleHitbox);
+            targets.push_back(g_layoutSliderHitboxes[
+                static_cast<std::size_t>(LayoutSlider::DrawEdgeEffectSize)]);
+            targets.push_back(g_layoutSliderHitboxes[
+                static_cast<std::size_t>(LayoutSlider::DrawEdgeEffectOpacity)]);
+            targets.push_back(g_layoutSliderHitboxes[
+                static_cast<std::size_t>(LayoutSlider::DrawMarkDistance)]);
         
             for (const auto& center : g_gameplayIconButtonCenters)
                 addCircle(center, std::max(g_gameplayIconButtonRadius, 18.0f));
@@ -5286,6 +5317,10 @@ namespace Menu
             addCircle(g_gameplayPreviewButtonCenter, 18.0f);
         
             addCircle(g_gameplayDescriptionButtonCenter, 18.0f);
+
+            for (const auto& center : g_drawToggleButtonCenters)
+                addCircle(center, 18.0f);
+            targets.push_back(g_drawEdgeEffectStyleHitbox);
         }
         
         if (targets.empty())
@@ -5397,6 +5432,8 @@ namespace Menu
         {
         case LayoutSlider::FontSize: value = &Config::g_fontSizeScale; minimum = 1.0f; maximum = 2.5f; step = 0.05f; break;
         case LayoutSlider::DrawMarkDistance: value = &Config::g_drawMarkDistance; minimum = 0.0f; maximum = 100.0f; step = 1.0f; break;
+        case LayoutSlider::DrawEdgeEffectSize: value = &Config::g_drawEdgeEffectSize; minimum = 25.0f; maximum = 250.0f; step = 5.0f; break;
+        case LayoutSlider::DrawEdgeEffectOpacity: value = &Config::g_drawEdgeEffectOpacity; minimum = 0.0f; maximum = 100.0f; step = 2.0f; break;
         case LayoutSlider::ItemOpacity: value = &Config::g_itemOpacity; break;
         case LayoutSlider::GeneralItemSize: value = &Config::g_generalItemSize; minimum = 25.0f; maximum = 200.0f; break;
         case LayoutSlider::SlotSize: value = &Config::g_slotSize; minimum = 25.0f; maximum = 200.0f; break;
@@ -7525,6 +7562,10 @@ namespace Menu
 
     void OpenRadialMenu()
     {
+        // Um pulso de Quick Draw não pode sobreviver a uma nova abertura.
+        // Isso remove qualquer frame residual se o radial anterior fechou
+        // antes da camada visual concluir sua animação.
+        QuickDrawMagicEffects::Reset();
         g_showWindow = true;
 
         //BlurController::GetSingleton().SetTargetState(true);
@@ -15049,12 +15090,14 @@ namespace Menu
         testItems(g_topItems, RadialSide::Top);
         testItems(g_bottomItems, RadialSide::Bottom);
 
+        const bool matched = bestItem != nullptr;
+
         g_quickDrawGameplayActive = false;
         g_quickDrawGameplayDrawing = false;
         g_quickDrawGameplayExpandT = 0.0f;
         g_quickDrawGameplayStroke.clear();
 
-        if (!bestItem)
+        if (!matched)
             return false;
 
         g_quickDrawSelectionOverride = bestItem;
@@ -15149,10 +15192,19 @@ namespace Menu
 
         draw->AddCircle(center, QUICK_DRAW_EDITOR_RADIUS,
             FadeColor(IM_COL32(245, 245, 245, 205), alpha), 96, 1.8f);
+
+        QuickDrawMagicEffects::DrawLive(draw, g_quickDrawEditorStroke,
+            center, QUICK_DRAW_EDITOR_RADIUS, g_settingsMousePos,
+            g_quickDrawEditorDrawing, false, Config::g_drawEffectsEditor,
+            Config::g_drawEdgeEffectStyle, Config::g_drawEdgeEffectSize,
+            Config::g_drawEdgeEffectOpacity, alpha,
+            static_cast<float>(ImGui::GetTime()));
         
         DrawQuickDrawStroke(draw, g_quickDrawEditorStroke, center,
             QUICK_DRAW_EDITOR_RADIUS,
             FadeColor(IM_COL32(255, 255, 255, 240), alpha), 5.0f);
+
+        QuickDrawMagicEffects::DrawRelease(draw, alpha, ImGui::GetIO().DeltaTime);
 
         constexpr ImVec2 buttonSize(110.0f, 40.0f);
         
@@ -15216,13 +15268,29 @@ namespace Menu
 
         if (!pressed)
         {
+            const bool completedStroke = g_quickDrawEditorDrawing &&
+                g_quickDrawEditorStroke.size() > 1;
             g_quickDrawEditorDrawing = false;
+            if (completedStroke)
+            {
+                const ImVec2 center(ImGui::GetIO().DisplaySize.x * 0.5f,
+                    ImGui::GetIO().DisplaySize.y * 0.5f);
+                QuickDrawMagicEffects::TriggerRelease(g_quickDrawEditorStroke,
+                    center, QUICK_DRAW_EDITOR_RADIUS, true);
+            }
             return true;
         }
 
         if (PointInQuickDrawRect(g_settingsMousePos,
                 g_quickDrawEditorResetMin, g_quickDrawEditorResetMax))
         {
+            if (!g_quickDrawEditorStroke.empty())
+            {
+                const ImVec2 center(ImGui::GetIO().DisplaySize.x * 0.5f,
+                    ImGui::GetIO().DisplaySize.y * 0.5f);
+                QuickDrawMagicEffects::TriggerRelease(g_quickDrawEditorStroke,
+                    center, QUICK_DRAW_EDITOR_RADIUS, false);
+            }
             g_quickDrawEditorStroke.clear();
             StoreQuickDrawStroke(g_quickDrawEditorItem, {});
             return true;
@@ -16137,6 +16205,7 @@ namespace Menu
 
         if (!draw ||
             !settingsOpen ||
+            !Config::g_showDrawMark ||
             alpha <= 0.001f)
             return;
 
@@ -21603,6 +21672,9 @@ namespace Menu
             
                 draw->AddCircle(gestureCenter, gestureRadius,
                     FadeColor(IM_COL32(190, 190, 190, 115), alpha), 40, 1.0f);
+
+                QuickDrawMagicEffects::DrawStoredStrokeGlow(draw, *gesture,
+                    gestureCenter, gestureRadius, alpha);
             
                 DrawQuickDrawStroke(draw, *gesture, gestureCenter,
                     gestureRadius, FadeColor(IM_COL32(245, 245, 245, 235), alpha),
@@ -22392,6 +22464,53 @@ namespace Menu
                 g_settingsMousePos.y >= min.y && g_settingsMousePos.y <= max.y;
         };
 
+        const auto toggleDrawOption = [&](std::size_t index, bool& value) {
+            const float dx = g_settingsMousePos.x - g_drawToggleButtonCenters[index].x;
+            const float dy = g_settingsMousePos.y - g_drawToggleButtonCenters[index].y;
+            const float radius = g_drawToggleButtonRadii[index] + 3.0f;
+            if (dx * dx + dy * dy > radius * radius)
+                return false;
+            value = !value;
+            Config::SaveConfig();
+            return true;
+        };
+
+        if (g_settingsSection == SettingsSection::Gameplay)
+        {
+            if (toggleDrawOption(0, Config::g_drawEffectsGameplay) ||
+                toggleDrawOption(1, Config::g_drawEffectsEditor) ||
+                toggleDrawOption(2, Config::g_showDrawMark))
+                return true;
+            if (insideRect(g_drawEdgeEffectStyleHitbox.min, g_drawEdgeEffectStyleHitbox.max))
+            {
+                g_drawEdgeEffectStyleDragging = true;
+                return true;
+            }
+            const std::array<LayoutSlider, 3> drawSliders{
+                LayoutSlider::DrawEdgeEffectSize, LayoutSlider::DrawEdgeEffectOpacity,
+                LayoutSlider::DrawMarkDistance };
+            for (const auto slider : drawSliders)
+            {
+                const auto index = static_cast<std::size_t>(slider);
+                if (insideRect(g_layoutResetHitboxes[index].min, g_layoutResetHitboxes[index].max))
+                {
+                    if (slider == LayoutSlider::DrawEdgeEffectSize)
+                        Config::g_drawEdgeEffectSize = Config::kDefaultDrawEdgeEffectSize;
+                    else if (slider == LayoutSlider::DrawEdgeEffectOpacity)
+                        Config::g_drawEdgeEffectOpacity = Config::kDefaultDrawEdgeEffectOpacity;
+                    else
+                        Config::g_drawMarkDistance = Config::kDefaultDrawMarkDistance;
+                    Config::SaveConfig();
+                    return true;
+                }
+                if (insideRect(g_layoutSliderHitboxes[index].min, g_layoutSliderHitboxes[index].max))
+                {
+                    g_activeLayoutSlider = slider;
+                    return true;
+                }
+            }
+        }
+
         if (g_settingsSection == SettingsSection::Layout)
         {
             const float previewDx = g_settingsMousePos.x - g_gameplayPreviewButtonCenter.x;
@@ -22450,6 +22569,16 @@ namespace Menu
                 if (!Config::g_stardustEnabled)
                     g_radialParticles.clear();
                 Config::SaveConfig();
+                return true;
+            }
+
+            if (toggleDrawOption(0, Config::g_drawEffectsGameplay) ||
+                toggleDrawOption(1, Config::g_drawEffectsEditor) ||
+                toggleDrawOption(2, Config::g_showDrawMark))
+                return true;
+            if (insideRect(g_drawEdgeEffectStyleHitbox.min, g_drawEdgeEffectStyleHitbox.max))
+            {
+                g_drawEdgeEffectStyleDragging = true;
                 return true;
             }
             return false;
@@ -23686,8 +23815,149 @@ namespace Menu
                 specialEffectsOptionY - ImGui::GetFontSize() * 0.5f),
             white, Language::Get("special_effects").c_str(), alpha);
 
-        // Mantém as seções seguintes abaixo dos controles de slowtime.
-        const float iconsTitleY = specialEffectsOptionY + 34.0f * controlScale;
+        const float drawTitleY = specialEffectsOptionY + 34.0f * controlScale;
+        DrawTextWithShadow(draw, ImVec2(x, drawTitleY), gold,
+            Language::Get("draw_section").c_str(), alpha);
+        const ImVec2 drawTitleSize = ImGui::CalcTextSize(Language::Get("draw_section").c_str());
+        draw->AddLine(ImVec2(x + drawTitleSize.x + 12.0f * controlScale,
+                drawTitleY + ImGui::GetFontSize() * 0.5f),
+            ImVec2(x + width, drawTitleY + ImGui::GetFontSize() * 0.5f),
+            FadeColor(IM_COL32(215, 195, 150, 90), alpha), 1.0f);
+
+        const float drawControlsY = drawTitleY + 32.0f * controlScale;
+        const auto drawDrawToggle = [&](std::size_t index, float optionY,
+            bool enabled, const char* label) {
+            const float radius = buttonRadius;
+            const ImVec2 center(x + 13.0f * controlScale, optionY);
+            g_drawToggleButtonCenters[index] = center;
+            g_drawToggleButtonRadii[index] = radius;
+            const float dx = g_settingsMousePos.x - center.x;
+            const float dy = g_settingsMousePos.y - center.y;
+            const bool hovered = dx * dx + dy * dy <= radius * radius;
+            g_drawToggleButtonHoverT[index] = AnimateSettingsValue(
+                g_drawToggleButtonHoverT[index], hovered ? 1.0f : 0.0f,
+                12.0f, ImGui::GetIO().DeltaTime);
+            draw->AddCircleFilled(center, radius + g_drawToggleButtonHoverT[index] * 2.0f,
+                FadeColor(enabled ? IM_COL32(235, 235, 235, 140)
+                    : IM_COL32(20, 20, 25, 235), alpha), 48);
+            draw->AddCircle(center, radius + g_drawToggleButtonHoverT[index] * 2.0f,
+                FadeColor(IM_COL32(255, 255, 255,
+                    static_cast<int>(90.0f + 140.0f * g_drawToggleButtonHoverT[index])), alpha), 48, 1.5f);
+            DrawTextWithShadow(draw, ImVec2(center.x + radius + 12.0f * controlScale,
+                    center.y - ImGui::GetFontSize() * 0.5f),
+                white, label, alpha);
+        };
+        drawDrawToggle(0, drawControlsY, Config::g_drawEffectsGameplay,
+            Language::Get("draw_effects_gameplay").c_str());
+        drawDrawToggle(1, drawControlsY + 34.0f * controlScale, Config::g_drawEffectsEditor,
+            Language::Get("draw_effects_editor").c_str());
+
+        const float effectStyleLabelY = drawControlsY + 58.0f * controlScale;
+        const float effectStyleTrackY = effectStyleLabelY + 25.0f * controlScale;
+        const float effectTrackMinX = x + 5.0f * controlScale;
+        const float effectTrackMaxX = x + width - 5.0f * controlScale;
+        const float effectTrackWidth = std::max(effectTrackMaxX - effectTrackMinX, 1.0f);
+        constexpr int effectStyleCount = QuickDrawMagicEffects::kEdgeEffectStyleCount;
+        g_drawEdgeEffectStyleHitbox = { ImVec2(x, effectStyleLabelY - 5.0f * controlScale),
+            ImVec2(x + width, effectStyleTrackY + 13.0f * controlScale) };
+        if (g_drawEdgeEffectStyleDragging)
+        {
+            const float normalized = std::clamp(
+                (g_settingsMousePos.x - effectTrackMinX) / effectTrackWidth, 0.0f, 1.0f);
+            Config::g_drawEdgeEffectStyle = std::clamp(
+                static_cast<int>(normalized * static_cast<float>(effectStyleCount)),
+                0, effectStyleCount - 1);
+        }
+        Config::g_drawEdgeEffectStyle = std::clamp(
+            Config::g_drawEdgeEffectStyle, 0, effectStyleCount - 1);
+        static constexpr std::array<const char*, effectStyleCount> effectStyleLabels{
+            "draw_edge_shock", "draw_edge_sine", "draw_edge_squares",
+            "draw_edge_arrows", "draw_edge_prisms", "draw_edge_worldbreaker" };
+        const char* effectStyleName = Language::Get(
+            effectStyleLabels[Config::g_drawEdgeEffectStyle]).c_str();
+        const ImVec2 effectStyleNameSize = ImGui::CalcTextSize(effectStyleName);
+        const bool effectStyleHovered = g_settingsMousePos.x >= g_drawEdgeEffectStyleHitbox.min.x &&
+            g_settingsMousePos.x <= g_drawEdgeEffectStyleHitbox.max.x &&
+            g_settingsMousePos.y >= g_drawEdgeEffectStyleHitbox.min.y &&
+            g_settingsMousePos.y <= g_drawEdgeEffectStyleHitbox.max.y;
+        DrawTextWithShadow(draw, ImVec2(x, effectStyleLabelY), white,
+            Language::Get("draw_edge_effect").c_str(), alpha);
+        DrawTextWithShadow(draw, ImVec2(x + width - effectStyleNameSize.x, effectStyleLabelY),
+            white, effectStyleName, alpha);
+        const float effectHalfHeight = 8.0f * controlScale;
+        draw->AddRectFilled(ImVec2(effectTrackMinX, effectStyleTrackY - effectHalfHeight),
+            ImVec2(effectTrackMaxX, effectStyleTrackY + effectHalfHeight),
+            FadeColor(IM_COL32(25, 26, 31, 235), alpha), 4.0f * controlScale);
+        draw->AddRect(ImVec2(effectTrackMinX, effectStyleTrackY - effectHalfHeight),
+            ImVec2(effectTrackMaxX, effectStyleTrackY + effectHalfHeight),
+            FadeColor(IM_COL32(145, 145, 150, effectStyleHovered ? 210 : 130), alpha),
+            4.0f * controlScale, 0, 1.2f);
+        const float effectCellWidth = effectTrackWidth / static_cast<float>(effectStyleCount);
+        const float selectedEffectMinX = effectTrackMinX + effectCellWidth *
+            static_cast<float>(Config::g_drawEdgeEffectStyle);
+        draw->AddRectFilled(ImVec2(selectedEffectMinX + 0.5f * controlScale,
+                effectStyleTrackY - effectHalfHeight + 0.5f * controlScale),
+            ImVec2(selectedEffectMinX + effectCellWidth - 0.2f * controlScale,
+                effectStyleTrackY + effectHalfHeight - 0.2f * controlScale),
+            FadeColor(g_drawEdgeEffectStyleDragging || effectStyleHovered
+                ? IM_COL32(245, 240, 220, 245) : IM_COL32(180, 176, 165, 225), alpha),
+            2.0f * controlScale);
+        for (int i = 0; i <= effectStyleCount; ++i)
+        {
+            const float tickX = effectTrackMinX + effectCellWidth * static_cast<float>(i);
+            draw->AddLine(ImVec2(tickX, effectStyleTrackY - 5.0f * controlScale),
+                ImVec2(tickX, effectStyleTrackY + 5.0f * controlScale),
+                FadeColor(IM_COL32(180, 180, 185, 70), alpha), 1.0f);
+        }
+
+        const auto drawDrawSlider = [&](LayoutSlider slider, const char* label,
+            float& value, float minimum, float maximum, float labelY) {
+            const std::size_t index = static_cast<std::size_t>(slider);
+            const float trackY = labelY + 25.0f * controlScale;
+            const float resetX = x + width - 7.0f * controlScale;
+            const float trackMaxX = resetX - 17.0f * controlScale;
+            const float trackWidth = std::max(trackMaxX - x, 1.0f);
+            g_layoutSliderHitboxes[index] = { ImVec2(x, labelY - 4.0f * controlScale),
+                ImVec2(trackMaxX, trackY + 12.0f * controlScale) };
+            g_layoutResetHitboxes[index] = { ImVec2(resetX - 10.0f * controlScale,
+                    trackY - 10.0f * controlScale),
+                ImVec2(resetX + 10.0f * controlScale, trackY + 10.0f * controlScale) };
+            if (g_activeLayoutSlider == slider)
+            {
+                const float normalized = std::clamp((g_settingsMousePos.x - x) / trackWidth, 0.0f, 1.0f);
+                value = minimum + (maximum - minimum) * normalized;
+            }
+            value = std::clamp(value, minimum, maximum);
+            const float normalized = (value - minimum) / std::max(maximum - minimum, 0.001f);
+            const std::string text = std::format("{:.0f}%", value);
+            const ImVec2 textSize = ImGui::CalcTextSize(text.c_str());
+            DrawTextWithShadow(draw, ImVec2(x, labelY), white, label, alpha);
+            DrawTextWithShadow(draw, ImVec2(trackMaxX - textSize.x, labelY),
+                FadeColor(IM_COL32(180, 165, 130, 230), alpha), text.c_str(), alpha);
+            draw->AddRectFilled(ImVec2(x, trackY - 6.0f * controlScale),
+                ImVec2(trackMaxX, trackY + 6.0f * controlScale),
+                FadeColor(IM_COL32(25, 26, 31, 235), alpha), 4.0f * controlScale);
+            draw->AddRectFilled(ImVec2(x, trackY - 6.0f * controlScale),
+                ImVec2(x + trackWidth * normalized, trackY + 6.0f * controlScale),
+                FadeColor(IM_COL32(190, 184, 170, 205), alpha), 4.0f * controlScale);
+            draw->AddCircleFilled(ImVec2(resetX, trackY), 5.0f * controlScale,
+                FadeColor(IM_COL32(65, 65, 65, 255), alpha), 20);
+            draw->AddCircle(ImVec2(resetX, trackY), 6.5f * controlScale,
+                FadeColor(IM_COL32(135, 132, 126, 120), alpha), 20, 1.0f);
+        };
+        const float edgeSizeY = effectStyleTrackY + 30.0f * controlScale;
+        drawDrawSlider(LayoutSlider::DrawEdgeEffectSize, Language::Get("draw_edge_size").c_str(),
+            Config::g_drawEdgeEffectSize, 25.0f, 250.0f, edgeSizeY);
+        const float edgeOpacityY = edgeSizeY + 49.0f * controlScale;
+        drawDrawSlider(LayoutSlider::DrawEdgeEffectOpacity, Language::Get("draw_edge_opacity").c_str(),
+            Config::g_drawEdgeEffectOpacity, 0.0f, 100.0f, edgeOpacityY);
+        const float drawMarkY = edgeOpacityY + 54.0f * controlScale;
+        drawDrawToggle(2, drawMarkY, Config::g_showDrawMark,
+            Language::Get("show_draw_mark").c_str());
+        drawDrawSlider(LayoutSlider::DrawMarkDistance, Language::Get("draw_mark_distance").c_str(),
+            Config::g_drawMarkDistance, 0.0f, 100.0f, drawMarkY + 27.0f * controlScale);
+
+        const float iconsTitleY = drawMarkY + 87.0f * controlScale;
     
         const float inventoryTitleY =
             iconsTitleY + (32.0f + 4.0f * 32.0f) * controlScale;
@@ -24244,6 +24514,8 @@ namespace Menu
         SliderData sliders[] = {
             { Language::Get("font_size").c_str(), &Config::g_fontSizeScale, 1.0f, 2.5f },
             { Language::Get("draw_mark_distance").c_str(), &Config::g_drawMarkDistance, 0.0f, 100.0f },
+            { Language::Get("draw_edge_size").c_str(), &Config::g_drawEdgeEffectSize, 25.0f, 250.0f },
+            { Language::Get("draw_edge_opacity").c_str(), &Config::g_drawEdgeEffectOpacity, 0.0f, 100.0f },
             { Language::Get("item_opacity").c_str(), &Config::g_itemOpacity, 0.0f, 100.0f },
             { Language::Get("layout_radial_line_opacity").c_str(), &radialLineOpacity, 0.0f, 100.0f },
             { Language::Get("general_item_size").c_str(), &Config::g_generalItemSize, 25.0f, 200.0f },
@@ -24383,10 +24655,11 @@ namespace Menu
         const int fontButtonRow = nextRow++;
         
         std::array<int, 4> itemToggleRows{ -1, -1, -1, -1 };
+        std::array<int, 3> drawToggleRows{ -1, -1, -1 };
+        int drawEdgeEffectStyleRow = -1;
         
         for (int& row : itemToggleRows) row = nextRow++;
         int itemPreviewHeaderRow = -1;
-        int drawHeaderRow = -1;
         
         int previewMenuHeaderRow = -1;
         int previewTopHeaderRow = -1;
@@ -24529,10 +24802,6 @@ namespace Menu
                 addSliderRow(LayoutSlider::BottomIconOpacity);
             }
         }
-
-        drawHeaderRow = nextRow++;
-        if (groupExpanded(LayoutGroup::Draw))
-            addSliderRow(LayoutSlider::DrawMarkDistance);
 
         itemPreviewHeaderRow = nextRow++;
         if (groupExpanded(LayoutGroup::ItemPreview))
@@ -24883,9 +25152,6 @@ namespace Menu
                 LayoutGroup::ItemBottomIcon, 14.0f * controlScale);
         }
 
-        drawSectionTitle(drawHeaderRow, Language::Get("draw_section").c_str(),
-            LayoutGroup::Draw);
-
         drawSectionTitle(itemPreviewHeaderRow, Language::Get("item_section").c_str(),
             LayoutGroup::ItemPreview);
         if (groupExpanded(LayoutGroup::ItemPreview))
@@ -25040,6 +25306,7 @@ namespace Menu
         g_showOverflowIconButtonRadius = 0.0f;
         
         g_stardustButtonRadius = 0.0f;
+        g_drawToggleButtonRadii.fill(0.0f);
         
         g_gameplayPreviewButtonCenter = ImVec2(-10000.0f, -10000.0f);
         
@@ -25050,6 +25317,8 @@ namespace Menu
         g_showOverflowIconButtonCenter = ImVec2(-10000.0f, -10000.0f);
         
         g_stardustButtonCenter = ImVec2(-10000.0f, -10000.0f);
+        g_drawToggleButtonCenters.fill(ImVec2(-10000.0f, -10000.0f));
+        g_drawEdgeEffectStyleHitbox = { ImVec2(1.0f, 1.0f), ImVec2(0.0f, 0.0f) };
         
         drawLayoutToggle(itemToggleRows[0], g_gameplayPreviewButtonCenter,
             g_gameplayPreviewButtonRadius, g_gameplayPreviewHoverT,
@@ -25073,6 +25342,96 @@ namespace Menu
                 g_stardustButtonRadius, g_stardustButtonHoverT,
                 Config::g_stardustEnabled, Language::Get("stardust").c_str());
         }
+
+        drawLayoutToggle(drawToggleRows[0], g_drawToggleButtonCenters[0],
+            g_drawToggleButtonRadii[0], g_drawToggleButtonHoverT[0],
+            Config::g_drawEffectsGameplay, Language::Get("draw_effects_gameplay").c_str());
+        drawLayoutToggle(drawToggleRows[1], g_drawToggleButtonCenters[1],
+            g_drawToggleButtonRadii[1], g_drawToggleButtonHoverT[1],
+            Config::g_drawEffectsEditor, Language::Get("draw_effects_editor").c_str());
+
+        const auto drawEdgeEffectStyleSelector = [&](int row) {
+            if (row < 0)
+                return;
+
+            const float rowTop = contentTop + rowHeight * static_cast<float>(row) -
+                g_layoutPanelScroll;
+            const float labelY = rowTop + 2.0f * controlScale;
+            const float selectorTrackY = rowTop + 28.0f * controlScale;
+            const float selectorMinX = x + 5.0f * controlScale;
+            const float selectorMaxX = x + width - 5.0f * controlScale;
+            const float selectorWidth = std::max(selectorMaxX - selectorMinX, 1.0f);
+            const float selectorHalfHeight = 8.0f * controlScale;
+            const float rowBottom = rowTop + rowHeight;
+
+            g_drawEdgeEffectStyleHitbox = {
+                ImVec2(x, rowTop), ImVec2(x + width, rowBottom) };
+            const bool visible = rowBottom >= contentTop && rowTop <= contentBottom;
+            if (!visible)
+            {
+                g_drawEdgeEffectStyleHitbox = { ImVec2(1.0f, 1.0f), ImVec2(0.0f, 0.0f) };
+                return;
+            }
+
+            constexpr int optionCount = QuickDrawMagicEffects::kEdgeEffectStyleCount;
+            if (g_drawEdgeEffectStyleDragging)
+            {
+                const float normalized = std::clamp(
+                    (g_settingsMousePos.x - selectorMinX) / selectorWidth, 0.0f, 1.0f);
+                Config::g_drawEdgeEffectStyle = std::clamp(
+                    static_cast<int>(normalized * static_cast<float>(optionCount)),
+                    0, optionCount - 1);
+            }
+            Config::g_drawEdgeEffectStyle = std::clamp(
+                Config::g_drawEdgeEffectStyle, 0, optionCount - 1);
+
+            const bool hovered = g_settingsMousePos.x >= g_drawEdgeEffectStyleHitbox.min.x &&
+                g_settingsMousePos.x <= g_drawEdgeEffectStyleHitbox.max.x &&
+                g_settingsMousePos.y >= g_drawEdgeEffectStyleHitbox.min.y &&
+                g_settingsMousePos.y <= g_drawEdgeEffectStyleHitbox.max.y;
+            const float cellWidth = selectorWidth / static_cast<float>(optionCount);
+            const float selectedMinX = selectorMinX + cellWidth *
+                static_cast<float>(Config::g_drawEdgeEffectStyle);
+            const float selectedMaxX = selectedMinX + cellWidth;
+            static constexpr std::array<const char*, optionCount> labels{
+                "draw_edge_shock", "draw_edge_sine", "draw_edge_squares",
+                "draw_edge_arrows", "draw_edge_prisms", "draw_edge_worldbreaker" };
+
+            const char* value = Language::Get(labels[Config::g_drawEdgeEffectStyle]).c_str();
+            const ImVec2 valueSize = ImGui::CalcTextSize(value);
+            DrawTextWithShadow(draw, ImVec2(x, labelY),
+                FadeColor(IM_COL32(235, 230, 215, 255), alpha),
+                Language::Get("draw_edge_effect").c_str(), alpha);
+            DrawTextWithShadow(draw, ImVec2(x + width - valueSize.x, labelY),
+                FadeColor(IM_COL32(235, 230, 215, 255), alpha), value, alpha);
+            draw->AddRectFilled(ImVec2(selectorMinX, selectorTrackY - selectorHalfHeight),
+                ImVec2(selectorMaxX, selectorTrackY + selectorHalfHeight),
+                FadeColor(IM_COL32(25, 26, 31, 235), alpha), 4.0f * controlScale);
+            draw->AddRect(ImVec2(selectorMinX, selectorTrackY - selectorHalfHeight),
+                ImVec2(selectorMaxX, selectorTrackY + selectorHalfHeight),
+                FadeColor(IM_COL32(145, 145, 150, hovered ? 210 : 130), alpha),
+                4.0f * controlScale, 0, 1.2f);
+            draw->AddRectFilled(
+                ImVec2(selectedMinX + 0.5f * controlScale,
+                    selectorTrackY - selectorHalfHeight + 0.5f * controlScale),
+                ImVec2(selectedMaxX - 0.2f * controlScale,
+                    selectorTrackY + selectorHalfHeight - 0.2f * controlScale),
+                FadeColor(g_drawEdgeEffectStyleDragging || hovered
+                    ? IM_COL32(245, 240, 220, 245) : IM_COL32(180, 176, 165, 225), alpha),
+                2.0f * controlScale);
+            for (int i = 0; i <= optionCount; ++i)
+            {
+                const float tickX = selectorMinX + cellWidth * static_cast<float>(i);
+                draw->AddLine(ImVec2(tickX, selectorTrackY - 5.0f * controlScale),
+                    ImVec2(tickX, selectorTrackY + 5.0f * controlScale),
+                    FadeColor(IM_COL32(180, 180, 185, 70), alpha), 1.0f);
+            }
+        };
+        drawEdgeEffectStyleSelector(drawEdgeEffectStyleRow);
+
+        drawLayoutToggle(drawToggleRows[2], g_drawToggleButtonCenters[2],
+            g_drawToggleButtonRadii[2], g_drawToggleButtonHoverT[2],
+            Config::g_showDrawMark, Language::Get("show_draw_mark").c_str());
 
         for (auto& hitbox : g_layoutColorHitboxes)
             hitbox = { ImVec2(1.0f, 1.0f), ImVec2(0.0f, 0.0f) };
@@ -27169,14 +27528,11 @@ namespace Menu
 
                 if (g_quickDrawGameplayActive)
                 {
+                    const ImVec2 quickDrawCursor = GetRadialMousePosition();
                     if (g_quickDrawGameplayDrawing)
                     {
-                
-                        const ImVec2 drawMouse = GetRadialMousePosition();
-                
-                        const float dx = drawMouse.x - screenCenter.x;
-                
-                        const float dy = drawMouse.y - screenCenter.y;
+                        const float dx = quickDrawCursor.x - screenCenter.x;
+                        const float dy = quickDrawCursor.y - screenCenter.y;
                 
                         // A borda do círculo expandido funciona como um gesto
                         // de cancelar: encerra já, sem esperar soltar a tecla
@@ -27190,11 +27546,18 @@ namespace Menu
                         else
                         {
                             AddQuickDrawPoint(g_quickDrawGameplayStroke,
-                                drawMouse, screenCenter,
+                                quickDrawCursor, screenCenter,
                                 QUICK_DRAW_EDITOR_RADIUS);
                         }
                     }
-                
+
+                    QuickDrawMagicEffects::DrawLive(draw, g_quickDrawGameplayStroke,
+                        screenCenter, QUICK_DRAW_EDITOR_RADIUS, quickDrawCursor,
+                        g_quickDrawGameplayDrawing, true, Config::g_drawEffectsGameplay,
+                        Config::g_drawEdgeEffectStyle, Config::g_drawEdgeEffectSize,
+                        Config::g_drawEdgeEffectOpacity, centerVisualAlpha,
+                        static_cast<float>(ImGui::GetTime()));
+
                     DrawQuickDrawStroke(draw, g_quickDrawGameplayStroke,
                         screenCenter, QUICK_DRAW_EDITOR_RADIUS,
                         FadeColor(IM_COL32(255, 255, 255, 235), centerVisualAlpha),
@@ -27401,6 +27764,12 @@ namespace Menu
 
         // DESCRIPTOR DO ITEM SELECIONADO
         DrawGameplayItemDescription(g_globalAlpha);
+
+        // O pulso de conclusão sobrevive alguns frames ao fechamento lógico
+        // do radial. É apenas uma sobreposição visual: equipar/cancelar já
+        // ocorreu antes deste ponto.
+        QuickDrawMagicEffects::DrawRelease(ImGui::GetForegroundDrawList(),
+            1.0f, deltaTime);
 
         // ============================================================
 
