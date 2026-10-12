@@ -23701,20 +23701,30 @@ namespace Menu
             const float selectedMinX = trackMinX + cellWidth * static_cast<float>(selected);
         
             const float selectedMaxX = selectedMinX + cellWidth;
-        
+
+            // “Formato do radial” quanto “Animação do radial”.
+            // Os valores visuais relevantes são:
+            // - trackInset = 5.0f * controlScale
+            //  Margem horizontal da barra.
+            // - trackHalfHeight = 8.0f * controlScale
+            //  Altura da barra. A altura total é o dobro: 16 px na escala base.
+            // - cellWidth = trackWidth / optionCount
+            //  Largura de cada slot. Ela é automática: depende da largura do painel e da quantidade de formatos/animações.
+            // - O retângulo que preenche o slot selecionado é este AddRectFilled:
             draw->AddRectFilled(
-                ImVec2(selectedMinX + 1.5f * controlScale,
-                    trackY - trackHalfHeight + 2.0f * controlScale),
-                ImVec2(selectedMaxX - 1.5f * controlScale,
-                    trackY + trackHalfHeight - 2.0f * controlScale),
+                ImVec2(selectedMinX + 0.5f * controlScale,
+                    trackY - trackHalfHeight + 0.5f * controlScale),
+                ImVec2(selectedMaxX - 0.2f * controlScale,
+                    trackY + trackHalfHeight - 0.2f * controlScale),
                 FadeColor(dragging || buttonHovered ? IM_COL32(245, 240, 220, 245)
                     : IM_COL32(180, 176, 165, 225), alpha), 2.0f * controlScale);
+            
             for (int i = 0; i <= optionCount; ++i)
             {
                 const float tickX = trackMinX + cellWidth * static_cast<float>(i);
                 draw->AddLine(ImVec2(tickX, trackY - 5.0f * controlScale),
                     ImVec2(tickX, trackY + 5.0f * controlScale),
-                    FadeColor(IM_COL32(180, 180, 185, 190), alpha), 1.0f);
+                    FadeColor(IM_COL32(180, 180, 185, 70), alpha), 1.0f);
             }
             const char* value = optionName(selected);
         
