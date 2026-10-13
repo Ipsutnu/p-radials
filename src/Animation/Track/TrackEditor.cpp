@@ -127,14 +127,16 @@ namespace
     Rect g_zoomOut, g_zoomIn, g_reset, g_selectButton, g_panButton,
         g_deleteButton, g_drawPathButton, g_scrollThumb, g_lineOpacitySlider,
         g_smoothDrawButton, g_drawSmoothingSlider, g_geometryDrawButton,
-        g_duplicateSelectedButton,
+        g_duplicateSelectedButton, g_deleteSelectedButton,
+        g_invertHorizontalButton, g_invertVerticalButton,
         g_radialQuantitySlider, g_radialStretchSlider, g_ghostItemsSlider,
         g_radialOpacitySlider, g_radialShapeSlider, g_radialRotationSlider, g_brushSizeSlider,
         g_radialShapeReset, g_radialRotationReset, g_radialQuantityReset,
         g_radialStretchReset, g_radialOpacityReset, g_overflowOpacityReset,
         g_brushHardnessSlider, g_eraseRadialButton, g_centerReverseFlow,
         g_resetRadialDrawing, g_eraserRadialMode, g_eraserOverflowMode,
-        g_gizmoPanel, g_gizmoMove, g_gizmoRotate, g_gizmoDelete, g_gizmoMirror,
+        g_gizmoPanel, g_gizmoMove, g_gizmoRotate, g_gizmoDelete,
+        g_gizmoDuplicate, g_gizmoFlipHorizontal, g_gizmoFlipVertical,
         g_gizmoScaleUp, g_gizmoScaleDown,
         g_save, g_cancel, g_presetSave, g_presetLoad, g_presetReset,
         g_presetOK, g_presetCancel, g_radialsSubmenu, g_overflowSubmenu;
@@ -327,6 +329,8 @@ namespace
         }
     }
 
+    void RemovePieceConnections(Track::Layout& layout, int pieceID);
+
     Track::Piece* Selected()
     {
         auto& pieces = Track::CustomLayout().pieces;
@@ -334,6 +338,38 @@ namespace
             return piece.id == g_selectedID;
         });
         return it == pieces.end() ? nullptr : &*it;
+    }
+
+    void DeleteSelected()
+    {
+        if (!Selected()) return;
+        const int selected = g_selectedID;
+        auto& layout = Track::CustomLayout();
+        std::erase_if(layout.pieces,
+            [&](const Track::Piece& piece) { return piece.id == selected; });
+        std::erase_if(layout.gates,
+            [&](const Track::Gate& gate) { return gate.pieceID == selected; });
+        RemovePieceConnections(layout, selected);
+        g_selectedID = -1;
+        g_gizmoOwner = -1;
+        g_gizmoCenterInitialized = false;
+    }
+
+    // As duas reflexões são locais à peça; por isso continuam corretas mesmo
+    // depois que ela foi rotacionada no circuito.
+    void FlipSelectedVertical()
+    {
+        if (auto* selected = Selected())
+            selected->mirrored = !selected->mirrored;
+    }
+
+    void FlipSelectedHorizontal()
+    {
+        if (auto* selected = Selected())
+        {
+            selected->mirrored = !selected->mirrored;
+            selected->rotation += 3.141592654f;
+        }
     }
 
     const char* PieceName(Track::PieceKind kind)
@@ -487,7 +523,9 @@ namespace
             g_gizmoMove = {};
             g_gizmoRotate = {};
             g_gizmoDelete = {};
-            g_gizmoMirror = {};
+            g_gizmoDuplicate = {};
+            g_gizmoFlipHorizontal = {};
+            g_gizmoFlipVertical = {};
             return false;
         }
 
@@ -511,10 +549,10 @@ namespace
                 continue;
             const ImVec2 candidate(anchor.x + direction.x * 108.0f,
                 anchor.y + direction.y * 108.0f);
-            if (candidate.x - 52.0f < g_viewportMin.x ||
-                candidate.x + 52.0f >= g_panelLeft ||
-                candidate.y - 52.0f < g_viewportMin.y ||
-                candidate.y + 52.0f > g_viewportMax.y)
+            if (candidate.x - 70.0f < g_viewportMin.x ||
+                candidate.x + 70.0f >= g_panelLeft ||
+                candidate.y - 70.0f < g_viewportMin.y ||
+                candidate.y + 70.0f > g_viewportMax.y)
                 continue;
             float clearance = FLT_MAX;
             for (const auto& piece : Track::CustomLayout().pieces)
@@ -602,19 +640,23 @@ namespace
         }
         const ImVec2 gizmo = g_gizmoAnimatedCenter;
 
-        g_gizmoPanel = { ImVec2(gizmo.x - 48.0f, gizmo.y - 51.5f),
-            ImVec2(gizmo.x + 48.0f, gizmo.y + 44.5f) };
+        g_gizmoPanel = { ImVec2(gizmo.x - 69.0f, gizmo.y - 69.0f),
+            ImVec2(gizmo.x + 69.0f, gizmo.y + 69.0f) };
         g_gizmoMove = { ImVec2(gizmo.x - 16.0f, gizmo.y - 16.0f),
             ImVec2(gizmo.x + 16.0f, gizmo.y + 16.0f) };
-        g_gizmoRotate = { ImVec2(gizmo.x + 12.0f, gizmo.y - 16.0f),
-            ImVec2(gizmo.x + 44.0f, gizmo.y + 16.0f) };
-        g_gizmoDelete = { ImVec2(gizmo.x - 44.0f, gizmo.y - 16.0f),
-            ImVec2(gizmo.x - 12.0f, gizmo.y + 16.0f) };
-        g_gizmoMirror = { ImVec2(gizmo.x - 16.0f, gizmo.y + 12.0f),
-            ImVec2(gizmo.x + 16.0f, gizmo.y + 45.0f) };
+        g_gizmoScaleUp = { ImVec2(gizmo.x - 14.0f, gizmo.y - 52.0f),
+            ImVec2(gizmo.x + 14.0f, gizmo.y - 24.0f) };
+        g_gizmoDuplicate = { ImVec2(gizmo.x + 19.0f, gizmo.y - 33.0f),
+            ImVec2(gizmo.x + 47.0f, gizmo.y - 5.0f) };
+        g_gizmoRotate = { ImVec2(gizmo.x + 19.0f, gizmo.y + 5.0f),
+            ImVec2(gizmo.x + 47.0f, gizmo.y + 33.0f) };
+        g_gizmoFlipVertical = { ImVec2(gizmo.x - 14.0f, gizmo.y + 24.0f),
+            ImVec2(gizmo.x + 14.0f, gizmo.y + 52.0f) };
+        g_gizmoFlipHorizontal = { ImVec2(gizmo.x - 47.0f, gizmo.y + 5.0f),
+            ImVec2(gizmo.x - 19.0f, gizmo.y + 33.0f) };
+        g_gizmoDelete = { ImVec2(gizmo.x - 47.0f, gizmo.y - 33.0f),
+            ImVec2(gizmo.x - 19.0f, gizmo.y - 5.0f) };
         g_gizmoScaleDown = {};
-        g_gizmoScaleUp = { ImVec2(gizmo.x - 14.0f, gizmo.y - 45.0f),
-            ImVec2(gizmo.x + 14.0f, gizmo.y - 17.0f) };
         return true;
     }
 
@@ -627,40 +669,75 @@ namespace
     void DrawGizmoControls(ImDrawList* draw)
     {
         if (!Selected() || !g_gizmoCenterInitialized) return;
+        
         const ImVec2 gizmo = GizmoCenter();
+        
         const ImU32 tool = IM_COL32(235, 220, 180, 255);
-        // Fundo local opaco: o controle é a última camada do editor e linhas,
-        // ícones ou terminais nunca atravessam seus botões.
-        const ImVec2 backgroundCenter(gizmo.x, gizmo.y - 3.5f);
-        draw->AddCircleFilled(backgroundCenter, 49.0f, IM_COL32(14, 16, 21, 245), 48);
-        draw->AddCircle(backgroundCenter, 49.0f, IM_COL32(115, 105, 85, 210), 48, 1.0f);
-        draw->AddCircle(ImVec2(gizmo.x, gizmo.y - 31.0f),
+        
+        // Fundo local opaco: os seis comandos ficam em volta do movimento. 
+        draw->AddCircleFilled(gizmo, 60.0f, IM_COL32(14, 16, 21, 190), 56); // fundo
+        //draw->AddCircle(gizmo, 70.0f, IM_COL32(115, 105, 85, 210), 56, 1.0f); // borda
+        
+        draw->AddCircle(ImVec2(gizmo.x, gizmo.y - 38.0f),
             11.0f, tool, 24, 1.5f);
-        draw->AddLine(ImVec2(gizmo.x - 6.0f, gizmo.y - 31.0f),
-            ImVec2(gizmo.x + 6.0f, gizmo.y - 31.0f), tool, 2.0f);
-        draw->AddLine(ImVec2(gizmo.x, gizmo.y - 37.0f),
-            ImVec2(gizmo.x, gizmo.y - 25.0f), tool, 2.0f);
+        
+        draw->AddLine(ImVec2(gizmo.x - 6.0f, gizmo.y - 38.0f),
+            ImVec2(gizmo.x + 6.0f, gizmo.y - 38.0f), tool, 2.0f);
+        
+        draw->AddLine(ImVec2(gizmo.x, gizmo.y - 44.0f),
+            ImVec2(gizmo.x, gizmo.y - 32.0f), tool, 2.0f);
+        
         draw->AddLine(ImVec2(gizmo.x - 9, gizmo.y), ImVec2(gizmo.x + 9, gizmo.y), tool, 2.0f);
         draw->AddLine(ImVec2(gizmo.x, gizmo.y - 9), ImVec2(gizmo.x, gizmo.y + 9), tool, 2.0f);
         draw->AddTriangleFilled(ImVec2(gizmo.x - 12, gizmo.y), ImVec2(gizmo.x - 7, gizmo.y - 3), ImVec2(gizmo.x - 7, gizmo.y + 3), tool);
         draw->AddTriangleFilled(ImVec2(gizmo.x + 12, gizmo.y), ImVec2(gizmo.x + 7, gizmo.y - 3), ImVec2(gizmo.x + 7, gizmo.y + 3), tool);
         draw->AddTriangleFilled(ImVec2(gizmo.x, gizmo.y - 12), ImVec2(gizmo.x - 3, gizmo.y - 7), ImVec2(gizmo.x + 3, gizmo.y - 7), tool);
         draw->AddTriangleFilled(ImVec2(gizmo.x, gizmo.y + 12), ImVec2(gizmo.x - 3, gizmo.y + 7), ImVec2(gizmo.x + 3, gizmo.y + 7), tool);
-        const ImVec2 rotateCenter(gizmo.x + 27.0f, gizmo.y);
+        
+        const ImVec2 duplicateCenter(gizmo.x + 33.0f, gizmo.y - 19.0f);
+        
+        draw->AddRect(ImVec2(duplicateCenter.x - 8.0f, duplicateCenter.y - 8.0f),
+            ImVec2(duplicateCenter.x + 7.0f, duplicateCenter.y + 7.0f), tool, 1.0f, 0, 1.7f);
+        
+        draw->AddRect(ImVec2(duplicateCenter.x - 3.0f, duplicateCenter.y - 13.0f),
+            ImVec2(duplicateCenter.x + 12.0f, duplicateCenter.y + 2.0f), tool, 1.0f, 0, 1.7f);
+        
+        const ImVec2 rotateCenter(gizmo.x + 33.0f, gizmo.y + 19.0f);
+        
         draw->PathArcTo(rotateCenter, 8.0f, -1.35f, 2.65f, 24);
         draw->PathStroke(tool, 0, 2.0f);
         draw->AddTriangleFilled(
             ImVec2(rotateCenter.x - 9.0f, rotateCenter.y + 4.0f),
             ImVec2(rotateCenter.x - 4.0f, rotateCenter.y - 1.0f),
             ImVec2(rotateCenter.x - 2.0f, rotateCenter.y + 6.0f), tool);
-        draw->AddRect(ImVec2(gizmo.x - 33, gizmo.y - 6), ImVec2(gizmo.x - 21, gizmo.y + 7), tool, 1.0f, 0, 1.8f);
-        draw->AddLine(ImVec2(gizmo.x - 35, gizmo.y - 8), ImVec2(gizmo.x - 19, gizmo.y - 8), tool, 2.0f);
-        const ImVec2 mirrorCenter(gizmo.x, gizmo.y + 27.0f);
-        draw->AddCircle(mirrorCenter, 8.0f, tool, 28, 1.8f);
-        draw->PathLineTo(ImVec2(mirrorCenter.x, mirrorCenter.y + 8.0f));
-        draw->PathArcTo(mirrorCenter, 8.0f, 1.5707963f, 4.7123890f, 16);
-        draw->PathLineTo(ImVec2(mirrorCenter.x, mirrorCenter.y + 8.0f));
-        draw->PathFillConvex(tool);
+        
+        const ImVec2 deleteCenter(gizmo.x - 33.0f, gizmo.y - 19.0f);
+        
+        draw->AddRect(ImVec2(deleteCenter.x - 6.0f, deleteCenter.y - 5.0f),
+            ImVec2(deleteCenter.x + 6.0f, deleteCenter.y + 8.0f), tool, 1.0f, 0, 1.8f);
+        
+        draw->AddLine(ImVec2(deleteCenter.x - 8.0f, deleteCenter.y - 7.0f),
+            ImVec2(deleteCenter.x + 8.0f, deleteCenter.y - 7.0f), tool, 2.0f);
+        
+        const ImVec2 horizontalFlipCenter(gizmo.x - 33.0f, gizmo.y + 19.0f);
+        
+        draw->AddLine(ImVec2(horizontalFlipCenter.x, horizontalFlipCenter.y - 10.0f),
+            ImVec2(horizontalFlipCenter.x, horizontalFlipCenter.y + 10.0f), tool, 1.4f);
+        draw->PathArcTo(horizontalFlipCenter, 10.0f, -1.5707963f, 1.5707963f, 16);
+        draw->PathStroke(tool, 0, 2.0f);
+        draw->PathArcTo(horizontalFlipCenter, 10.0f, 1.5707963f, 4.7123890f, 16);
+        
+        draw->PathStroke(IM_COL32(235, 220, 180, 130), 0, 1.5f); //círculos completos. A metade original continua forte e a metade complementar usa 20% de opacidade.
+        
+        const ImVec2 verticalFlipCenter(gizmo.x, gizmo.y + 38.0f);
+        
+        draw->AddLine(ImVec2(verticalFlipCenter.x - 10.0f, verticalFlipCenter.y),
+            ImVec2(verticalFlipCenter.x + 10.0f, verticalFlipCenter.y), tool, 1.4f);
+        
+        draw->PathArcTo(verticalFlipCenter, 10.0f, 0.0f, 3.141592654f, 16);
+        draw->PathStroke(tool, 0, 2.0f);
+        draw->PathArcTo(verticalFlipCenter, 10.0f, 3.141592654f, 6.283185307f, 16);
+        draw->PathStroke(IM_COL32(235, 220, 180, 51), 0, 1.5f);
     }
 
     float DistanceToSegment(const ImVec2& p, const ImVec2& a, const ImVec2& b)
@@ -1342,7 +1419,7 @@ namespace TrackEditor
 		g_ghostItemsSlider = { ImVec2(ox, viewportMax.y - 164.0f),
 			ImVec2(ox + 350.0f, viewportMax.y - 142.0f) };
 
-        const float contentHeight = 1460.0f;
+        const float contentHeight = 1524.0f;
         const float visibleHeight = std::max(1.0f, viewportHeight - 280.0f);
         const float maxScroll = std::max(0.0f, contentHeight - visibleHeight);
         g_panelMaxScroll = maxScroll;
@@ -1404,40 +1481,67 @@ namespace TrackEditor
             PieceButton(draw, g_pieceButtons[i], kPieceKinds[i]);
         }
         g_reverseFlow = {};
+        // Ferramenta de curva no mesmo idioma visual do botão DESENHAR.
         g_geometryDrawButton = {
-            ImVec2(ox + 35, top + 1040 + sy), ImVec2(ox + 315, top + 1082 + sy) };
-        Button(draw, g_geometryDrawButton, Tr("curve_circle_tool"),
-            g_geometryDrawTool, true);
-        g_duplicateSelectedButton = {
-            ImVec2(ox + 35, top + 1092 + sy), ImVec2(ox + 315, top + 1134 + sy) };
-        if (Selected())
-            Button(draw, g_duplicateSelectedButton, Tr("duplicate_selected"));
-        else
-            DisabledButton(draw, g_duplicateSelectedButton, Tr("duplicate_selected"));
+            ImVec2(ox + 133, top + 1036 + sy), ImVec2(ox + 217, top + 1120 + sy) };
+        const ImVec2 curveCenter((g_geometryDrawButton.min.x + g_geometryDrawButton.max.x) * 0.5f,
+            (g_geometryDrawButton.min.y + g_geometryDrawButton.max.y) * 0.5f);
+        draw->AddCircleFilled(curveCenter, 40.0f,
+            g_geometryDrawTool ? IM_COL32(120, 108, 78, 235) : IM_COL32(30, 31, 37, 185), 48);
+        draw->AddCircle(curveCenter, 41.0f, IM_COL32(225, 207, 165, 230), 48, 1.7f);
+        draw->PathLineTo(ImVec2(curveCenter.x - 22.0f, curveCenter.y + 8.0f));
+        draw->PathBezierCubicCurveTo(ImVec2(curveCenter.x - 10.0f, curveCenter.y - 20.0f),
+            ImVec2(curveCenter.x + 10.0f, curveCenter.y + 18.0f),
+            ImVec2(curveCenter.x + 22.0f, curveCenter.y - 9.0f), 20);
+        draw->PathStroke(IM_COL32(245, 238, 218, 245), 0, 2.5f);
+        GoldText(draw, ImVec2(ox + 235.0f, top + 1068.0f + sy),
+            IM_COL32(225, 207, 165, 255), Tr("curve_circle_tool"));
 
-        // Mantém o mesmo tamanho do botão de duplicar e fica logo abaixo dele.
-        g_flipPoles = {
-            ImVec2(ox + 35, top + 1142 + sy), ImVec2(ox + 315, top + 1184 + sy) };
-        Button(draw, g_flipPoles, Tr("clear_terminals"));
+        const float compactButtonWidth = 171.0f;
+        const float compactButtonGap = 8.0f;
+        g_invertHorizontalButton = {
+            ImVec2(ox, top + 1310 + sy), ImVec2(ox + compactButtonWidth, top + 1352 + sy) };
+        g_invertVerticalButton = {
+            ImVec2(ox + compactButtonWidth + compactButtonGap, top + 1310 + sy),
+            ImVec2(ox + 350, top + 1352 + sy) };
+        g_duplicateSelectedButton = {
+            ImVec2(ox, top + 1360 + sy), ImVec2(ox + compactButtonWidth, top + 1402 + sy) };
+        g_deleteSelectedButton = {
+            ImVec2(ox + compactButtonWidth + compactButtonGap, top + 1360 + sy),
+            ImVec2(ox + 350, top + 1402 + sy) };
+        if (Selected())
+        {
+            Button(draw, g_invertHorizontalButton, Tr("flip_horizontal"));
+            Button(draw, g_invertVerticalButton, Tr("flip_vertical"));
+            Button(draw, g_duplicateSelectedButton, Tr("duplicate_selected"));
+            Button(draw, g_deleteSelectedButton, Tr("delete_selected"));
+        }
+        else
+        {
+            DisabledButton(draw, g_invertHorizontalButton, Tr("flip_horizontal"));
+            DisabledButton(draw, g_invertVerticalButton, Tr("flip_vertical"));
+            DisabledButton(draw, g_duplicateSelectedButton, Tr("duplicate_selected"));
+            DisabledButton(draw, g_deleteSelectedButton, Tr("delete_selected"));
+        }
 
         g_resetRadialDrawing = {
-            ImVec2(ox, top + 1201 + sy), ImVec2(ox + 32, top + 1233 + sy) };
+            ImVec2(ox, top + 1137 + sy), ImVec2(ox + 32, top + 1169 + sy) };
         g_eraseRadialButton = {
-            ImVec2(ox + 42, top + 1196 + sy), ImVec2(ox + 225, top + 1238 + sy) };
+            ImVec2(ox + 42, top + 1132 + sy), ImVec2(ox + 225, top + 1174 + sy) };
         g_eraserRadialMode = {
-            ImVec2(ox + 234, top + 1193 + sy), ImVec2(ox + 350, top + 1215 + sy) };
+            ImVec2(ox + 234, top + 1129 + sy), ImVec2(ox + 350, top + 1151 + sy) };
         g_eraserOverflowMode = {
-            ImVec2(ox + 234, top + 1217 + sy), ImVec2(ox + 350, top + 1239 + sy) };
+            ImVec2(ox + 234, top + 1153 + sy), ImVec2(ox + 350, top + 1175 + sy) };
         Button(draw, g_eraseRadialButton, Tr("editor_eraser"), g_eraseTool, true);
         g_resetRadialFlash = std::max(0.0f,
             g_resetRadialFlash - ImGui::GetIO().DeltaTime);
         const bool resetLit = g_resetRadialFlash > 0.0f;
-        draw->AddCircleFilled(ImVec2(ox + 16, top + 1217 + sy), 13.0f,
+        draw->AddCircleFilled(ImVec2(ox + 16, top + 1153 + sy), 13.0f,
             resetLit ? IM_COL32(242, 242, 238, 245) : IM_COL32(48, 49, 55, 245), 28);
-        draw->AddCircle(ImVec2(ox + 16, top + 1217 + sy), 14.0f,
+        draw->AddCircle(ImVec2(ox + 16, top + 1153 + sy), 14.0f,
             IM_COL32(120, 115, 105, 230), 28, 1.4f);
         if (Inside(mouse, g_resetRadialDrawing))
-            GoldText(draw, ImVec2(ox, top + 1174 + sy),
+            GoldText(draw, ImVec2(ox, top + 1110 + sy),
                 IM_COL32(240, 230, 205, 255), Tr("reset"));
         const auto drawEraserMode = [&](const Rect& rect, bool selected,
             const char* label) {
@@ -1457,9 +1561,12 @@ namespace TrackEditor
         drawEraserMode(g_eraserOverflowMode, g_eraseOverflowMode,
             Tr("eraser_overflow_mode"));
         g_brushSizeSlider = {
-            ImVec2(ox, top + 1278 + sy), ImVec2(ox + 350, top + 1300 + sy) };
+            ImVec2(ox, top + 1214 + sy), ImVec2(ox + 350, top + 1236 + sy) };
         g_brushHardnessSlider = {
-            ImVec2(ox, top + 1340 + sy), ImVec2(ox + 350, top + 1362 + sy) };
+            ImVec2(ox, top + 1276 + sy), ImVec2(ox + 350, top + 1298 + sy) };
+        g_flipPoles = {
+            ImVec2(ox + 35, top + 1410 + sy), ImVec2(ox + 315, top + 1452 + sy) };
+        Button(draw, g_flipPoles, Tr("clear_terminals"));
         const auto sliderValue = [&](const Rect& rect, float minimum, float maximum) {
             return minimum + std::clamp(
                 (mouse.x - rect.min.x) / (rect.max.x - rect.min.x), 0.0f, 1.0f) *
@@ -1537,7 +1644,7 @@ namespace TrackEditor
                 (mouse.x - g_lineOpacitySlider.min.x) /
                 (g_lineOpacitySlider.max.x - g_lineOpacitySlider.min.x) * 100.0f,
                 0.0f, 100.0f);
-        draw->AddText(ImVec2(ox, top + 1410 + sy), IM_COL32(180, 180, 185, 255),
+        draw->AddText(ImVec2(ox, top + 1472 + sy), IM_COL32(180, 180, 185, 255),
             Tr("editor_instructions"));
         draw->PopClipRect();
 
@@ -2514,7 +2621,7 @@ namespace TrackEditor
             g_activeSlider = EditorSlider::DrawSmoothing;
             return true;
         }
-        if (insideScrollableClip && Inside(mouse, g_geometryDrawButton))
+        if (insideScrollableClip && InsideCircle(mouse, g_geometryDrawButton))
         {
             g_geometryDrawTool = !g_geometryDrawTool;
             g_selectTool = !g_geometryDrawTool;
@@ -2527,6 +2634,21 @@ namespace TrackEditor
         if (insideScrollableClip && Inside(mouse, g_duplicateSelectedButton) && Selected())
         {
             DuplicateSelected();
+            return true;
+        }
+        if (insideScrollableClip && Inside(mouse, g_deleteSelectedButton) && Selected())
+        {
+            DeleteSelected();
+            return true;
+        }
+        if (insideScrollableClip && Inside(mouse, g_invertHorizontalButton) && Selected())
+        {
+            FlipSelectedHorizontal();
+            return true;
+        }
+        if (insideScrollableClip && Inside(mouse, g_invertVerticalButton) && Selected())
+        {
+            FlipSelectedVertical();
             return true;
         }
         if (insideScrollableClip && Inside(mouse, g_flipPoles))
@@ -2587,18 +2709,22 @@ namespace TrackEditor
         }
         if (Inside(mouse, g_gizmoDelete) && Selected())
         {
-            const int selected = g_selectedID;
-            std::erase_if(Track::CustomLayout().pieces,
-                [&](const Track::Piece& piece) { return piece.id == selected; });
-            std::erase_if(Track::CustomLayout().gates,
-                [&](const Track::Gate& gate) { return gate.pieceID == selected; });
-            RemovePieceConnections(Track::CustomLayout(), selected);
-            g_selectedID = -1;
+            DeleteSelected();
             return true;
         }
-        if (Inside(mouse, g_gizmoMirror) && Selected())
+        if (Inside(mouse, g_gizmoDuplicate) && Selected())
         {
-            Selected()->mirrored = !Selected()->mirrored;
+            DuplicateSelected();
+            return true;
+        }
+        if (Inside(mouse, g_gizmoFlipHorizontal) && Selected())
+        {
+            FlipSelectedHorizontal();
+            return true;
+        }
+        if (Inside(mouse, g_gizmoFlipVertical) && Selected())
+        {
+            FlipSelectedVertical();
             return true;
         }
         if (Inside(mouse, g_gizmoRotate) && Selected())
