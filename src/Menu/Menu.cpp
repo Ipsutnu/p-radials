@@ -15612,7 +15612,13 @@ namespace Menu
             );
         g_sideScrollStardustEnergy = std::min(
             3.0f, g_sideScrollStardustEnergy + 0.72f);
-        TrackMagicEffects::NudgeGameplayAuraRotation(g_sideScrollDirection);
+        //o Legacy se move visualmente no sentido oposto ao Custom; portanto,
+        // o sinal precisa ser invertido antes de chegar às partículas apenas quando for Legacy.
+        const bool customTrack =
+            Config::g_customRadial && Track::HasValidSavedLayout();
+
+        TrackMagicEffects::NudgeGameplayAuraRotation(
+            customTrack ? g_sideScrollDirection : -g_sideScrollDirection);
 
         // ============================================================
         // CAUDA -> PRINCIPAL
