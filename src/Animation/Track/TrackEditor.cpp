@@ -14,11 +14,15 @@
 #include <cmath>
 #include <string>
 #include <ranges>
+#include <vector>
 
 namespace
 {
     bool g_open = false;
     int g_selectedID = -1;
+    // A peça primária mantém o gizmo. As demais são adicionadas com Ctrl e
+    // recebem apenas o mesmo destaque visual de seleção.
+    std::vector<int> g_multiSelectedIDs;
     int g_selectedPort = -1;
     bool g_dragging = false;
     bool g_panning = false;
@@ -30,6 +34,14 @@ namespace
     float g_drawSmoothing = 55.0f;
     bool g_drawing = false;
     std::vector<ImVec2> g_drawPoints;
+    // A trava é ativada no instante em que Ctrl é pressionado durante um
+    // traço. O primeiro deslocamento decide entre o eixo horizontal e o
+    // vertical; soltar Ctrl devolve o pincel ao desenho livre.
+    bool g_drawAxisLockPending = false;
+    bool g_drawAxisLocked = false;
+    bool g_drawCtrlWasHeld = false;
+    ImVec2 g_drawAxisOrigin{};
+    ImVec2 g_drawAxisDirection{};
     bool g_gateToolActive = false;
     bool g_gateDragging = false;
     Track::GateKind g_gateToolKind = Track::GateKind::Entry;
@@ -73,6 +85,16 @@ namespace
     float g_brushSize = 0.14f;
     float g_brushHardness = 0.72f;
     float g_rotateOffset = 0.0f;
+    struct TransformPieceState
+    {
+        int id{-1};
+        ImVec2 position{};
+        float rotation{};
+        float scale{1.0f};
+    };
+    // Estado congelado no início de um gesto do gizmo. Ele permite aplicar
+    // cada frame como uma única transformação de grupo, sem acumular erros.
+    std::vector<TransformPieceState> g_transformGroup;
     float g_previewPhase = 0.0f;
     float g_previewTargetPhase = 0.0f;
     std::vector<float> g_lastPreviewSlotT;
@@ -340,6 +362,157 @@ namespace
         return it == pieces.end() ? nullptr : &*it;
     }
 
+    bool IsVisuallySelected(int id)
+    {
+        return id == g_selectedID ||
+            std::ranges::find(g_multiSelectedIDs, id) != g_multiSelectedIDs.end();
+    }
+
+    void SelectPrimary(int id)
+    {
+        g_selectedID = id;
+        g_multiSelectedIDs.clear();
+    }
+
+    void ToggleAdditionalSelection(int id)
+    {
+        if (id < 0 || id == g_selectedID) return;
+        const auto selected = std::ranges::find(g_multiSelectedIDs, id);
+        if (selected == g_multiSelectedIDs.end())
+            g_multiSelectedIDs.push_back(id);
+        else
+            g_multiSelectedIDs.erase(selected);
+    }
+
+    void BeginSelectedGroupTransform()
+    {
+        g_transformGroup.clear();
+        if (g_selectedID < 0) return;
+
+        std::vector<int> ids{ g_selectedID };
+        for (const int id : g_multiSelectedIDs)
+            if (id != g_selectedID && std::ranges::find(ids, id) == ids.end())
+                ids.push_back(id);
+        for (const int id : ids)
+        {
+            const auto piece = std::ranges::find_if(Track::CustomLayout().pieces,
+                [id](const Track::Piece& value) { return value.id == id; });
+            if (piece != Track::CustomLayout().pieces.end())
+                g_transformGroup.push_back({ piece->id, piece->position,
+                    piece->rotation, piece->scale });
+        }
+    }
+
+    const TransformPieceState* TransformState(int id)
+    {
+        const auto state = std::ranges::find_if(g_transformGroup,
+            [id](const TransformPieceState& value) { return value.id == id; });
+        return state == g_transformGroup.end() ? nullptr : &*state;
+    }
+
+    void ApplyConnectedTranslation(const ImVec2& selectedPosition)
+    {
+        const auto* selected = TransformState(g_selectedID);
+        if (!selected) return;
+        const ImVec2 delta(selectedPosition.x - selected->position.x,
+            selectedPosition.y - selected->position.y);
+        for (auto& piece : Track::CustomLayout().pieces)
+            if (const auto* state = TransformState(piece.id))
+                piece.position = ImVec2(state->position.x + delta.x,
+                    state->position.y + delta.y);
+    }
+
+    void ApplyConnectedRotation(float selectedRotation)
+    {
+        const auto* selected = TransformState(g_selectedID);
+        if (!selected) return;
+        const float delta = selectedRotation - selected->rotation;
+        const float c = std::cos(delta);
+        const float s = std::sin(delta);
+        for (auto& piece : Track::CustomLayout().pieces)
+        {
+            const auto* state = TransformState(piece.id);
+            if (!state) continue;
+            const float x = state->position.x - selected->position.x;
+            const float y = state->position.y - selected->position.y;
+            piece.position = ImVec2(selected->position.x + x * c - y * s,
+                selected->position.y + x * s + y * c);
+            piece.rotation = state->rotation + delta;
+        }
+    }
+
+    void ApplyConnectedScale(float selectedScale)
+    {
+        const auto* selected = TransformState(g_selectedID);
+        if (!selected || selected->scale <= 0.001f) return;
+        float minimumFactor = 0.0f;
+        float maximumFactor = FLT_MAX;
+        for (const TransformPieceState& state : g_transformGroup)
+        {
+            if (state.scale <= 0.001f) continue;
+            minimumFactor = std::max(minimumFactor, 0.25f / state.scale);
+            maximumFactor = std::min(maximumFactor, 3.0f / state.scale);
+        }
+        const float factor = std::clamp(selectedScale / selected->scale,
+            minimumFactor, maximumFactor);
+        for (auto& piece : Track::CustomLayout().pieces)
+        {
+            const auto* state = TransformState(piece.id);
+            if (!state) continue;
+            piece.position = ImVec2(selected->position.x +
+                    (state->position.x - selected->position.x) * factor,
+                selected->position.y +
+                    (state->position.y - selected->position.y) * factor);
+            piece.scale = state->scale * factor;
+        }
+    }
+
+    void ResetDrawAxisLock()
+    {
+        g_drawAxisLockPending = false;
+        g_drawAxisLocked = false;
+        g_drawCtrlWasHeld = false;
+        g_drawAxisOrigin = {};
+        g_drawAxisDirection = {};
+    }
+
+    ImVec2 ConstrainDrawPoint(const ImVec2& mouse)
+    {
+        const bool control = g_ctrlHeld || (GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0;
+        if (control && !g_drawCtrlWasHeld && !g_drawPoints.empty())
+        {
+            g_drawAxisLockPending = true;
+            g_drawAxisLocked = false;
+            g_drawAxisOrigin = g_drawPoints.back();
+        }
+        g_drawCtrlWasHeld = control;
+        if (!control)
+        {
+            g_drawAxisLockPending = false;
+            g_drawAxisLocked = false;
+            return mouse;
+        }
+        if (g_drawAxisLockPending)
+        {
+            const ImVec2 delta(mouse.x - g_drawAxisOrigin.x,
+                mouse.y - g_drawAxisOrigin.y);
+            if (std::abs(delta.x) + std::abs(delta.y) < 2.0f)
+                return g_drawAxisOrigin;
+            g_drawAxisDirection = std::abs(delta.x) >= std::abs(delta.y)
+                ? ImVec2(delta.x < 0.0f ? -1.0f : 1.0f, 0.0f)
+                : ImVec2(0.0f, delta.y < 0.0f ? -1.0f : 1.0f);
+            g_drawAxisLockPending = false;
+            g_drawAxisLocked = true;
+        }
+        if (!g_drawAxisLocked) return mouse;
+        const ImVec2 delta(mouse.x - g_drawAxisOrigin.x,
+            mouse.y - g_drawAxisOrigin.y);
+        const float distance = delta.x * g_drawAxisDirection.x +
+            delta.y * g_drawAxisDirection.y;
+        return ImVec2(g_drawAxisOrigin.x + g_drawAxisDirection.x * distance,
+            g_drawAxisOrigin.y + g_drawAxisDirection.y * distance);
+    }
+
     void DeleteSelected()
     {
         if (!Selected()) return;
@@ -350,6 +523,7 @@ namespace
         std::erase_if(layout.gates,
             [&](const Track::Gate& gate) { return gate.pieceID == selected; });
         RemovePieceConnections(layout, selected);
+        std::erase(g_multiSelectedIDs, selected);
         g_selectedID = -1;
         g_gizmoOwner = -1;
         g_gizmoCenterInitialized = false;
@@ -676,7 +850,7 @@ namespace
         
         // Fundo local opaco: os seis comandos ficam em volta do movimento. 
         draw->AddCircleFilled(gizmo, 60.0f, IM_COL32(14, 16, 21, 190), 56); // fundo
-        //draw->AddCircle(gizmo, 70.0f, IM_COL32(115, 105, 85, 210), 56, 1.0f); // borda
+        draw->AddCircle(gizmo, 60.0f, IM_COL32(115, 105, 85, 136), 56, 1.0f); // borda
         
         draw->AddCircle(ImVec2(gizmo.x, gizmo.y - 38.0f),
             11.0f, tool, 24, 1.5f);
@@ -711,13 +885,14 @@ namespace
             ImVec2(rotateCenter.x - 4.0f, rotateCenter.y - 1.0f),
             ImVec2(rotateCenter.x - 2.0f, rotateCenter.y + 6.0f), tool);
         
+        //lixeira
         const ImVec2 deleteCenter(gizmo.x - 33.0f, gizmo.y - 19.0f);
         
-        draw->AddRect(ImVec2(deleteCenter.x - 6.0f, deleteCenter.y - 5.0f),
-            ImVec2(deleteCenter.x + 6.0f, deleteCenter.y + 8.0f), tool, 1.0f, 0, 1.8f);
+        draw->AddRect(ImVec2(deleteCenter.x - 7.0f, deleteCenter.y - 6.0f),
+            ImVec2(deleteCenter.x + 7.0f, deleteCenter.y + 9.0f), tool, 1.0f, 0, 1.8f);
         
-        draw->AddLine(ImVec2(deleteCenter.x - 8.0f, deleteCenter.y - 7.0f),
-            ImVec2(deleteCenter.x + 8.0f, deleteCenter.y - 7.0f), tool, 2.0f);
+        draw->AddLine(ImVec2(deleteCenter.x - 9.0f, deleteCenter.y - 8.0f),
+            ImVec2(deleteCenter.x + 9.0f, deleteCenter.y - 8.0f), tool, 2.0f);
         
         const ImVec2 horizontalFlipCenter(gizmo.x - 33.0f, gizmo.y + 19.0f);
         
@@ -1188,6 +1363,7 @@ namespace TrackEditor
         TrackMagicEffects::Reset();
         g_open = true;
         g_selectedID = -1;
+        g_multiSelectedIDs.clear();
         g_selectedPort = -1;
         g_dragging = false;
         g_panning = false;
@@ -1197,6 +1373,8 @@ namespace TrackEditor
         g_geometryDrawTool = false;
         g_smoothDraw = false;
         g_drawing = false;
+        ResetDrawAxisLock();
+        g_transformGroup.clear();
         g_gateToolActive = false;
         g_gateDragging = false;
         g_liveGateID = -1;
@@ -1244,6 +1422,9 @@ namespace TrackEditor
         g_dragging = false;
         g_panning = false;
         g_drawing = false;
+        ResetDrawAxisLock();
+        g_transformGroup.clear();
+        g_multiSelectedIDs.clear();
         g_gateDragging = false;
         g_liveGateID = -1;
         g_scrollDragging = false;
@@ -1437,11 +1618,22 @@ namespace TrackEditor
         draw->AddCircleFilled(drawPathCenter, 44.0f,
             g_freeDrawTool ? IM_COL32(120, 108, 78, 235) : IM_COL32(30, 31, 37, 185), 48);
         draw->AddCircle(drawPathCenter, 45.0f, IM_COL32(225, 207, 165, 230), 48, 1.7f);
-        draw->PathLineTo(ImVec2(drawPathCenter.x - 18, drawPathCenter.y + 8));
-        draw->PathBezierCubicCurveTo(ImVec2(drawPathCenter.x - 6, drawPathCenter.y - 18),
-            ImVec2(drawPathCenter.x + 7, drawPathCenter.y + 18),
-            ImVec2(drawPathCenter.x + 19, drawPathCenter.y - 8), 20);
-        draw->PathStroke(IM_COL32(245, 238, 218, 245), 0, 2.5f);
+        // Ícone próprio do DRAW: uma onda lenta e contínua, sem afetar a
+        // ferramenta. O movimento é exclusivamente visual.
+        constexpr int waveSegments = 28;
+        constexpr float waveWidth = 46.0f;
+        constexpr float waveAmplitude = 6.0f;
+        const float wavePhase = static_cast<float>(ImGui::GetTime()) * 1.25f;
+        for (int i = 0; i <= waveSegments; ++i)
+        {
+            const float t = static_cast<float>(i) / waveSegments;
+            const float x = drawPathCenter.x + (t - 0.5f) * waveWidth;
+            const float y = drawPathCenter.y + std::sin(t * 6.283185307f + wavePhase) *
+                waveAmplitude;
+            draw->PathLineTo(ImVec2(x, y));
+        }
+        draw->PathStroke(IM_COL32(245, 238, 218, 245), 0, 2.4f);
+
         GoldText(draw, ImVec2(ox + 235, top + 282 + sy),
             IM_COL32(225, 207, 165, 255), Tr("draw_path"));
         g_smoothDrawButton = { ImVec2(ox + 12, top + 268 + sy),
@@ -1837,11 +2029,9 @@ namespace TrackEditor
         draw->AddCircle(center, 17.0f, IM_COL32(225, 205, 155, 220), 32, 1.5f);
         if (g_dragging)
         {
-            if (auto* selected = Selected())
-            {
-                selected->position = ImVec2((mouse.x - center.x) / radius - g_dragOffset.x,
-                    (mouse.y - center.y) / radius - g_dragOffset.y);
-            }
+            ApplyConnectedTranslation(ImVec2(
+                (mouse.x - center.x) / radius - g_dragOffset.x,
+                (mouse.y - center.y) / radius - g_dragOffset.y));
         }
         if (g_panning)
         {
@@ -1855,19 +2045,16 @@ namespace TrackEditor
             {
                 const ImVec2 pieceCenter = Track::TransformPoint(
                     *selected, ImVec2{}, center, radius);
-                selected->rotation = std::atan2(mouse.y - pieceCenter.y,
-                    mouse.x - pieceCenter.x) + g_rotateOffset;
+                ApplyConnectedRotation(std::atan2(mouse.y - pieceCenter.y,
+                    mouse.x - pieceCenter.x) + g_rotateOffset);
             }
         }
         if (g_scaling)
         {
-            if (auto* selected = Selected())
-            {
-                const float movement = g_scaleDirection > 0
-                    ? g_scaleStartY - mouse.y : mouse.y - g_scaleStartY;
-                selected->scale = std::clamp(
-                    g_scaleStartValue + movement * 0.006f, 0.25f, 3.0f);
-            }
+            const float movement = g_scaleDirection > 0
+                ? g_scaleStartY - mouse.y : mouse.y - g_scaleStartY;
+            ApplyConnectedScale(std::clamp(
+                g_scaleStartValue + movement * 0.006f, 0.25f, 3.0f));
         }
         if (g_erasing)
         {
@@ -1878,7 +2065,7 @@ namespace TrackEditor
         for (const auto& piece : Track::CustomLayout().pieces)
         {
             const auto points = Track::SamplePiece(piece, center, radius, 36);
-            const bool selected = piece.id == g_selectedID;
+            const bool selected = IsVisuallySelected(piece.id);
             TrackMagicEffects::DrawEditorRegisteredEdge(draw, points,
                 g_drawing, magicTime);
             const float whitePreviewOpacity =
@@ -2192,10 +2379,11 @@ namespace TrackEditor
         }
         if (g_drawing)
         {
-            if (g_drawPoints.empty() || Track::Distance(g_drawPoints.back(), mouse) > 5.0f)
-                g_drawPoints.push_back(mouse);
+            const ImVec2 drawMouse = ConstrainDrawPoint(mouse);
+            if (g_drawPoints.empty() || Track::Distance(g_drawPoints.back(), drawMouse) > 5.0f)
+                g_drawPoints.push_back(drawMouse);
             TrackMagicEffects::DrawEditorLiveStroke(draw, g_drawPoints,
-                mouse, magicTime);
+                drawMouse, magicTime);
         }
         TrackMagicEffects::DrawEditorRelease(draw, magicDelta);
         if (g_gateDragging)
@@ -2396,6 +2584,7 @@ namespace TrackEditor
                 g_erasing = false;
                 g_drawing = false;
                 g_drawPoints.clear();
+                ResetDrawAxisLock();
                 g_selectTool = true;
                 CommitHistoryAction();
                 return true;
@@ -2409,6 +2598,7 @@ namespace TrackEditor
                 std::erase_if(gates,
                     [&](const Track::Gate& gate) { return gate.pieceID == hitPiece; });
                 RemovePieceConnections(Track::CustomLayout(), hitPiece);
+                std::erase(g_multiSelectedIDs, hitPiece);
                 if (g_selectedID == hitPiece) g_selectedID = -1;
                 CommitHistoryAction();
                 return true;
@@ -2460,6 +2650,7 @@ namespace TrackEditor
                 {
                     Track::LoadPreset(row.name);
                     g_selectedID = -1;
+                    g_multiSelectedIDs.clear();
                     g_gizmoOwner = -1;
                     g_presetListOpen = false;
                     return true;
@@ -2516,6 +2707,7 @@ namespace TrackEditor
         {
             Track::CustomLayout() = Track::Layout{};
             g_selectedID = -1;
+            g_multiSelectedIDs.clear();
             g_gizmoOwner = -1;
             return true;
         }
@@ -2629,6 +2821,7 @@ namespace TrackEditor
             g_eraseTool = false;
             g_drawing = false;
             g_drawPoints.clear();
+            ResetDrawAxisLock();
             return true;
         }
         if (insideScrollableClip && Inside(mouse, g_duplicateSelectedButton) && Selected())
@@ -2705,6 +2898,7 @@ namespace TrackEditor
             g_scaleDirection = 1;
             g_scaleStartY = mouse.y;
             g_scaleStartValue = Selected()->scale;
+            BeginSelectedGroupTransform();
             return true;
         }
         if (Inside(mouse, g_gizmoDelete) && Selected())
@@ -2736,6 +2930,7 @@ namespace TrackEditor
             g_frozenPreviewSlotT = g_lastPreviewSlotT;
             g_frozenPreviewMainPositions = g_lastPreviewMainPositions;
             g_previewSlotsFrozen = !g_frozenPreviewMainPositions.empty();
+            BeginSelectedGroupTransform();
             g_rotating = true;
             return true;
         }
@@ -2748,6 +2943,7 @@ namespace TrackEditor
             g_frozenPreviewSlotT = g_lastPreviewSlotT;
             g_frozenPreviewMainPositions = g_lastPreviewMainPositions;
             g_previewSlotsFrozen = !g_frozenPreviewMainPositions.empty();
+            BeginSelectedGroupTransform();
             g_dragging = true;
             return true;
         }
@@ -2791,6 +2987,7 @@ namespace TrackEditor
             g_gateToolActive = false;
             g_drawing = false;
             g_drawPoints.clear();
+            ResetDrawAxisLock();
             return true;
         }
         if (g_eraseTool && mouse.x < g_panelLeft)
@@ -2803,6 +3000,7 @@ namespace TrackEditor
         {
             g_drawing = true;
             g_drawPoints = { mouse };
+            ResetDrawAxisLock();
             return true;
         }
         if (g_spaceHeld && mouse.x < g_panelLeft)
@@ -2891,7 +3089,13 @@ namespace TrackEditor
             g_selectedPort = control.port;
             return true;
         }
-        g_selectedID = HitPiece(mouse);
+        const int hitPiece = HitPiece(mouse);
+        const bool controlHeld = g_ctrlHeld ||
+            (GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0;
+        if (controlHeld && g_selectedID >= 0 && hitPiece >= 0)
+            ToggleAdditionalSelection(hitPiece);
+        else
+            SelectPrimary(hitPiece);
         g_selectedPort = -1;
         return true;
     }
@@ -2911,6 +3115,7 @@ namespace TrackEditor
             g_freeDrawTool = false;
             g_geometryDrawTool = false;
             g_selectTool = true;
+            ResetDrawAxisLock();
         }
         if (button == 0 && g_gateDragging)
         {
@@ -2973,6 +3178,7 @@ namespace TrackEditor
         g_scrollDragging = false;
         g_rotating = false;
         g_scaling = false;
+        g_transformGroup.clear();
         g_frozenPreviewSlotT.clear();
         g_frozenPreviewMainPositions.clear();
         g_previewSlotsFrozen = false;

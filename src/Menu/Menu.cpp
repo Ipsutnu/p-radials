@@ -23554,7 +23554,8 @@ namespace Menu
 
         // MENU -------------------------------------------------------
         
-        const float menuTitleY = animationContentBottomY + 16.0f * controlScale;
+        // Espaço curto de respiro entre o último seletor de animação e MENU.
+        const float menuTitleY = animationContentBottomY + 4.0f * controlScale;
         
         DrawTextWithShadow(draw, ImVec2(x, menuTitleY), gold,
             Language::Get("menu_section").c_str(), alpha);

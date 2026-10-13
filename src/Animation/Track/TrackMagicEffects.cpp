@@ -193,7 +193,7 @@ namespace TrackMagicEffects
         if (g_releasePulse > 0.0f)
         {
             const float pulse = g_releasePulse;
-            const ImU32 color = g_releaseValid ? kGold : kCold;
+            const ImU32 color = g_releaseValid ? kGold : kWarmCore; //kCold: azul celeste claro, 
             if (g_releasePath.size() > 1)
             {
                 draw->AddPolyline(g_releasePath.data(),
@@ -202,7 +202,7 @@ namespace TrackMagicEffects
                     14.0f + (1.0f - pulse) * 12.0f);
                 draw->AddPolyline(g_releasePath.data(),
                     static_cast<int>(g_releasePath.size()),
-                    WithAlpha(g_releaseValid ? kWarmCore : kCold, pulse), 0,
+                    WithAlpha(kWarmCore, pulse), 0,
                     2.5f + pulse * 2.0f);
             }
             g_releasePulse = std::max(0.0f, g_releasePulse - dt / 0.28f);
