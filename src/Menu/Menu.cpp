@@ -3520,6 +3520,8 @@ namespace Menu
     }
 
         
+    static bool IsTwoHandedWeapon(RE::TESObjectWEAP* weapon);
+
     static EquippedVisual GetItemEquippedVisual(
         RE::TESForm* form,
         std::uint16_t uniqueID,
@@ -3682,6 +3684,15 @@ namespace Menu
         // ========================================================
         // RESULTADO
         // ========================================================
+
+        // Armas two-handed podem aparecer em somente uma das mãos na leitura
+        // da engine, embora ocupem o conjunto inteiro. Mantemos a validação
+        // de instância acima e apenas convertem seu indicador visual em cheio.
+        if (IsTwoHandedWeapon(form->As<RE::TESObjectWEAP>()) &&
+            (equippedLeft || equippedRight))
+        {
+            return EquippedVisual::Both;
+        }
 
         if (equippedOther ||
             (equippedLeft && equippedRight))
