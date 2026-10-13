@@ -575,10 +575,13 @@ namespace QuickDrawMagicEffects
             {
                 const float phase = time * (8.0f + i * 0.7f) + i * 2.1f;
                 const float orbit = 5.0f + static_cast<float>(i) * 3.2f;
+                
                 const ImVec2 spark(cursor.x + std::cos(phase) * orbit,
                     cursor.y + std::sin(phase * 1.3f) * orbit * 0.62f);
-                draw->AddCircleFilled(spark, 3.3f, WithAlpha(kGold, visibility * 0.13f), 12);
-                draw->AddCircleFilled(spark, 1.1f, WithAlpha(kCore, visibility), 12);
+                
+                //3 bolinhas no cursor do Quick Draw
+                //draw->AddCircleFilled(spark, 3.3f, WithAlpha(kGold, visibility * 0.13f), 12);
+                //draw->AddCircleFilled(spark, 1.1f, WithAlpha(kCore, visibility), 12);
             }
             draw->AddCircleFilled(cursor, 7.0f, WithAlpha(kGold, visibility * 0.14f), 16);
             draw->AddCircleFilled(cursor, 1.8f, WithAlpha(kCore, visibility), 12);

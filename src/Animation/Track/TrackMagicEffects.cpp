@@ -140,6 +140,7 @@ namespace TrackMagicEffects
 
         // Faíscas orbitais determinísticas: não adicionam estado de jogo.
         constexpr int sparkCount = 5;
+        
         for (int i = 0; i < sparkCount; ++i)
         {
             const float phase = time * (5.0f + i * 0.43f) + i * 1.256f;
