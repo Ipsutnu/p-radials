@@ -6,6 +6,7 @@
 #include "Resolution.h"
 #include "Gamepad.h"
 #include "Animation/Track/TrackEditor.h"
+#include "Printscreen.h"
 
 namespace
 {
@@ -643,6 +644,20 @@ RE::BSEventNotifyControl InputHandler::ProcessEvent(
     {
         if (!event)
             continue;
+
+        // O Wheel assume PrintScreen apenas quando alguma de suas interfaces
+        // está visível. Em qualquer outra situação o evento segue intacto
+        // para o screenshot nativo do Skyrim.
+        if (auto* screenshotKey = event->AsButtonEvent(); screenshotKey &&
+            screenshotKey->GetDevice() == RE::INPUT_DEVICE::kKeyboard &&
+            screenshotKey->IsDown() &&
+            screenshotKey->GetRuntimeData().heldDownSecs <= 0.0f &&
+            MatchesKeyboardVirtualKey(screenshotKey->GetIDCode(), VK_SNAPSHOT))
+        {
+            Printscreen::Request();
+            consumeButton(screenshotKey);
+            continue;
+        }
 
         if (settingsOpen)
         {

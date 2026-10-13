@@ -8,6 +8,7 @@
 #include "Resolution.h"
 #include "Config.h"
 #include "Font.h"
+#include "Printscreen.h"
 
 #include "Logger.h"
 //#include "Blur.h"
@@ -705,6 +706,13 @@ namespace RenderManager
             !g_swapChain || !ImGui::GetCurrentContext())
             return;
 
+        // Em proxies que usam uma camada de UI separada precisamos do buffer
+        // da cena apenas se houver um print pendente: ele será combinado com
+        // o ImGui fora do caminho normal de apresentação.
+        Microsoft::WRL::ComPtr<ID3D11Texture2D> screenshotScene;
+        if (Printscreen::HasPendingRequest())
+            AcquireCurrentBackBuffer(screenshotScene);
+
         // O Community Shaders prepara e vincula seu buffer de UI dentro de
         // HandleSwapChainPresent, desenha os overlays próprios e só então
         // chama a cadeia de Present onde este hook está instalado. No proxy,
@@ -740,6 +748,10 @@ namespace RenderManager
                 Present::MarkWatchdogPhase("CS: ImGui render");
                 ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
 
+                if (screenshotScene)
+                    Printscreen::CaptureSceneWithImGui(g_device, g_context,
+                        screenshotScene.Get(), ImGui::GetDrawData());
+
                 // O CS continua a cadeia esperando seu alvo de UI ativo.
                 g_context->OMSetRenderTargets(1, &target, uiDepth.Get());
                 g_restoreCleanBufferAfterPresent = false;
@@ -747,9 +759,10 @@ namespace RenderManager
             }
         }
 
-        Microsoft::WRL::ComPtr<ID3D11Texture2D> backBuffer;
+        Microsoft::WRL::ComPtr<ID3D11Texture2D> backBuffer =
+            std::move(screenshotScene);
         Present::MarkWatchdogPhase("fallback: acquire back buffer");
-        if (!AcquireCurrentBackBuffer(backBuffer))
+        if (!backBuffer && !AcquireCurrentBackBuffer(backBuffer))
         {
             return;
         }
@@ -784,6 +797,9 @@ namespace RenderManager
             Resolution::TransformDrawData(ImGui::GetDrawData(), targetSize);
             Present::MarkWatchdogPhase("proxy UI target: ImGui render");
             ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
+
+            Printscreen::CaptureSceneWithImGui(g_device, g_context,
+                backBuffer.Get(), ImGui::GetDrawData());
 
             g_context->OMSetRenderTargets(1, &target, proxyUiDepth.Get());
             g_restoreCleanBufferAfterPresent = false;
@@ -860,6 +876,8 @@ namespace RenderManager
 
         Present::MarkWatchdogPhase("fallback: ImGui render");
         ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
+
+        Printscreen::CaptureFinalTexture(g_device, g_context, backBuffer.Get());
 
         auto* oldTarget = previousTarget.Get();
         g_context->OMSetRenderTargets(1, &oldTarget, previousDepth.Get());

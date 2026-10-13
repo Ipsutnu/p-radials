@@ -72,6 +72,7 @@ add_commonlibsse_plugin(${PROJECT_NAME}
         #src/InventoryHack.h
         src/Render/Preview.cpp 
         src/Utils/Serialization.cpp   
+        src/Utils/Printscreen.cpp
         #src/EffectControl.cpp
         #src/EffectDatabase.cpp
         src/Render/RenderHooks.cpp
@@ -131,6 +132,7 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
     dxgi
     d3dcompiler
     ole32
+    windowscodecs
 )
 
 
