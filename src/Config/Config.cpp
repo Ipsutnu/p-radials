@@ -98,7 +98,7 @@ namespace Config
     float g_fontSizeScale = kDefaultFontSizeScale;
     float g_drawMarkDistance = kDefaultDrawMarkDistance;
     bool g_drawEffectsGameplay = false;
-    bool g_drawEffectsEditor = false;
+    bool g_drawEffectsEditor = true;
     int g_drawEdgeEffectStyle = 0;
     float g_drawEdgeEffectSize = kDefaultDrawEdgeEffectSize;
     float g_drawEdgeEffectOpacity = kDefaultDrawEdgeEffectOpacity;
@@ -1498,7 +1498,7 @@ namespace Config
         g_fontSizeScale = kDefaultFontSizeScale;
         g_drawMarkDistance = kDefaultDrawMarkDistance;
         g_drawEffectsGameplay = false;
-        g_drawEffectsEditor = false;
+        g_drawEffectsEditor = true;
         g_drawEdgeEffectStyle = 0;
         g_drawEdgeEffectSize = kDefaultDrawEdgeEffectSize;
         g_drawEdgeEffectOpacity = kDefaultDrawEdgeEffectOpacity;
