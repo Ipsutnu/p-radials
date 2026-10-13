@@ -26271,24 +26271,6 @@ namespace Menu
         // without queuing a second event for the following frame.
         io.MousePos = g_settingsMousePos;
 
-        // O editor é modal: nenhum radial auxiliar, descriptor, seção ou
-        // botão de fechar é desenhado enquanto o circuito está sendo montado.
-        if (TrackEditor::IsOpen())
-        {
-            std::vector<TrackEditor::PreviewIcon> previewIcons;
-            previewIcons.reserve(g_sideItems.size());
-            for (const auto& item : g_sideItems)
-            {
-                if (!item.form) continue;
-                auto* icon = ItemIcon::Get(item.form);
-                previewIcons.push_back({ reinterpret_cast<ImTextureID>(icon),
-                    MakeGameplayIconColor(item, 230) });
-            }
-            TrackEditor::Draw(alpha, g_settingsMousePos, screen, previewIcons,
-                std::min(static_cast<int>(previewIcons.size()), GetSideVisibleLimit()));
-            return;
-        }
-
         // Quick Draw é um editor modal mais leve que o Editor de trilhos:
         // preserva somente o preview do item, círculo e ações Reset/OK.
         if (g_quickDrawEditorOpen)
@@ -26447,6 +26429,26 @@ namespace Menu
         );
 
         bg->PopClipRect();
+
+        // O editor de radiais é modal, mas agora é desenhado depois do mesmo
+        // backdrop do WheelSettings para conservar o fade escuro com abertura
+        // central também durante a edição do circuito.
+        if (TrackEditor::IsOpen())
+        {
+            std::vector<TrackEditor::PreviewIcon> previewIcons;
+            previewIcons.reserve(g_sideItems.size());
+            for (const auto& item : g_sideItems)
+            {
+                if (!item.form) continue;
+                auto* icon = ItemIcon::Get(item.form);
+                previewIcons.push_back({ reinterpret_cast<ImTextureID>(icon),
+                    MakeGameplayIconColor(item, 230) });
+            }
+            fg->PopClipRect();
+            TrackEditor::Draw(alpha, g_settingsMousePos, screen, previewIcons,
+                std::min(static_cast<int>(previewIcons.size()), GetSideVisibleLimit()));
+            return;
+        }
 
         // ============================================================
         // CABEÇALHO
