@@ -121,6 +121,8 @@ namespace
     float g_overflowSubmenuT = 0.0f;
     enum class SubmenuFocus { None, Radials, Overflow };
     SubmenuFocus g_submenuFocus = SubmenuFocus::None;
+    enum class PendingSubmenuToggle { None, Radials, Overflow };
+    PendingSubmenuToggle g_pendingSubmenuToggle = PendingSubmenuToggle::None;
     enum class PresetNameAction { SaveCurrent, RenamePreset };
     PresetNameAction g_presetNameAction = PresetNameAction::SaveCurrent;
     std::string g_presetSource;
@@ -1411,6 +1413,7 @@ namespace TrackEditor
         g_radialsSubmenuT = 0.0f;
         g_overflowSubmenuT = 0.0f;
         g_submenuFocus = SubmenuFocus::None;
+        g_pendingSubmenuToggle = PendingSubmenuToggle::None;
         g_pan = ImVec2(0.0f, 0.0f);
         g_zoom = 1.0f;
     }
@@ -1514,22 +1517,79 @@ namespace TrackEditor
         constexpr float submenuRowGap = 10.0f;
         const float submenuTopY = top + 138.0f;
         const float submenuDt = std::min(ImGui::GetIO().DeltaTime, 0.05f);
-        const float submenuBlend = 1.0f - std::exp(-11.0f * submenuDt);
-        g_radialsSubmenuT += ((g_radialsSubmenuOpen ? 1.0f : 0.0f) -
-            g_radialsSubmenuT) * submenuBlend;
-        g_overflowSubmenuT += ((g_overflowSubmenuOpen ? 1.0f : 0.0f) -
-            g_overflowSubmenuT) * submenuBlend;
+        // A abertura pode ser responsiva, mas o fechamento preserva a
+        // geometria por mais alguns frames para os sliders recolherem junto
+        // do cabeçalho, em vez de desaparecerem instantaneamente.
+        const auto animateSubmenu = [&](float& value, bool targetOpen) {
+            const float speed = targetOpen ? 11.0f : 5.5f;
+            const float blend = 1.0f - std::exp(-speed * submenuDt);
+            value += ((targetOpen ? 1.0f : 0.0f) - value) * blend;
+            if (targetOpen && value > 0.999f)
+                value = 1.0f;
+            if (!targetOpen && value < 0.001f)
+                value = 0.0f;
+        };
+        animateSubmenu(g_radialsSubmenuT, g_radialsSubmenuOpen);
+        animateSubmenu(g_overflowSubmenuT, g_overflowSubmenuOpen);
+        const auto submenuSettled = [](float value, bool targetOpen) {
+            return targetOpen ? value >= 1.0f : value <= 0.0f;
+        };
+        // Um clique feito enquanto o outro cabeçalho ainda está mudando de
+        // trilha fica pendente. Iniciar as duas transições no mesmo frame
+        // fazia cada uma escolher uma hierarquia diferente por alguns frames.
+        if (g_pendingSubmenuToggle != PendingSubmenuToggle::None &&
+            submenuSettled(g_radialsSubmenuT, g_radialsSubmenuOpen) &&
+            submenuSettled(g_overflowSubmenuT, g_overflowSubmenuOpen))
+        {
+            const PendingSubmenuToggle pending = g_pendingSubmenuToggle;
+            g_pendingSubmenuToggle = PendingSubmenuToggle::None;
+            if (pending == PendingSubmenuToggle::Radials)
+            {
+                g_radialsSubmenuOpen = !g_radialsSubmenuOpen;
+                if (g_radialsSubmenuOpen)
+                    g_submenuFocus = SubmenuFocus::Radials;
+            }
+            else
+            {
+                g_overflowSubmenuOpen = !g_overflowSubmenuOpen;
+                if (g_overflowSubmenuOpen)
+                    g_submenuFocus = SubmenuFocus::Overflow;
+            }
+            g_activeSlider = EditorSlider::None;
+        }
+        // Só transfere o foco depois que o submenu que estava no topo saiu
+        // completamente do layout. Trocar aqui, no clique de fechar, fazia
+        // o outro cabeçalho saltar para baixo e depois voltar para cima.
+        if (!g_radialsSubmenuOpen && g_radialsSubmenuT == 0.0f &&
+            g_submenuFocus == SubmenuFocus::Radials)
+        {
+            g_submenuFocus = g_overflowSubmenuOpen
+                ? SubmenuFocus::Overflow : SubmenuFocus::None;
+        }
+        if (!g_overflowSubmenuOpen && g_overflowSubmenuT == 0.0f &&
+            g_submenuFocus == SubmenuFocus::Overflow)
+        {
+            g_submenuFocus = g_radialsSubmenuOpen
+                ? SubmenuFocus::Radials : SubmenuFocus::None;
+        }
         const auto smoothstep = [](float value) {
             value = std::clamp(value, 0.0f, 1.0f);
             return value * value * (3.0f - 2.0f * value);
         };
-        // Primeiro o botão cresce horizontalmente; então o conteúdo desce.
+        // Cada fase tem uma faixa própria. Antes, largura, posição e
+        // conteúdo começavam a interpolar ao mesmo tempo: o cabeçalho ainda
+        // largo invadia o botão vizinho e produzia o flick ocasional.
+        // Agora: move compacto para a segunda linha -> cresce -> revela os
+        // controles. Fechar percorre rigorosamente o caminho inverso.
         const auto headerWidth = [&](float value) {
             return submenuClosedWidth + (submenuWidth - submenuClosedWidth) *
-                smoothstep(value / 0.48f);
+                smoothstep((value - 0.25f) / 0.35f);
         };
         const auto contentT = [&](float value) {
-            return smoothstep((value - 0.44f) / 0.56f);
+            return smoothstep((value - 0.60f) / 0.40f);
+        };
+        const auto rowPositionT = [&](float value) {
+            return smoothstep(value / 0.25f);
         };
         const float radialsContentT = contentT(g_radialsSubmenuT);
         const float overflowContentT = contentT(g_overflowSubmenuT);
@@ -1550,8 +1610,13 @@ namespace TrackEditor
                 IM_COL32(232, 216, 177, 255), open ? "-" : "+");
         };
 
-        const bool bothSubmenusOpen = g_radialsSubmenuOpen && g_overflowSubmenuOpen;
-        const bool radialsOnTop = bothSubmenusOpen &&
+        // Durante o recolhimento, o submenu ainda participa do layout até
+        // sua animação chegar a zero. Assim ele não salta para a linha
+        // compacta no instante do clique.
+        const bool radialsVisible = g_radialsSubmenuT > 0.001f;
+        const bool overflowVisible = g_overflowSubmenuT > 0.001f;
+        const bool bothSubmenusVisible = radialsVisible && overflowVisible;
+        const bool radialsOnTop = bothSubmenusVisible &&
             g_submenuFocus != SubmenuFocus::Overflow;
         const float rowTwoY = submenuTopY + submenuHeaderHeight + submenuRowGap;
         float radialHeaderX = submenuX;
@@ -1561,7 +1626,7 @@ namespace TrackEditor
         float overflowHeaderY = submenuTopY;
         float overflowHeaderWidth = submenuClosedWidth;
 
-        if (bothSubmenusOpen)
+        if (bothSubmenusVisible)
         {
             if (radialsOnTop)
             {
@@ -1578,21 +1643,23 @@ namespace TrackEditor
                 radialHeaderY = rowTwoY + 64.0f * overflowContentT;
             }
         }
-        else if (g_radialsSubmenuOpen)
+        else if (radialsVisible)
         {
             radialHeaderWidth = headerWidth(g_radialsSubmenuT);
-            radialHeaderY = rowTwoY;
+            radialHeaderY = submenuTopY + (rowTwoY - submenuTopY) *
+                rowPositionT(g_radialsSubmenuT);
         }
-        else if (g_overflowSubmenuOpen)
+        else if (overflowVisible)
         {
             overflowHeaderWidth = headerWidth(g_overflowSubmenuT);
             overflowHeaderX = submenuRight - overflowHeaderWidth;
-            overflowHeaderY = rowTwoY;
+            overflowHeaderY = submenuTopY + (rowTwoY - submenuTopY) *
+                rowPositionT(g_overflowSubmenuT);
         }
 
-        submenuHeader(g_radialsSubmenu, Tr("radials"), g_radialsSubmenuOpen,
+        submenuHeader(g_radialsSubmenu, Tr("radials"), radialsVisible,
             radialHeaderX, radialHeaderY, radialHeaderWidth);
-        submenuHeader(g_overflowSubmenu, Tr("overflow"), g_overflowSubmenuOpen,
+        submenuHeader(g_overflowSubmenu, Tr("overflow"), overflowVisible,
             overflowHeaderX, overflowHeaderY, overflowHeaderWidth);
 
         const float submenuSliderMaxX = submenuRight - 30.0f;
@@ -2717,23 +2784,43 @@ namespace TrackEditor
         }
         if (Inside(mouse, g_radialsSubmenu))
         {
+            const bool submenuTransitioning =
+                g_pendingSubmenuToggle != PendingSubmenuToggle::None ||
+                (g_radialsSubmenuOpen
+                    ? g_radialsSubmenuT < 1.0f
+                    : g_radialsSubmenuT > 0.0f) ||
+                (g_overflowSubmenuOpen
+                    ? g_overflowSubmenuT < 1.0f
+                    : g_overflowSubmenuT > 0.0f);
+            if (submenuTransitioning)
+            {
+                g_pendingSubmenuToggle = PendingSubmenuToggle::Radials;
+                return true;
+            }
             g_radialsSubmenuOpen = !g_radialsSubmenuOpen;
             if (g_radialsSubmenuOpen)
                 g_submenuFocus = SubmenuFocus::Radials;
-            else if (g_submenuFocus == SubmenuFocus::Radials)
-                g_submenuFocus = g_overflowSubmenuOpen
-                    ? SubmenuFocus::Overflow : SubmenuFocus::None;
             g_activeSlider = EditorSlider::None;
             return true;
         }
         if (Inside(mouse, g_overflowSubmenu))
         {
+            const bool submenuTransitioning =
+                g_pendingSubmenuToggle != PendingSubmenuToggle::None ||
+                (g_radialsSubmenuOpen
+                    ? g_radialsSubmenuT < 1.0f
+                    : g_radialsSubmenuT > 0.0f) ||
+                (g_overflowSubmenuOpen
+                    ? g_overflowSubmenuT < 1.0f
+                    : g_overflowSubmenuT > 0.0f);
+            if (submenuTransitioning)
+            {
+                g_pendingSubmenuToggle = PendingSubmenuToggle::Overflow;
+                return true;
+            }
             g_overflowSubmenuOpen = !g_overflowSubmenuOpen;
             if (g_overflowSubmenuOpen)
                 g_submenuFocus = SubmenuFocus::Overflow;
-            else if (g_submenuFocus == SubmenuFocus::Overflow)
-                g_submenuFocus = g_radialsSubmenuOpen
-                    ? SubmenuFocus::Radials : SubmenuFocus::None;
             g_activeSlider = EditorSlider::None;
             return true;
         }

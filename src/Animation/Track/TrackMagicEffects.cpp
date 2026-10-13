@@ -27,8 +27,9 @@ namespace
     bool g_releaseValid = true;
     bool g_gameplayWasActive = false;
     float g_gameplayPulse = 0.0f;
-    std::array<float, 4> g_gameplaySparkAngles{};
-    std::array<float, 4> g_gameplaySparkVelocities{};
+    constexpr std::size_t kGameplaySparkCount = 5;
+    std::array<float, kGameplaySparkCount> g_gameplaySparkAngles{};
+    std::array<float, kGameplaySparkCount> g_gameplaySparkVelocities{};
     bool g_gameplaySparkMotionInitialized = false;
     unsigned int g_gameplaySparkOpenSeed = 0;
     int g_gameplaySparkUpdateFrame = -1;
@@ -244,9 +245,9 @@ namespace TrackMagicEffects
             g_gameplayWasActive = true;
             if (!g_gameplaySparkMotionInitialized)
             {
-                // Os quatro pontos partem em velocidades distintas, como
-                // antes, mas estas passam a ser livres para o scroll alterar.
-                for (int i = 0; i < 4; ++i)
+                // Os pontos partem em velocidades distintas, mas estas
+                // passam a ser livres para o scroll alterar.
+                for (std::size_t i = 0; i < kGameplaySparkCount; ++i)
                 {
                     g_gameplaySparkAngles[i] = static_cast<float>(i) * 1.5708f;
                     g_gameplaySparkVelocities[i] = 0.90f + static_cast<float>(i) * 0.08f;
@@ -267,7 +268,7 @@ namespace TrackMagicEffects
         if (g_gameplaySparkUpdateFrame != frame)
         {
             const float dt = std::min(ImGui::GetIO().DeltaTime, 0.05f);
-            for (int i = 0; i < 4; ++i)
+            for (std::size_t i = 0; i < kGameplaySparkCount; ++i)
                 g_gameplaySparkAngles[i] += g_gameplaySparkVelocities[i] * dt;
             g_gameplaySparkUpdateFrame = frame;
         }
@@ -284,12 +285,13 @@ namespace TrackMagicEffects
         // Poucas faíscas correm pelo perímetro; é só uma camada decorativa.
         if (showSparks)
         {
-            for (int i = 0; i < 5; ++i)
+            for (std::size_t i = 0; i < kGameplaySparkCount; ++i)
             {
                 const float angle = g_gameplaySparkAngles[i];
                 const ImVec2 point = RadialShape::PositionAtAngle(shape, center,
                     radius + 6.0f, angle);
-                const float twinkle = 0.55f + 0.45f * std::sin(time * 7.0f + i);
+                const float twinkle = 0.55f + 0.45f * std::sin(time * 7.0f +
+                    static_cast<float>(i));
                 draw->AddCircleFilled(point, 5.0f, WithAlpha(kGold,
                     visibility * 0.10f * twinkle), 12);
                 draw->AddCircleFilled(point, 1.15f + twinkle * 0.65f,
