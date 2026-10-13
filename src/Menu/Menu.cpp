@@ -15287,6 +15287,7 @@ namespace Menu
                     ImGui::GetIO().DisplaySize.y * 0.5f);
                 QuickDrawMagicEffects::TriggerRelease(g_quickDrawEditorStroke,
                     center, QUICK_DRAW_EDITOR_RADIUS, true);
+                Blur::TriggerPulse();
             }
             return true;
         }
@@ -15300,6 +15301,7 @@ namespace Menu
                     ImGui::GetIO().DisplaySize.y * 0.5f);
                 QuickDrawMagicEffects::TriggerRelease(g_quickDrawEditorStroke,
                     center, QUICK_DRAW_EDITOR_RADIUS, false);
+                Blur::TriggerPulse();
             }
             g_quickDrawEditorStroke.clear();
             StoreQuickDrawStroke(g_quickDrawEditorItem, {});

@@ -12,6 +12,9 @@ namespace Blur
     bool Initialize(ID3D11Device* device, ID3D11DeviceContext* context,
         IDXGISwapChain* swapChain);
     void SetTarget(bool active);
+    // Pulso curto independente do blur persistente dos radiais. Útil para
+    // confirmações visuais sem alterar o estado normal de SetTarget().
+    void TriggerPulse();
     // Desativa o efeito imediatamente, sem aguardar o fade-out.
     void Reset();
     // When the caller already knows which swap-chain image is being

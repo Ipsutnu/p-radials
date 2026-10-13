@@ -44,6 +44,7 @@ namespace Blur
         bool g_initialized = false;
         bool g_targetActive = false;
         float g_strength = 0.0f;
+        float g_pulseElapsed = 1.0f;
 
         UINT g_width = 0;
         UINT g_height = 0;
@@ -82,6 +83,8 @@ namespace Blur
 
         constexpr float kFadeInSpeed = 4.5f;
         constexpr float kFadeOutSpeed = 3.5f;
+        constexpr float kPulseDuration = 0.42f;
+        constexpr float kPulsePeakStrength = 0.78f;
         // Velocidade com que a proteção do preview alcança seu novo tamanho.
         constexpr float kPreviewMaskResizeSpeed = 4.0f;
         constexpr float kPreviewMaskCloseSpeed = 3.0f;
@@ -520,10 +523,18 @@ namespace Blur
             active ? "enabled" : "disabled");
     }
 
+    void TriggerPulse()
+    {
+        // Reiniciar o envelope permite confirmar um novo gesto mesmo se o
+        // pulso anterior ainda estiver desaparecendo.
+        g_pulseElapsed = 0.0f;
+    }
+
     void Reset()
     {
         g_targetActive = false;
         g_strength = 0.0f;
+        g_pulseElapsed = kPulseDuration;
         Logger::GetSingleton().Print("Blur: reset.");
     }
 
@@ -532,12 +543,25 @@ namespace Blur
         if (!g_initialized)
             return;
 
-        const float target = g_targetActive ? 1.0f : 0.0f;
-        const float speed = g_targetActive ? kFadeInSpeed : kFadeOutSpeed;
         const float dt = std::clamp(deltaTime, 0.0f, 0.05f);
+        float pulseStrength = 0.0f;
+        if (g_pulseElapsed < kPulseDuration)
+        {
+            const float progress = std::clamp(
+                g_pulseElapsed / kPulseDuration, 0.0f, 1.0f);
+            // Seno garante entrada e saída com derivada suave nos extremos.
+            const float envelope = std::sin(progress * 3.14159265359f);
+            pulseStrength = kPulsePeakStrength * envelope * envelope;
+            g_pulseElapsed = std::min(kPulseDuration, g_pulseElapsed + dt);
+        }
+        const float target = std::max(g_targetActive ? 1.0f : 0.0f,
+            pulseStrength);
+        const float speed = pulseStrength > 0.0f ? 14.0f :
+            (g_targetActive ? kFadeInSpeed : kFadeOutSpeed);
         const float factor = 1.0f - std::exp(-speed * dt);
         g_strength += (target - g_strength) * factor;
-        if (!g_targetActive && g_strength < 0.002f)
+        if (!g_targetActive && g_pulseElapsed >= kPulseDuration &&
+            g_strength < 0.002f)
         {
             g_strength = 0.0f;
             return;
@@ -637,6 +661,7 @@ namespace Blur
         g_initialized = false;
         g_targetActive = false;
         g_strength = 0.0f;
+        g_pulseElapsed = kPulseDuration;
         g_loggedNoTarget = false;
         g_loggedTargetFailure = false;
         g_loggedCallerTarget = false;
