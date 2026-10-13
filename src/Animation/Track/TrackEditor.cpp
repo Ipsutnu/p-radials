@@ -119,6 +119,8 @@ namespace
     bool g_overflowSubmenuOpen = false;
     float g_radialsSubmenuT = 0.0f;
     float g_overflowSubmenuT = 0.0f;
+    enum class SubmenuFocus { None, Radials, Overflow };
+    SubmenuFocus g_submenuFocus = SubmenuFocus::None;
     enum class PresetNameAction { SaveCurrent, RenamePreset };
     PresetNameAction g_presetNameAction = PresetNameAction::SaveCurrent;
     std::string g_presetSource;
@@ -1408,6 +1410,7 @@ namespace TrackEditor
         g_overflowSubmenuOpen = false;
         g_radialsSubmenuT = 0.0f;
         g_overflowSubmenuT = 0.0f;
+        g_submenuFocus = SubmenuFocus::None;
         g_pan = ImVec2(0.0f, 0.0f);
         g_zoom = 1.0f;
     }
@@ -1465,10 +1468,9 @@ namespace TrackEditor
         const float viewportHeight = viewportMax.y - viewportMin.y;
         const float panelWidth = 390.0f;
         const float panelX = viewportMax.x - panelWidth;
-        const float secondaryPanelWidth = 390.0f;
-        const float secondaryPanelX = panelX - secondaryPanelWidth - 14.0f;
-        // O canvas respeita os dois painéis da direita.
-        g_panelLeft = secondaryPanelX;
+        // Os submenus agora vivem no cabeçalho principal, então o espaço que
+        // antes era o segundo painel volta a pertencer ao canvas.
+        g_panelLeft = panelX;
         const float ox = panelX + 20.0f;
         const float top = viewportMin.y;
         GoldText(draw, ImVec2(ox, top + 20.0f),
@@ -1491,22 +1493,26 @@ namespace TrackEditor
         Button(draw, g_presetLoad, Tr("load"), g_presetListOpen);
         Button(draw, g_presetReset, Tr("reset"));
 
-        // Linha 2: os dois zooms compartilham toda a largura do painel.
-        g_zoomOut = { ImVec2(ox, top + 96), ImVec2(ox + 170, top + 130) };
-        g_zoomIn = { ImVec2(ox + 180, top + 96), ImVec2(ox + 350, top + 130) };
-        Button(draw, g_zoomOut, Tr("zoom_out"));
-        Button(draw, g_zoomIn, Tr("zoom_in"));
-
-        // Linha 3: restaurar a visão ocupa toda a linha.
-        g_reset = { ImVec2(ox, top + 138), ImVec2(ox + 350, top + 172) };
+        // Linha 2: - e + ocupam o antigo espaço do Zoom -, enquanto Reset
+        // View usa o antigo botão Zoom + sem mudar sua largura.
+        g_zoomOut = { ImVec2(ox, top + 96), ImVec2(ox + 80, top + 130) };
+        g_zoomIn = { ImVec2(ox + 90, top + 96), ImVec2(ox + 170, top + 130) };
+        g_reset = { ImVec2(ox + 180, top + 96), ImVec2(ox + 350, top + 130) };
+        Button(draw, g_zoomOut, "-");
+        Button(draw, g_zoomIn, "+");
         Button(draw, g_reset, Tr("reset_view"));
 
-        // Painel secundário: os controles do radial ficam ao lado das ações
-        // de preset/zoom, sem ocupar a lista de ferramentas do editor.
-        const float submenuWidth = secondaryPanelWidth - 40.0f;
-        const float submenuRight = panelX - 14.0f;
-        const float submenuX = submenuRight - submenuWidth;
-        const float submenuClosedWidth = submenuWidth * 0.5f;
+        // Os dois submenus agora ocupam a antiga linha inteira de Reset
+        // View. Fechados dividem a linha; ao abrir, um deles desce e cresce
+        // para a largura total. Se ambos abrirem, o último recebe a linha de
+        // cima e empurra o outro, já expandido, para baixo.
+        const float submenuWidth = 350.0f;
+        const float submenuX = ox;
+        const float submenuRight = submenuX + submenuWidth;
+        const float submenuClosedWidth = (submenuWidth - 10.0f) * 0.5f;
+        constexpr float submenuHeaderHeight = 34.0f;
+        constexpr float submenuRowGap = 10.0f;
+        const float submenuTopY = top + 138.0f;
         const float submenuDt = std::min(ImGui::GetIO().DeltaTime, 0.05f);
         const float submenuBlend = 1.0f - std::exp(-11.0f * submenuDt);
         g_radialsSubmenuT += ((g_radialsSubmenuOpen ? 1.0f : 0.0f) -
@@ -1527,13 +1533,10 @@ namespace TrackEditor
         };
         const float radialsContentT = contentT(g_radialsSubmenuT);
         const float overflowContentT = contentT(g_overflowSubmenuT);
-        float submenuY = top + 54.0f;
-        
         const auto submenuHeader = [&](Rect& rect, const char* label,
-            bool open, float width) {
-        
-            rect = { ImVec2(submenuRight - width, submenuY),
-                ImVec2(submenuRight, submenuY + 34.0f) };
+            bool open, float x, float y, float width) {
+
+            rect = { ImVec2(x, y), ImVec2(x + width, y + submenuHeaderHeight) };
         
             draw->AddRectFilled(rect.min, rect.max,
                 open ? IM_COL32(26, 28, 34, 82) : IM_COL32(26, 28, 34, 230), 5.0f);
@@ -1546,10 +1549,52 @@ namespace TrackEditor
             GoldText(draw, ImVec2(rect.max.x - 23.0f, rect.min.y + 7.0f),
                 IM_COL32(232, 216, 177, 255), open ? "-" : "+");
         };
-        
+
+        const bool bothSubmenusOpen = g_radialsSubmenuOpen && g_overflowSubmenuOpen;
+        const bool radialsOnTop = bothSubmenusOpen &&
+            g_submenuFocus != SubmenuFocus::Overflow;
+        const float rowTwoY = submenuTopY + submenuHeaderHeight + submenuRowGap;
+        float radialHeaderX = submenuX;
+        float radialHeaderY = submenuTopY;
+        float radialHeaderWidth = submenuClosedWidth;
+        float overflowHeaderX = submenuRight - submenuClosedWidth;
+        float overflowHeaderY = submenuTopY;
+        float overflowHeaderWidth = submenuClosedWidth;
+
+        if (bothSubmenusOpen)
+        {
+            if (radialsOnTop)
+            {
+                radialHeaderWidth = headerWidth(g_radialsSubmenuT);
+                overflowHeaderWidth = headerWidth(g_overflowSubmenuT);
+                overflowHeaderX = submenuRight - overflowHeaderWidth;
+                overflowHeaderY = rowTwoY + 302.0f * radialsContentT;
+            }
+            else
+            {
+                overflowHeaderWidth = headerWidth(g_overflowSubmenuT);
+                overflowHeaderX = submenuRight - overflowHeaderWidth;
+                radialHeaderWidth = headerWidth(g_radialsSubmenuT);
+                radialHeaderY = rowTwoY + 64.0f * overflowContentT;
+            }
+        }
+        else if (g_radialsSubmenuOpen)
+        {
+            radialHeaderWidth = headerWidth(g_radialsSubmenuT);
+            radialHeaderY = rowTwoY;
+        }
+        else if (g_overflowSubmenuOpen)
+        {
+            overflowHeaderWidth = headerWidth(g_overflowSubmenuT);
+            overflowHeaderX = submenuRight - overflowHeaderWidth;
+            overflowHeaderY = rowTwoY;
+        }
+
         submenuHeader(g_radialsSubmenu, Tr("radials"), g_radialsSubmenuOpen,
-            headerWidth(g_radialsSubmenuT));
-        submenuY += 44.0f;
+            radialHeaderX, radialHeaderY, radialHeaderWidth);
+        submenuHeader(g_overflowSubmenu, Tr("overflow"), g_overflowSubmenuOpen,
+            overflowHeaderX, overflowHeaderY, overflowHeaderWidth);
+
         const float submenuSliderMaxX = submenuRight - 30.0f;
         const auto setResetRect = [&](Rect& reset, float trackY) {
             reset = { ImVec2(submenuRight - 24.0f, trackY - 10.0f),
@@ -1565,49 +1610,53 @@ namespace TrackEditor
         g_radialQuantityReset = {};
         g_radialStretchReset = {};
         g_radialOpacityReset = {};
+        const float radialContentY = g_radialsSubmenu.max.y + 10.0f;
         if (radialsContentT > 0.001f)
         {
-            g_radialShapeSlider = { ImVec2(submenuX, submenuY + 20.0f),
-                ImVec2(submenuSliderMaxX, submenuY + 42.0f) };
-            g_radialRotationSlider = { ImVec2(submenuX, submenuY + 82.0f),
-                ImVec2(submenuSliderMaxX, submenuY + 104.0f) };
-            g_radialQuantitySlider = { ImVec2(submenuX, submenuY + 144.0f),
-                ImVec2(submenuSliderMaxX, submenuY + 166.0f) };
-            g_radialStretchSlider = { ImVec2(submenuX, submenuY + 206.0f),
-                ImVec2(submenuSliderMaxX, submenuY + 228.0f) };
-            g_radialOpacitySlider = { ImVec2(submenuX, submenuY + 268.0f),
-                ImVec2(submenuSliderMaxX, submenuY + 290.0f) };
-            setResetRect(g_radialShapeReset, submenuY + 31.0f);
-            setResetRect(g_radialRotationReset, submenuY + 93.0f);
-            setResetRect(g_radialQuantityReset, submenuY + 155.0f);
-            setResetRect(g_radialStretchReset, submenuY + 217.0f);
-            setResetRect(g_radialOpacityReset, submenuY + 279.0f);
-            submenuY += 302.0f * radialsContentT;
+            g_radialShapeSlider = { ImVec2(submenuX, radialContentY + 20.0f),
+                ImVec2(submenuSliderMaxX, radialContentY + 42.0f) };
+            g_radialRotationSlider = { ImVec2(submenuX, radialContentY + 82.0f),
+                ImVec2(submenuSliderMaxX, radialContentY + 104.0f) };
+            g_radialQuantitySlider = { ImVec2(submenuX, radialContentY + 144.0f),
+                ImVec2(submenuSliderMaxX, radialContentY + 166.0f) };
+            g_radialStretchSlider = { ImVec2(submenuX, radialContentY + 206.0f),
+                ImVec2(submenuSliderMaxX, radialContentY + 228.0f) };
+            g_radialOpacitySlider = { ImVec2(submenuX, radialContentY + 268.0f),
+                ImVec2(submenuSliderMaxX, radialContentY + 290.0f) };
+            setResetRect(g_radialShapeReset, radialContentY + 31.0f);
+            setResetRect(g_radialRotationReset, radialContentY + 93.0f);
+            setResetRect(g_radialQuantityReset, radialContentY + 155.0f);
+            setResetRect(g_radialStretchReset, radialContentY + 217.0f);
+            setResetRect(g_radialOpacityReset, radialContentY + 279.0f);
         }
-        submenuHeader(g_overflowSubmenu, Tr("overflow"), g_overflowSubmenuOpen,
-            headerWidth(g_overflowSubmenuT));
-        submenuY += 44.0f;
         g_lineOpacitySlider = {};
         g_overflowOpacityReset = {};
+        const float overflowContentY = g_overflowSubmenu.max.y + 10.0f;
         if (overflowContentT > 0.001f)
         {
-            g_lineOpacitySlider = { ImVec2(submenuX, submenuY + 20.0f),
-                ImVec2(submenuSliderMaxX, submenuY + 42.0f) };
-            setResetRect(g_overflowOpacityReset, submenuY + 31.0f);
+            g_lineOpacitySlider = { ImVec2(submenuX, overflowContentY + 20.0f),
+                ImVec2(submenuSliderMaxX, overflowContentY + 42.0f) };
+            setResetRect(g_overflowOpacityReset, overflowContentY + 31.0f);
         }
+
+        const float submenuBottom = std::max(
+            g_radialsSubmenu.max.y + 302.0f * radialsContentT,
+            g_overflowSubmenu.max.y + 64.0f * overflowContentT);
 
         // Controle fixo acima do estado do circuito e de OK/Cancelar.
 		g_ghostItemsSlider = { ImVec2(ox, viewportMax.y - 164.0f),
 			ImVec2(ox + 350.0f, viewportMax.y - 142.0f) };
 
+        g_panelClipBottom = viewportMax.y - 198.0f;
+        // Um submenu aberto reserva sua própria altura: a lista de peças
+        // começa abaixo dele, sem atravessar seus sliders durante a expansão.
+        g_panelClipTop = std::max(top + 190.0f, submenuBottom + 14.0f);
         const float contentHeight = 1524.0f;
-        const float visibleHeight = std::max(1.0f, viewportHeight - 280.0f);
+        const float visibleHeight = std::max(1.0f, g_panelClipBottom - g_panelClipTop);
         const float maxScroll = std::max(0.0f, contentHeight - visibleHeight);
         g_panelMaxScroll = maxScroll;
         g_panelScroll = std::clamp(g_panelScroll, 0.0f, maxScroll);
-        const float sy = -g_panelScroll;
-        g_panelClipTop = top + 190.0f;
-        g_panelClipBottom = viewportMax.y - 198.0f;
+        const float sy = (g_panelClipTop - (top + 190.0f)) - g_panelScroll;
         draw->PushClipRect(ImVec2(panelX, g_panelClipTop),
             ImVec2(viewportMax.x, g_panelClipBottom), true);
         GoldText(draw, ImVec2(ox, top + 202 + sy), IM_COL32(225, 207, 165, 255), Tr("pieces"));
@@ -2669,12 +2718,22 @@ namespace TrackEditor
         if (Inside(mouse, g_radialsSubmenu))
         {
             g_radialsSubmenuOpen = !g_radialsSubmenuOpen;
+            if (g_radialsSubmenuOpen)
+                g_submenuFocus = SubmenuFocus::Radials;
+            else if (g_submenuFocus == SubmenuFocus::Radials)
+                g_submenuFocus = g_overflowSubmenuOpen
+                    ? SubmenuFocus::Overflow : SubmenuFocus::None;
             g_activeSlider = EditorSlider::None;
             return true;
         }
         if (Inside(mouse, g_overflowSubmenu))
         {
             g_overflowSubmenuOpen = !g_overflowSubmenuOpen;
+            if (g_overflowSubmenuOpen)
+                g_submenuFocus = SubmenuFocus::Overflow;
+            else if (g_submenuFocus == SubmenuFocus::Overflow)
+                g_submenuFocus = g_radialsSubmenuOpen
+                    ? SubmenuFocus::Radials : SubmenuFocus::None;
             g_activeSlider = EditorSlider::None;
             return true;
         }
