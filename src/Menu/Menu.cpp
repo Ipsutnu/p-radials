@@ -26370,8 +26370,15 @@ namespace Menu
 
         // UI is letterboxed in a virtual 16:9 area, but the Settings backdrop
         // must cover the complete physical viewport (including ultrawide bars).
-        const ImVec2 backdropMin = Resolution::ToVirtual(ImVec2(0.0f, 0.0f));
-        const ImVec2 backdropMax = Resolution::ToVirtual(Resolution::GetRealSize());
+        constexpr float backdropHorizontalOverscan = 2.0f;
+
+        const ImVec2 backdropMin =
+            Resolution::ToVirtual(ImVec2(-backdropHorizontalOverscan, 0.0f));
+
+        const ImVec2 backdropMax =
+            Resolution::ToVirtual(ImVec2(
+                Resolution::GetRealSize().x + backdropHorizontalOverscan,
+                Resolution::GetRealSize().y));
 
         // The normal background draw-list clip is the virtual 16:9 viewport.
         // The dimmer is intentionally the exception: its clip must include
