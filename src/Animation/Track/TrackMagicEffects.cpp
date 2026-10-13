@@ -139,8 +139,8 @@ namespace TrackMagicEffects
         }
 
         // Faíscas orbitais determinísticas: não adicionam estado de jogo.
-        constexpr int sparkCount = 5;
-        
+        constexpr int sparkCount = 3;
+
         for (int i = 0; i < sparkCount; ++i)
         {
             const float phase = time * (5.0f + i * 0.43f) + i * 1.256f;
@@ -284,7 +284,7 @@ namespace TrackMagicEffects
         // Poucas faíscas correm pelo perímetro; é só uma camada decorativa.
         if (showSparks)
         {
-            for (int i = 0; i < 4; ++i)
+            for (int i = 0; i < 5; ++i)
             {
                 const float angle = g_gameplaySparkAngles[i];
                 const ImVec2 point = RadialShape::PositionAtAngle(shape, center,
