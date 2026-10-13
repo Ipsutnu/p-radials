@@ -86,6 +86,20 @@ namespace ItemPreview
         static constexpr float kBlurMaskBaseRadius = 64.0f;
         static constexpr float kBlurMaskHorizontalAspect = 1.15f;
 
+        // Transição 2D curta entre o esquema InventoryMagic e o preview
+        // comum. Mantida inteiramente fora da cena UI3D para ser reversível
+        // sem tocar no carregamento do item.
+        struct SpellExitShadow
+        {
+            ImVec2 center{};
+            ImVec2 radii{};
+            float elapsed = 0.0f;
+            int animationFrame = -1;
+            bool active = false;
+        };
+        SpellExitShadow g_spellExitShadow{};
+        static constexpr float kSpellExitShadowDuration = 0.16f;
+
         float GetPreviewVisualFactor()
         {
             float visualFactor = 1.0f;
@@ -145,6 +159,25 @@ namespace ItemPreview
 
             return visualFactor *
                 Config::GetItemPreviewCategoryMultiplier(category);
+        }
+
+        void AddFilledEllipse(ImDrawList* draw, const ImVec2& center,
+            const ImVec2& radii, ImU32 color)
+        {
+            if (!draw || radii.x <= 0.0f || radii.y <= 0.0f)
+                return;
+
+            constexpr int segments = 48;
+            constexpr float tau = 6.28318530718f;
+            draw->PathClear();
+            for (int i = 0; i < segments; ++i)
+            {
+                const float angle = tau * static_cast<float>(i) /
+                    static_cast<float>(segments);
+                draw->PathLineTo(ImVec2(center.x + std::cos(angle) * radii.x,
+                    center.y + std::sin(angle) * radii.y));
+            }
+            draw->PathFillConvex(color);
         }
 
         // ============================================================
@@ -737,6 +770,22 @@ namespace ItemPreview
             return model != nullptr;
         }
 
+        // Ao abandonar o esquema de iluminação de uma spell, preserva uma
+        // sombra curta na área do próximo preview. Ela suaviza a troca sem
+        // atrasar o carregamento do novo modelo nem afetar spell -> spell.
+        if (g_visible && g_form && g_form->As<RE::SpellItem>() &&
+            !form->As<RE::SpellItem>() && g_hasHudPos)
+        {
+            const float radius = kBlurMaskBaseRadius * g_sizeScale *
+                GetPreviewVisualFactor() * kBlurMaskGlobalScale;
+            g_spellExitShadow.center = g_hudPos;
+            g_spellExitShadow.radii = ImVec2(
+                radius * kBlurMaskHorizontalAspect, radius);
+            g_spellExitShadow.elapsed = 0.0f;
+            g_spellExitShadow.animationFrame = -1;
+            g_spellExitShadow.active = std::isfinite(radius) && radius > 0.0f;
+        }
+
         if (g_visible)
         {
 
@@ -1001,6 +1050,51 @@ namespace ItemPreview
         a_mask.center = g_hudPos;
         a_mask.radii = ImVec2(radius * kBlurMaskHorizontalAspect, radius);
         return true;
+    }
+
+    void DrawSpellExitShadow(ImDrawList* a_draw, float a_alpha)
+    {
+        if (!g_spellExitShadow.active || !a_draw)
+            return;
+
+        const int frame = ImGui::GetFrameCount();
+        if (frame != g_spellExitShadow.animationFrame)
+        {
+            g_spellExitShadow.animationFrame = frame;
+            g_spellExitShadow.elapsed += std::clamp(ImGui::GetIO().DeltaTime,
+                0.0f, 0.05f);
+        }
+
+        const float t = std::clamp(g_spellExitShadow.elapsed /
+            kSpellExitShadowDuration, 0.0f, 1.0f);
+        if (t >= 1.0f)
+        {
+            g_spellExitShadow.active = false;
+            return;
+        }
+
+        // Cai rapidamente, com leve retração. As camadas concêntricas dão
+        // borda suave sem precisar modificar o render target do preview.
+        const float visibility = (1.0f - t) * (1.0f - t) *
+            std::clamp(a_alpha, 0.0f, 1.0f);
+        const float shrink = 1.0f - 0.12f * t;
+        constexpr int layers = 9;
+        for (int layer = 0; layer < layers; ++layer)
+        {
+            const float layerT = static_cast<float>(layer) /
+                static_cast<float>(layers - 1);
+            
+            constexpr float shadowSize = 0.25f;
+            const float scale = (1.10f - layerT * 0.43f) * shrink * shadowSize;
+            
+            const int alpha = static_cast<int>((4.0f + layerT * 7.0f) *
+                255.0f / 100.0f * visibility);
+            
+            AddFilledEllipse(a_draw, g_spellExitShadow.center,
+                ImVec2(g_spellExitShadow.radii.x * scale,
+                    g_spellExitShadow.radii.y * scale),
+                IM_COL32(5, 7, 12, alpha));
+        }
     }
 
     RE::TESForm* GetCurrentForm()

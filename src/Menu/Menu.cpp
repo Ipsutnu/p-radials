@@ -27142,6 +27142,10 @@ namespace Menu
                 IM_COL32(0, 0, 0, 0));
         }
 
+        // Resíduo visual independente do UI3D: suaviza apenas a passagem de
+        // spell para item comum no preview do WheelSettings.
+        ItemPreview::DrawSpellExitShadow(bg, alpha);
+
         bg->PopClipRect();
 
         // Depois de fechar o WheelSettings, mantemos somente este backdrop
@@ -28135,6 +28139,14 @@ namespace Menu
         //SmoothBlurEffect::GetSingleton().Update(deltaTime);
 
         RenderInventoryItemOverlay();
+
+        // A mesma sombra residual é desenhada atrás do preview de gameplay.
+        // O módulo só fica ativo em spell -> item comum e se autoencerra.
+        if (g_radialMode == RadialMode::Gameplay)
+        {
+            ItemPreview::DrawSpellExitShadow(ImGui::GetBackgroundDrawList(),
+                g_globalAlpha);
+        }
 
         //static bool testStarted = false;
         //auto* player = RE::PlayerCharacter::GetSingleton();

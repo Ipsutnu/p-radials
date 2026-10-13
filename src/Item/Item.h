@@ -27,6 +27,11 @@ namespace ItemPreview
     // Retorna a elipse dinâmica do preview no espaço virtual do HUD.
     bool GetBlurMask(BlurMask& a_mask);
 
+    // Resíduo visual curto disparado somente em troca de spell para item
+    // comum. É uma camada 2D independente do preview UI3D e pode ser
+    // removida sem alterar o carregamento/render do modelo.
+    void DrawSpellExitShadow(ImDrawList* a_draw, float a_alpha = 1.0f);
+
     // Posição no HUD (em pixels de tela) onde o item 3D deve projetar.
     // Chame ANTES de Update() no mesmo frame, ou ele mantém a última
     // posição definida.
