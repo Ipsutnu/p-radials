@@ -180,6 +180,7 @@ namespace Menu {
     bool BeginQuickDrawEditor();
     bool IsQuickDrawEditorOpen();
     bool HandleQuickDrawEditorMouseButton(int button, bool pressed);
+    bool ScrollQuickDrawEditorSettings(int direction);
     bool BeginQuickDrawGameplayStroke(int button, bool pressed);
     bool HandleTopBottomGameplayMouseButton(int button, bool pressed);
     bool IsQuickDrawGameplayActive();

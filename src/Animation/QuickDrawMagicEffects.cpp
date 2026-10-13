@@ -506,6 +506,13 @@ namespace QuickDrawMagicEffects
         g_hasLastCrackAngle = false;
     }
 
+    void ClearEdgeFlashes()
+    {
+        g_crackFlashes.clear();
+        g_lastCrackSpawnTime = -100.0f;
+        g_hasLastCrackAngle = false;
+    }
+
     void DrawLive(ImDrawList* draw, const std::vector<ImVec2>& normalizedPoints,
         const ImVec2& center, float radius, const ImVec2& cursor,
         bool drawing, bool gameplay, bool showCracks, int edgeEffectStyle,

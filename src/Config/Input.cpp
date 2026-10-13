@@ -1015,6 +1015,12 @@ RE::BSEventNotifyControl InputHandler::ProcessEvent(
                         continue;
                     }
 
+                    if (Menu::ScrollQuickDrawEditorSettings(direction))
+                    {
+                        consumeButton(buttonEvent);
+                        continue;
+                    }
+
                     if (!Menu::ScrollSettingsItemInfo(direction))
                     {
                         // Mouse fora do painel:

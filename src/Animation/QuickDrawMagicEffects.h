@@ -11,6 +11,9 @@ namespace QuickDrawMagicEffects
     inline constexpr int kEdgeEffectStyleCount = 7;
 
     void Reset();
+    // Limpa somente os flashes temporários da borda, preservando a
+    // confirmação/partículas de um gesto que já foi solto.
+    void ClearEdgeFlashes();
 
     void DrawLive(ImDrawList* draw, const std::vector<ImVec2>& normalizedPoints,
         const ImVec2& center, float radius, const ImVec2& cursor,

@@ -607,6 +607,13 @@ namespace Menu
     static float g_quickDrawSettingsClickFlash = 0.0f;
     static ImVec2 g_quickDrawSettingsPanelMin{};
     static ImVec2 g_quickDrawSettingsPanelMax{};
+    static ImVec2 g_quickDrawSettingsContentMin{};
+    static ImVec2 g_quickDrawSettingsContentMax{};
+    static ImVec2 g_quickDrawSettingsScrollbarMin{};
+    static ImVec2 g_quickDrawSettingsScrollbarMax{};
+    static float g_quickDrawSettingsScroll = 0.0f;
+    static float g_quickDrawSettingsMaxScroll = 0.0f;
+    static bool g_quickDrawSettingsScrollbarDragging = false;
     static std::array<ImVec2, 2> g_quickDrawSettingsToggleCenters{};
     static std::array<float, 2> g_quickDrawSettingsToggleRadii{};
     static ImVec2 g_quickDrawSettingsStyleMin{};
@@ -15359,6 +15366,9 @@ namespace Menu
         g_quickDrawSettingsActiveSlider = QuickDrawSettingsSlider::None;
         g_quickDrawEffectPreviewUntil = 0.0f;
         g_quickDrawEffectPreviewStyle = -1;
+        g_quickDrawSettingsScroll = 0.0f;
+        g_quickDrawSettingsMaxScroll = 0.0f;
+        g_quickDrawSettingsScrollbarDragging = false;
         g_quickDrawEditorResetHoverT = 0.0f;
         g_quickDrawEditorOkHoverT = 0.0f;
         // O fundo do WheelSettings desaparece devagar ao entrar no editor,
@@ -15392,6 +15402,23 @@ namespace Menu
     bool IsQuickDrawEditorOpen()
     {
         return g_quickDrawEditorOpen;
+    }
+
+    bool ScrollQuickDrawEditorSettings(int direction)
+    {
+        if (!g_quickDrawEditorOpen || !g_quickDrawSettingsExpanded ||
+            g_quickDrawSettingsOpenT < 0.98f)
+            return false;
+
+        const ImVec2 center = Resolution::GetVirtualCenter();
+        if (!IsSettingsCircleHovered(g_settingsMousePos, center,
+                QUICK_DRAW_EDITOR_RADIUS))
+            return false;
+
+        g_quickDrawSettingsScroll = std::clamp(g_quickDrawSettingsScroll -
+            static_cast<float>(direction) * 48.0f, 0.0f,
+            g_quickDrawSettingsMaxScroll);
+        return true;
     }
 
     static void DrawQuickDrawSettingsPanel(ImDrawList* draw, const ImVec2& center,
@@ -15456,52 +15483,94 @@ namespace Menu
             FadeColor(IM_COL32(205, 185, 140, 135), alpha * contentT), 96, 1.0f);
 
         // Daqui em diante todos os controles acompanham somente o fade do
-        // disco. Nenhuma coordenada depende do progresso da animação.
+        // disco. O conteúdo fica dentro de um retângulo central protegido,
+        // com scroll próprio para que fontes maiores e futuras opções nunca
+        // sobreponham os elementos vizinhos.
         alpha *= contentT;
-        // Os controles ficam em uma coluna central fixa. Em monitores altos
-        // o círculo pode ser enorme, mas a área legível não deve acompanhar
-        // todo esse diâmetro nem invadir o arco lateral.
-        const float width = std::min(280.0f, panelRadius * 1.6f);
-        const float x = center.x - width * 0.5f;
+        const float fontHeight = ImGui::GetFontSize();
+        const float contentWidth = std::min(300.0f, panelRadius * 1.24f);
+        const float viewportHeight = std::min(360.0f, panelRadius * 1.38f);
+        const float scrollbarWidth = 10.0f;
+        const float contentLeft = center.x - contentWidth * 0.5f;
+        const float contentTop = center.y - viewportHeight * 0.5f;
+        const float controlLeft = contentLeft + 12.0f;
+        const float controlWidth = contentWidth - 28.0f - scrollbarWidth;
+        const float controlRight = controlLeft + controlWidth;
+        g_quickDrawSettingsContentMin = ImVec2(contentLeft, contentTop);
+        g_quickDrawSettingsContentMax = ImVec2(contentLeft + contentWidth,
+            contentTop + viewportHeight);
+        g_quickDrawSettingsScrollbarMin = ImVec2(contentLeft + contentWidth - scrollbarWidth,
+            contentTop + 8.0f);
+        g_quickDrawSettingsScrollbarMax = ImVec2(contentLeft + contentWidth - 2.0f,
+            contentTop + viewportHeight - 8.0f);
+
+        const float toggleRowHeight = std::max(28.0f, fontHeight + 10.0f);
+        const float labelToTrack = fontHeight + 17.0f;
+        const float sliderBlockHeight = labelToTrack + 30.0f;
+        // Reserva espaço ao fim: o scrollbar já responde à roda hoje e essa
+        // área será ocupada naturalmente quando novos controles entrarem.
+        const float contentHeight = 14.0f + toggleRowHeight * 2.0f + 12.0f +
+            sliderBlockHeight * 3.0f + 18.0f + 72.0f;
+        g_quickDrawSettingsMaxScroll = std::max(0.0f, contentHeight - viewportHeight);
+        g_quickDrawSettingsScroll = std::clamp(g_quickDrawSettingsScroll,
+            0.0f, g_quickDrawSettingsMaxScroll);
+        if (g_quickDrawSettingsScrollbarDragging && g_quickDrawSettingsMaxScroll > 0.0f)
+        {
+            const float trackHeight = g_quickDrawSettingsScrollbarMax.y -
+                g_quickDrawSettingsScrollbarMin.y;
+            const float thumbHeight = std::max(24.0f, trackHeight *
+                viewportHeight / contentHeight);
+            const float travel = std::max(1.0f, trackHeight - thumbHeight);
+            const float t = std::clamp((g_settingsMousePos.y -
+                g_quickDrawSettingsScrollbarMin.y - thumbHeight * 0.5f) / travel,
+                0.0f, 1.0f);
+            g_quickDrawSettingsScroll = t * g_quickDrawSettingsMaxScroll;
+        }
+
         const ImU32 white = IM_COL32(235, 230, 215, 255);
         const ImU32 fadedWhite = FadeColor(white, alpha);
         const ImU32 fadedMuted = FadeColor(IM_COL32(180, 165, 130, 230), alpha);
         const float now = static_cast<float>(ImGui::GetTime());
+        float y = contentTop + 14.0f - g_quickDrawSettingsScroll;
 
-        const auto drawToggle = [&](std::size_t index, float y, bool enabled,
-            const char* label) {
-            const ImVec2 toggleCenter(x + 11.0f, y);
+        draw->PushClipRect(g_quickDrawSettingsContentMin,
+            g_quickDrawSettingsContentMax, true);
+        const auto drawToggle = [&](std::size_t index, bool enabled, const char* label) {
+            const ImVec2 toggleCenter(controlLeft + 11.0f, y + toggleRowHeight * 0.5f);
             g_quickDrawSettingsToggleCenters[index] = toggleCenter;
             g_quickDrawSettingsToggleRadii[index] = 10.0f;
-            const float dx = g_settingsMousePos.x - toggleCenter.x;
-            const float dy = g_settingsMousePos.y - toggleCenter.y;
-            const bool hovered = dx * dx + dy * dy <= 100.0f;
+            const bool hovered = IsSettingsCircleHovered(g_settingsMousePos, toggleCenter, 10.0f);
             draw->AddCircleFilled(toggleCenter, hovered ? 11.5f : 10.0f,
                 FadeColor(enabled ? IM_COL32(235, 235, 235, 140) : IM_COL32(20, 20, 25, 235), alpha), 32);
             draw->AddCircle(toggleCenter, hovered ? 11.5f : 10.0f,
                 FadeColor(IM_COL32(255, 255, 255, hovered ? 230 : 135), alpha), 32, 1.25f);
-            DrawTextWithShadow(draw, ImVec2(x + 31.0f, y - ImGui::GetFontSize() * 0.5f),
+            DrawTextWithShadow(draw, ImVec2(controlLeft + 31.0f,
+                    y + (toggleRowHeight - fontHeight) * 0.5f),
                 fadedWhite, label, alpha);
+            y += toggleRowHeight;
         };
-        drawToggle(0, center.y - 118.0f, Config::g_drawEffectsGameplay,
+        drawToggle(0, Config::g_drawEffectsGameplay,
             Language::Get("draw_effects_gameplay").c_str());
-        drawToggle(1, center.y - 84.0f, Config::g_drawEffectsEditor,
+        drawToggle(1, Config::g_drawEffectsEditor,
             Language::Get("draw_effects_editor").c_str());
+        y += 12.0f;
 
         constexpr int styleCount = QuickDrawMagicEffects::kEdgeEffectStyleCount;
         static constexpr std::array<const char*, styleCount> styleLabels{
             "draw_edge_none", "draw_edge_shock", "draw_edge_sine", "draw_edge_squares",
             "draw_edge_arrows", "draw_edge_prisms", "draw_edge_worldbreaker" };
-        const float styleY = center.y - 40.0f;
-        const float trackY = styleY + 42.0f;
-        g_quickDrawSettingsStyleMin = ImVec2(x, styleY - 4.0f);
-        g_quickDrawSettingsStyleMax = ImVec2(x + width, trackY + 10.0f);
-        const float cellWidth = width / static_cast<float>(styleCount);
+        const float styleLabelY = y;
+        const float styleTrackY = styleLabelY + labelToTrack;
+        g_quickDrawSettingsStyleMin = ImVec2(controlLeft, styleLabelY - 4.0f);
+        g_quickDrawSettingsStyleMax = ImVec2(controlRight, styleTrackY + 10.0f);
+        const float cellWidth = controlWidth / static_cast<float>(styleCount);
         if (g_quickDrawSettingsActiveSlider == QuickDrawSettingsSlider::Style)
         {
             const int previous = Config::g_drawEdgeEffectStyle;
-            const float t = std::clamp((g_settingsMousePos.x - x) / width, 0.0f, 1.0f);
-            Config::g_drawEdgeEffectStyle = std::clamp(static_cast<int>(t * styleCount), 0, styleCount - 1);
+            const float t = std::clamp((g_settingsMousePos.x - controlLeft) /
+                controlWidth, 0.0f, 1.0f);
+            Config::g_drawEdgeEffectStyle = std::clamp(static_cast<int>(t * styleCount),
+                0, styleCount - 1);
             if (previous != Config::g_drawEdgeEffectStyle)
             {
                 QuickDrawMagicEffects::ClearEdgeFlashes();
@@ -15510,27 +15579,32 @@ namespace Menu
             }
         }
         const char* styleName = Language::Get(styleLabels[Config::g_drawEdgeEffectStyle]).c_str();
-        DrawTextWithShadow(draw, ImVec2(x, styleY), fadedWhite,
+        const ImVec2 styleNameSize = ImGui::CalcTextSize(styleName);
+        DrawTextWithShadow(draw, ImVec2(controlLeft, styleLabelY), fadedWhite,
             Language::Get("draw_edge_effect").c_str(), alpha);
-        DrawTextWithShadow(draw, ImVec2(x, styleY + 20.0f),
+        // Nome do estilo ocupa a ponta direita da mesma linha, acima do trilho.
+        DrawTextWithShadow(draw, ImVec2(controlRight - styleNameSize.x, styleLabelY),
             fadedMuted, styleName, alpha);
-        draw->AddRectFilled(ImVec2(x, trackY - 6.0f), ImVec2(x + width, trackY + 6.0f),
+        draw->AddRectFilled(ImVec2(controlLeft, styleTrackY - 6.0f),
+            ImVec2(controlRight, styleTrackY + 6.0f),
             FadeColor(IM_COL32(25, 26, 31, 235), alpha), 4.0f);
-        const float selectedX = x + cellWidth * static_cast<float>(Config::g_drawEdgeEffectStyle);
-        draw->AddRectFilled(ImVec2(selectedX + 0.5f, trackY - 5.5f),
-            ImVec2(selectedX + cellWidth - 0.2f, trackY + 5.5f),
+        const float selectedX = controlLeft + cellWidth *
+            static_cast<float>(Config::g_drawEdgeEffectStyle);
+        draw->AddRectFilled(ImVec2(selectedX + 0.5f, styleTrackY - 5.5f),
+            ImVec2(selectedX + cellWidth - 0.2f, styleTrackY + 5.5f),
             FadeColor(IM_COL32(190, 184, 170, 225), alpha), 2.0f);
+        y += sliderBlockHeight;
 
         const auto drawSlider = [&](QuickDrawSettingsSlider slider, const char* label,
-            float& value, float minimum, float maximum, float y, ImVec2& hitMin, ImVec2& hitMax) {
-            // Fonte e sombra ocupam mais altura que o trilho estreito. Uma
-            // margem maior evita que texto e slider compartilhem pixels.
-            const float sliderY = y + 42.0f;
-            hitMin = ImVec2(x, y - 4.0f);
-            hitMax = ImVec2(x + width, sliderY + 11.0f);
+            float& value, float minimum, float maximum, ImVec2& hitMin, ImVec2& hitMax) {
+            const float labelY = y;
+            const float sliderY = labelY + labelToTrack;
+            hitMin = ImVec2(controlLeft, labelY - 4.0f);
+            hitMax = ImVec2(controlRight, sliderY + 11.0f);
             if (g_quickDrawSettingsActiveSlider == slider)
             {
-                const float t = std::clamp((g_settingsMousePos.x - x) / width, 0.0f, 1.0f);
+                const float t = std::clamp((g_settingsMousePos.x - controlLeft) /
+                    controlWidth, 0.0f, 1.0f);
                 value = minimum + (maximum - minimum) * t;
                 g_quickDrawEffectPreviewStyle = Config::g_drawEdgeEffectStyle;
                 g_quickDrawEffectPreviewUntil = now + 0.20f;
@@ -15539,20 +15613,43 @@ namespace Menu
             const float t = (value - minimum) / std::max(maximum - minimum, 0.001f);
             const std::string valueText = std::format("{:.0f}%", value);
             const ImVec2 valueSize = ImGui::CalcTextSize(valueText.c_str());
-            DrawTextWithShadow(draw, ImVec2(x, y), fadedWhite, label, alpha);
-            DrawTextWithShadow(draw, ImVec2(x + width - valueSize.x, y),
+            DrawTextWithShadow(draw, ImVec2(controlLeft, labelY), fadedWhite, label, alpha);
+            DrawTextWithShadow(draw, ImVec2(controlRight - valueSize.x, labelY),
                 fadedMuted, valueText.c_str(), alpha);
-            draw->AddRectFilled(ImVec2(x, sliderY - 6.0f), ImVec2(x + width, sliderY + 6.0f),
+            draw->AddRectFilled(ImVec2(controlLeft, sliderY - 6.0f),
+                ImVec2(controlRight, sliderY + 6.0f),
                 FadeColor(IM_COL32(25, 26, 31, 235), alpha), 4.0f);
-            draw->AddRectFilled(ImVec2(x, sliderY - 6.0f), ImVec2(x + width * t, sliderY + 6.0f),
+            draw->AddRectFilled(ImVec2(controlLeft, sliderY - 6.0f),
+                ImVec2(controlLeft + controlWidth * t, sliderY + 6.0f),
                 FadeColor(IM_COL32(190, 184, 170, 205), alpha), 4.0f);
+            y += sliderBlockHeight;
         };
         drawSlider(QuickDrawSettingsSlider::Size, Language::Get("draw_edge_size").c_str(),
-            Config::g_drawEdgeEffectSize, 25.0f, 250.0f, center.y + 58.0f,
+            Config::g_drawEdgeEffectSize, 25.0f, 250.0f,
             g_quickDrawSettingsSizeMin, g_quickDrawSettingsSizeMax);
         drawSlider(QuickDrawSettingsSlider::Opacity, Language::Get("draw_edge_opacity").c_str(),
-            Config::g_drawEdgeEffectOpacity, 0.0f, 100.0f, center.y + 158.0f,
+            Config::g_drawEdgeEffectOpacity, 0.0f, 100.0f,
             g_quickDrawSettingsOpacityMin, g_quickDrawSettingsOpacityMax);
+        draw->PopClipRect();
+
+        // Scrollbar do retângulo central: já acompanha o conteúdo atual e
+        // fica pronto para os próximos sliders sem mudar a composição.
+        const float trackHeight = g_quickDrawSettingsScrollbarMax.y -
+            g_quickDrawSettingsScrollbarMin.y;
+        const float thumbHeight = std::max(24.0f, trackHeight * viewportHeight /
+            std::max(contentHeight, viewportHeight));
+        const float scrollT = g_quickDrawSettingsMaxScroll > 0.0f
+            ? g_quickDrawSettingsScroll / g_quickDrawSettingsMaxScroll : 0.0f;
+        const float thumbY = g_quickDrawSettingsScrollbarMin.y +
+            (trackHeight - thumbHeight) * scrollT;
+        
+        draw->AddRectFilled(g_quickDrawSettingsScrollbarMin,
+            g_quickDrawSettingsScrollbarMax, FadeColor(IM_COL32(20, 21, 26, 80), alpha), 4.0f);
+        
+        draw->AddRectFilled(ImVec2(g_quickDrawSettingsScrollbarMin.x + 2.0f, thumbY),
+            ImVec2(g_quickDrawSettingsScrollbarMax.x - 2.0f, thumbY + thumbHeight),
+            FadeColor(g_quickDrawSettingsScrollbarDragging ? IM_COL32(235, 230, 215, 230) :
+                IM_COL32(20, 21, 26, 80), alpha), 3.0f);
     }
 
     static void DrawQuickDrawEditor(float alpha)
@@ -15635,11 +15732,13 @@ namespace Menu
         const auto drawCommandCircle = [&](const ImVec2& buttonCenter, float hoverT,
             float& outRadius, const char* label) {
             outRadius = commandBaseRadius + (commandExpandedRadius - commandBaseRadius) * hoverT;
+            
             draw->AddCircleFilled(buttonCenter, outRadius,
                 FadeColor(IM_COL32(35, 36, 42, 220), alpha), 40);
-            draw->AddCircle(buttonCenter, outRadius,
-                FadeColor(IM_COL32(210, 198, 168,
-                    static_cast<int>(110.0f + 110.0f * hoverT)), alpha), 40, 1.25f);
+            
+            //draw->AddCircle(buttonCenter, outRadius,
+            //    FadeColor(IM_COL32(210, 198, 168,
+            //        static_cast<int>(110.0f + 110.0f * hoverT)), alpha), 40, 1.25f);
 
             if (hoverT <= 0.01f)
                 return;
@@ -15694,6 +15793,11 @@ namespace Menu
 
         if (!pressed)
         {
+            if (g_quickDrawSettingsScrollbarDragging)
+            {
+                g_quickDrawSettingsScrollbarDragging = false;
+                return true;
+            }
             if (g_quickDrawSettingsActiveSlider != QuickDrawSettingsSlider::None)
             {
                 g_quickDrawSettingsActiveSlider = QuickDrawSettingsSlider::None;
@@ -15731,6 +15835,12 @@ namespace Menu
         if (g_quickDrawSettingsOpenT > 0.98f &&
             insideQuickRect(g_quickDrawSettingsPanelMin, g_quickDrawSettingsPanelMax))
         {
+            if (insideQuickRect(g_quickDrawSettingsScrollbarMin,
+                    g_quickDrawSettingsScrollbarMax))
+            {
+                g_quickDrawSettingsScrollbarDragging = true;
+                return true;
+            }
             for (std::size_t i = 0; i < g_quickDrawSettingsToggleCenters.size(); ++i)
             {
                 const float dx = g_settingsMousePos.x - g_quickDrawSettingsToggleCenters[i].x;
