@@ -100,6 +100,14 @@ namespace ItemPreview
         SpellExitShadow g_spellExitShadow{};
         static constexpr float kSpellExitShadowDuration = 0.16f;
 
+        // Entrada de spell: o carregamento continua imediato, mas o modelo
+        // só ganha alpha depois de ficar pronto. Trocar de spell no meio
+        // cancela a entrada seguinte para não acumular animações em série.
+        bool g_spellEntryFadeActive = false;
+        float g_spellEntryFadeAlpha = 1.0f;
+        int g_spellEntryFadeFrame = -1;
+        static constexpr float kSpellEntryFadeDuration = 0.14f;
+
         float GetPreviewVisualFactor()
         {
             float visualFactor = 1.0f;
@@ -770,6 +778,9 @@ namespace ItemPreview
             return model != nullptr;
         }
 
+        const bool nextIsSpell = form->As<RE::SpellItem>() != nullptr;
+        const bool skipEntryFade = nextIsSpell && g_spellEntryFadeActive;
+
         // Ao abandonar o esquema de iluminação de uma spell, preserva uma
         // sombra curta na área do próximo preview. Ela suaviza a troca sem
         // atrasar o carregamento do novo modelo nem afetar spell -> spell.
@@ -839,6 +850,9 @@ namespace ItemPreview
         g_visible = true;
         g_opacityDirty = true;
         g_previewMaterialsIsolated = false;
+        g_spellEntryFadeActive = nextIsSpell && !skipEntryFade;
+        g_spellEntryFadeAlpha = g_spellEntryFadeActive ? 0.0f : 1.0f;
+        g_spellEntryFadeFrame = -1;
 
         return true;
     }
@@ -951,12 +965,30 @@ namespace ItemPreview
             g_hudPositionDirty = false;
         }
 
+        if (g_spellEntryFadeActive)
+        {
+            // A contagem começa somente quando a spell já possui geometria,
+            // eliminando o pop de seu primeiro frame renderizável.
+            const int frame = ImGui::GetFrameCount();
+            if (frame != g_spellEntryFadeFrame)
+            {
+                g_spellEntryFadeFrame = frame;
+                g_spellEntryFadeAlpha = std::min(1.0f,
+                    g_spellEntryFadeAlpha + std::clamp(ImGui::GetIO().DeltaTime,
+                        0.0f, 0.05f) / kSpellEntryFadeDuration);
+                g_opacityDirty = true;
+            }
+            if (g_spellEntryFadeAlpha >= 1.0f)
+                g_spellEntryFadeActive = false;
+        }
+
         // O modelo pertence exclusivamente à cena de preview. A aplicação
         // virtual inclui Lighting e Effect shaders, para que spells recebam
         // o mesmo fade de armas e demais itens.
         if (g_opacityDirty)
         {
-            ApplyPreviewOpacity(model, g_opacity);
+            ApplyPreviewOpacity(model, std::min(g_opacity,
+                g_spellEntryFadeActive ? g_spellEntryFadeAlpha : 1.0f));
             g_opacityDirty = false;
         }
 
@@ -1026,6 +1058,9 @@ namespace ItemPreview
         g_opacity = 1.0f;
         g_opacityDirty = true;
         g_previewMaterialsIsolated = false;
+        g_spellEntryFadeActive = false;
+        g_spellEntryFadeAlpha = 1.0f;
+        g_spellEntryFadeFrame = -1;
         g_uniqueID = 0;
         g_hasUniqueID = false;
 
