@@ -32,12 +32,12 @@ namespace Config
     bool g_slowTimeTop = true;
     bool g_slowTimeCentral = true;
     bool g_slowTimeBottom = true;
-    bool g_slowTimeDraw = false;
+    bool g_slowTimeDraw = true;
     bool g_specialEffects = false;
-    bool g_blurTop = false;
-    bool g_blurCentral = false;
-    bool g_blurBottom = false;
-    bool g_blurDraw = false;
+    bool g_blurTop = true;
+    bool g_blurCentral = true;
+    bool g_blurBottom = true;
+    bool g_blurDraw = true;
 
     bool g_showGameplayDescription = false;
     bool g_coloredPotions = true;
@@ -1438,12 +1438,12 @@ namespace Config
         g_slowTimeTop = true;
         g_slowTimeCentral = true;
         g_slowTimeBottom = true;
-        g_slowTimeDraw = false;
+        g_slowTimeDraw = true;
         g_specialEffects = false;
-        g_blurTop = false;
-        g_blurCentral = false;
-        g_blurBottom = false;
-        g_blurDraw = false;
+        g_blurTop = true;
+        g_blurCentral = true;
+        g_blurBottom = true;
+        g_blurDraw = true;
         g_showGameplayDescription = false;
         g_coloredPotions = true;
         g_coloredMagicSchools = false;
@@ -1497,8 +1497,8 @@ namespace Config
         g_bottomOpacity = kDefaultBottomOpacity;
         g_fontSizeScale = kDefaultFontSizeScale;
         g_drawMarkDistance = kDefaultDrawMarkDistance;
-        g_drawEffectsGameplay = true;
-        g_drawEffectsEditor = true;
+        g_drawEffectsGameplay = false;
+        g_drawEffectsEditor = false;
         g_drawEdgeEffectStyle = 0;
         g_drawEdgeEffectSize = kDefaultDrawEdgeEffectSize;
         g_drawEdgeEffectOpacity = kDefaultDrawEdgeEffectOpacity;
