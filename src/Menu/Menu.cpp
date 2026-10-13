@@ -4479,8 +4479,6 @@ namespace Menu
             addRect({ g_altConfigKeyButtonMin, g_altConfigKeyButtonMax });
             addRect(g_altConfigKeyResetHitbox);
         
-            add(g_automaticArrowButtonCenter, g_automaticArrowButtonRadius);
-        
             for (const auto& hitbox : g_generalSliderHitboxes) addRect(hitbox);
             for (const auto& hitbox : g_generalResetHitboxes) addRect(hitbox);
         
@@ -4491,6 +4489,8 @@ namespace Menu
         {
         
             addRect({ g_languageButtonMin, g_languageButtonMax });
+            add(g_automaticArrowButtonCenter,
+                std::max(12.0f, g_automaticArrowButtonRadius));
         
             for (const auto& center : g_slowTimeScopeCenters)
                 add(center, std::max(6.0f, g_slowTimeScopeRadius));
@@ -5259,18 +5259,6 @@ namespace Menu
         
             targets.push_back(secondKey);
         
-            LayoutSliderHitbox automatic{};
-        
-            automatic.min = ImVec2(
-                g_automaticArrowButtonCenter.x - g_automaticArrowButtonRadius,
-                g_automaticArrowButtonCenter.y - g_automaticArrowButtonRadius);
-        
-            automatic.max = ImVec2(
-                g_automaticArrowButtonCenter.x + g_automaticArrowButtonRadius,
-                g_automaticArrowButtonCenter.y + g_automaticArrowButtonRadius);
-        
-            targets.push_back(automatic);
-        
             targets.insert(targets.end(),
                 g_generalSliderHitboxes.begin(), g_generalSliderHitboxes.end());
         
@@ -5290,6 +5278,8 @@ namespace Menu
             language.min = g_languageButtonMin;
             language.max = g_languageButtonMax;
             targets.push_back(language);
+            addCircle(g_automaticArrowButtonCenter,
+                std::max(g_automaticArrowButtonRadius, 18.0f));
         
             for (const auto& center : g_slowTimeScopeCenters)
                 addCircle(center, std::max(g_slowTimeScopeRadius, 10.0f));
@@ -22451,20 +22441,6 @@ namespace Menu
             return true;
         }
 
-        const float autoDx = mouse.x - g_automaticArrowButtonCenter.x;
-        const float autoDy = mouse.y - g_automaticArrowButtonCenter.y;
-        const bool automaticHovered =
-            autoDx * autoDx + autoDy * autoDy <=
-                g_automaticArrowButtonRadius * g_automaticArrowButtonRadius;
-
-        if (automaticHovered)
-        {
-            Config::g_automaticArrowMenus = !Config::g_automaticArrowMenus;
-            Config::SaveConfig();
-            return true;
-        }
-
-
         if (!primaryHovered && !secondaryHovered && !altConfigHovered)
         {
             return false;
@@ -22507,6 +22483,17 @@ namespace Menu
 
         if (g_settingsSection == SettingsSection::Gameplay)
         {
+            const float automaticDx =
+                g_settingsMousePos.x - g_automaticArrowButtonCenter.x;
+            const float automaticDy =
+                g_settingsMousePos.y - g_automaticArrowButtonCenter.y;
+            if (automaticDx * automaticDx + automaticDy * automaticDy <=
+                g_automaticArrowButtonRadius * g_automaticArrowButtonRadius)
+            {
+                Config::g_automaticArrowMenus = !Config::g_automaticArrowMenus;
+                Config::SaveConfig();
+                return true;
+            }
             if (toggleDrawOption(0, Config::g_drawEffectsGameplay) ||
                 toggleDrawOption(1, Config::g_drawEffectsEditor) ||
                 toggleDrawOption(2, Config::g_showDrawMark))
@@ -23182,35 +23169,6 @@ namespace Menu
         draw->AddCircle(altResetCenter, 6.5f * controlScale,
             FadeColor(IM_COL32(135, 132, 126, altResetHovered ? 220 : 120), alpha), 20, 1.0f);
 
-        const float automaticOptionY =
-            g_altConfigKeyButtonMax.y + 25.0f * controlScale;
-        
-        g_automaticArrowButtonRadius = 10.0f * controlScale;    
-        g_automaticArrowButtonCenter = ImVec2(x + g_automaticArrowButtonRadius, automaticOptionY);
-    
-        const float autoDx = mouse.x - g_automaticArrowButtonCenter.x;
-    
-        const float autoDy = mouse.y - g_automaticArrowButtonCenter.y;
-    
-        const bool automaticHovered = autoDx * autoDx + autoDy * autoDy <=
-            g_automaticArrowButtonRadius * g_automaticArrowButtonRadius;
-    
-        const ImU32 automaticBackground = Config::g_automaticArrowMenus
-            ? IM_COL32(235, 235, 235, 140) : IM_COL32(20, 20, 25, 235);
-        
-        draw->AddCircleFilled(g_automaticArrowButtonCenter,
-            g_automaticArrowButtonRadius, FadeColor(automaticBackground, alpha), 40);
-        
-        draw->AddCircle(g_automaticArrowButtonCenter,
-            g_automaticArrowButtonRadius + (automaticHovered ? 2.0f : 0.0f),
-            FadeColor(IM_COL32(255, 255, 255, automaticHovered ? 210 : 100), alpha), 40, 1.5f);
-        
-        DrawTextWithShadow(draw,
-            ImVec2(g_automaticArrowButtonCenter.x + g_automaticArrowButtonRadius + 12.0f,
-                automaticOptionY - ImGui::GetFontSize() * 0.5f),
-            white, Language::Get("automatic_arrow_menus").c_str(), alpha);
-
-
         struct GeneralSliderData
         {
             const char* label;
@@ -23234,7 +23192,7 @@ namespace Menu
         
         const float trackWidth = availableWidth - resetAreaWidth;
         
-        const float slidersTop = automaticOptionY + 34.0f * controlScale;
+        const float slidersTop = g_altConfigKeyButtonMax.y + 25.0f * controlScale;
         
         for (std::size_t i = 0; i < std::size(sliders); ++i)
         {
@@ -23577,7 +23535,31 @@ namespace Menu
             ImVec2(x + width, menuTitleY + ImGui::GetFontSize() * 0.5f),
             FadeColor(IM_COL32(215, 195, 150, 90), alpha), 1.0f);
 
-        const float blurTitleY = menuTitleY + 31.0f * controlScale;
+        const float automaticArrowOptionY = menuTitleY + 32.0f * controlScale;
+        g_automaticArrowButtonRadius = buttonRadius;
+        g_automaticArrowButtonCenter = ImVec2(
+            x + 13.0f * controlScale, automaticArrowOptionY);
+        const float automaticArrowDx =
+            g_settingsMousePos.x - g_automaticArrowButtonCenter.x;
+        const float automaticArrowDy =
+            g_settingsMousePos.y - g_automaticArrowButtonCenter.y;
+        const bool automaticArrowHovered =
+            automaticArrowDx * automaticArrowDx + automaticArrowDy * automaticArrowDy <=
+            buttonRadius * buttonRadius;
+        draw->AddCircleFilled(g_automaticArrowButtonCenter, buttonRadius,
+            FadeColor(Config::g_automaticArrowMenus
+                ? IM_COL32(235, 235, 235, 140)
+                : IM_COL32(20, 20, 25, 235), alpha), 40);
+        draw->AddCircle(g_automaticArrowButtonCenter,
+            buttonRadius + (automaticArrowHovered ? 2.0f : 0.0f),
+            FadeColor(IM_COL32(255, 255, 255,
+                automaticArrowHovered ? 210 : 100), alpha), 40, 1.5f);
+        DrawTextWithShadow(draw,
+            ImVec2(g_automaticArrowButtonCenter.x + buttonRadius + 12.0f * controlScale,
+                automaticArrowOptionY - ImGui::GetFontSize() * 0.5f),
+            white, Language::Get("automatic_arrow_menus").c_str(), alpha);
+
+        const float blurTitleY = automaticArrowOptionY + 32.0f * controlScale;
         
         const char* blurTitle = Language::Get("blur").c_str();
         
