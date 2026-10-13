@@ -605,6 +605,17 @@ namespace Menu
     static float g_settingsBackdropFadeDuration = 0.0f;
     static bool g_settingsBackdropClosingOnly = false;
 
+    // O editor de radial troca a máscara elíptica do WheelSettings por um
+    // gradiente ancorado no painel direito. Mantemos as duas máscaras durante
+    // a passagem para que a troca não tenha um corte visual.
+    static float g_trackEditorBackdropT = 0.0f;
+    static float g_trackEditorBackdropStart = 0.0f;
+    static float g_trackEditorBackdropTarget = 0.0f;
+    static float g_trackEditorBackdropElapsed = 1.0f;
+    static float g_trackEditorBackdropDuration = 0.0f;
+    static bool g_trackEditorBackdropWasOpen = false;
+    static float g_trackEditorPanelFade = 0.0f;
+
     static void TransitionSettingsBackdrop(float target, float duration)
     {
         g_settingsBackdropFadeStart = g_settingsBackdropFade;
@@ -625,6 +636,46 @@ namespace Menu
                 (g_settingsBackdropFadeTarget - g_settingsBackdropFadeStart) * t;
         }
 
+    }
+
+    static void TransitionTrackEditorBackdrop(float target, float duration)
+    {
+        g_trackEditorBackdropStart = g_trackEditorBackdropT;
+        g_trackEditorBackdropTarget = std::clamp(target, 0.0f, 1.0f);
+        g_trackEditorBackdropDuration = std::max(duration, 0.001f);
+        g_trackEditorBackdropElapsed = 0.0f;
+    }
+
+    static void UpdateTrackEditorBackdrop(float dt, bool editorOpen,
+        const ImVec2& mouse, float panelLeft)
+    {
+        if (editorOpen != g_trackEditorBackdropWasOpen)
+        {
+            // A ida acompanha a saída lenta do backdrop central; a volta é
+            // mais curta, devolvendo o WheelSettings sem um salto brusco.
+            TransitionTrackEditorBackdrop(editorOpen ? 1.0f : 0.0f,
+                editorOpen ? 0.8f : 0.5f);
+            g_trackEditorBackdropWasOpen = editorOpen;
+        }
+
+        if (g_trackEditorBackdropElapsed < g_trackEditorBackdropDuration)
+        {
+            g_trackEditorBackdropElapsed = std::min(
+                g_trackEditorBackdropDuration, g_trackEditorBackdropElapsed + dt);
+            float t = g_trackEditorBackdropElapsed / g_trackEditorBackdropDuration;
+            t = t * t * (3.0f - 2.0f * t);
+            g_trackEditorBackdropT = g_trackEditorBackdropStart +
+                (g_trackEditorBackdropTarget - g_trackEditorBackdropStart) * t;
+        }
+
+        // O painel ocupa toda a altura, portanto a proximidade horizontal é
+        // suficiente. Fora de 360 px à esquerda, o escurecimento direito
+        // desaparece por completo.
+        const float distance = std::max(0.0f, panelLeft - mouse.x);
+        float targetFade = std::clamp(1.0f - distance / 360.0f, 0.0f, 1.0f);
+        targetFade = targetFade * targetFade * (3.0f - 2.0f * targetFade);
+        const float follow = 1.0f - std::exp(-7.0f * dt);
+        g_trackEditorPanelFade += (targetFade - g_trackEditorPanelFade) * follow;
     }
 
     static bool g_quickDrawGameplayActive = false;
@@ -26313,6 +26364,11 @@ namespace Menu
         // without queuing a second event for the following frame.
         io.MousePos = g_settingsMousePos;
 
+        const ImVec2 editorViewportMax =
+            Resolution::ToVirtual(Resolution::GetRealSize());
+        UpdateTrackEditorBackdrop(dt, TrackEditor::IsOpen(),
+            g_settingsMousePos, editorViewportMax.x - 390.0f);
+
         // ============================================================
         // HITBOXES
         // ============================================================
@@ -26394,7 +26450,10 @@ namespace Menu
         // every physical pixel, including letterbox/pillarbox areas.
         bg->PushClipRect(backdropMin, backdropMax, false);
 
-        const float backdropAlpha = alpha * g_settingsBackdropFade;
+        // Ao entrar no editor, a máscara central é reduzida enquanto o
+        // gradiente direito abaixo assume o escurecimento.
+        const float backdropAlpha = alpha * g_settingsBackdropFade *
+            (1.0f - g_trackEditorBackdropT);
 
         ImVec2 backdropUvMin{};
         ImVec2 backdropUvMax{};
@@ -26463,6 +26522,24 @@ namespace Menu
             IM_COL32(0, 0, 0, static_cast<int>(115.0f * backdropAlpha)),
             IM_COL32(0, 0, 0, 0)
         );
+
+        // Backdrop exclusivo do Custom Radial Editor: nasce na borda direita
+        // e se estende para trás do painel. Não existe equivalente à esquerda.
+        const float editorBackdropAlpha = alpha * g_settingsBackdropFade *
+            g_trackEditorBackdropT * g_trackEditorPanelFade;
+        if (editorBackdropAlpha > 0.001f)
+        {
+            const float editorPanelLeft = editorViewportMax.x - 390.0f;
+            const float gradientLeft = std::max(backdropMin.x,
+                editorPanelLeft - 360.0f);
+            const int rightAlpha = static_cast<int>(185.0f * editorBackdropAlpha);
+            bg->AddRectFilledMultiColor(
+                ImVec2(gradientLeft, backdropMin.y), backdropMax,
+                IM_COL32(0, 0, 0, 0),
+                IM_COL32(0, 0, 0, rightAlpha),
+                IM_COL32(0, 0, 0, rightAlpha),
+                IM_COL32(0, 0, 0, 0));
+        }
 
         bg->PopClipRect();
 
@@ -27332,6 +27409,13 @@ namespace Menu
             g_settingsBackdropFadeElapsed = 1.0f;
             g_settingsBackdropFadeDuration = 0.0f;
             g_settingsBackdropClosingOnly = false;
+            g_trackEditorBackdropT = 0.0f;
+            g_trackEditorBackdropStart = 0.0f;
+            g_trackEditorBackdropTarget = 0.0f;
+            g_trackEditorBackdropElapsed = 1.0f;
+            g_trackEditorBackdropDuration = 0.0f;
+            g_trackEditorBackdropWasOpen = false;
+            g_trackEditorPanelFade = 0.0f;
         }
         else if (!settingsOpen && wasSettingsOpen)
         {
