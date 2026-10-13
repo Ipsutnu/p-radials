@@ -38,6 +38,8 @@ namespace ItemPreview
         float g_itemPosZ = 0.0f;
         float g_itemScale = 1.0f;
         float g_sizeScale = 1.0f;
+        float g_opacity = 1.0f;
+        bool g_opacityDirty = true;
 
         float g_rotationX = 0.0f;
         float g_rotationY = 0.0f;
@@ -612,6 +614,16 @@ namespace ItemPreview
         g_scaleNormalized = false;
     }
 
+    void SetOpacity(float a_opacity)
+    {
+        const float next = std::clamp(a_opacity, 0.0f, 1.0f);
+        if (std::abs(next - g_opacity) <= 0.0001f)
+            return;
+
+        g_opacity = next;
+        g_opacityDirty = true;
+    }
+
     void InvalidateSizeScale()
     {
         g_scaleNormalized = false;
@@ -700,6 +712,7 @@ namespace ItemPreview
         g_hasUniqueID = hasUniqueID;
 
         g_visible = true;
+        g_opacityDirty = true;
 
         return true;
     }
@@ -807,6 +820,15 @@ namespace ItemPreview
             g_hudPositionDirty = false;
         }
 
+        // O modelo pertence exclusivamente à cena de preview. Alterar a
+        // transparência aqui permite que ele acompanhe o fade do Hub sem
+        // encolher, reposicionar ou afetar os objetos do mundo.
+        if (g_opacityDirty)
+        {
+            model->UpdateMaterialAlpha(g_opacity, false);
+            g_opacityDirty = false;
+        }
+
         // Rotação contínua
         if (g_rotationDirection != 0.0f)
         {
@@ -870,6 +892,8 @@ namespace ItemPreview
         g_visible = false;
         g_form = nullptr;
         g_modelReady = false;
+        g_opacity = 1.0f;
+        g_opacityDirty = true;
         g_uniqueID = 0;
         g_hasUniqueID = false;
 

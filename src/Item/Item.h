@@ -34,6 +34,9 @@ namespace ItemPreview
 
     void SetHudPosition(ImVec2 a_screenPos);
     void SetSizeScale(float a_scale);
+    // Opacidade transitória do preview 3D. Usada pelo fechamento suave do
+    // WheelSettings, sem alterar a escala ou a posição do item.
+    void SetOpacity(float a_opacity);
     void InvalidateSizeScale();
 
     void SetRotationDirection(float a_direction);

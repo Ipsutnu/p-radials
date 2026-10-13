@@ -594,6 +594,26 @@ namespace Menu
     static ImVec2 g_quickDrawEditorResetMax{};
     static ImVec2 g_quickDrawEditorOkMin{};
     static ImVec2 g_quickDrawEditorOkMax{};
+    static bool g_quickDrawSettingsExpanded = false;
+    static float g_quickDrawSettingsOpenT = 0.0f;
+    static ImVec2 g_quickDrawSettingsButtonCenter{};
+    static float g_quickDrawSettingsButtonRadius = 13.0f;
+    static float g_quickDrawSettingsClickFlash = 0.0f;
+    static ImVec2 g_quickDrawSettingsPanelMin{};
+    static ImVec2 g_quickDrawSettingsPanelMax{};
+    static std::array<ImVec2, 2> g_quickDrawSettingsToggleCenters{};
+    static std::array<float, 2> g_quickDrawSettingsToggleRadii{};
+    static ImVec2 g_quickDrawSettingsStyleMin{};
+    static ImVec2 g_quickDrawSettingsStyleMax{};
+    static ImVec2 g_quickDrawSettingsSizeMin{};
+    static ImVec2 g_quickDrawSettingsSizeMax{};
+    static ImVec2 g_quickDrawSettingsOpacityMin{};
+    static ImVec2 g_quickDrawSettingsOpacityMax{};
+    enum class QuickDrawSettingsSlider { None, Style, Size, Opacity };
+    static QuickDrawSettingsSlider g_quickDrawSettingsActiveSlider =
+        QuickDrawSettingsSlider::None;
+    static float g_quickDrawEffectPreviewUntil = 0.0f;
+    static int g_quickDrawEffectPreviewStyle = -1;
 
     // Fade do fundo do WheelSettings. Ele é separado do alpha geral do menu
     // porque o Quick Draw precisa esconder e restaurar somente o escurecimento
@@ -604,6 +624,15 @@ namespace Menu
     static float g_settingsBackdropFadeElapsed = 1.0f;
     static float g_settingsBackdropFadeDuration = 0.0f;
     static bool g_settingsBackdropClosingOnly = false;
+
+    // A segunda abertura do fade (a que protege o preview 3D) usa a mesma
+    // inércia de tamanho da máscara do Blur. Assim a troca de item não corta
+    // instantaneamente a elipse escura atrás dele.
+    static ItemPreview::BlurMask g_settingsBackdropAnimatedItemMask{};
+    static bool g_hasSettingsBackdropAnimatedItemMask = false;
+    static int g_settingsBackdropMaskAnimationFrame = -1;
+    static constexpr float kSettingsBackdropMaskResizeSpeed = 4.0f;
+    static constexpr float kSettingsBackdropMaskCloseSpeed = 3.0f;
 
     // O editor de radial troca a máscara elíptica do WheelSettings por um
     // gradiente ancorado no painel direito. Mantemos as duas máscaras durante
@@ -636,6 +665,83 @@ namespace Menu
                 (g_settingsBackdropFadeTarget - g_settingsBackdropFadeStart) * t;
         }
 
+    }
+
+    static void ResetSettingsBackdropItemMask()
+    {
+        g_settingsBackdropAnimatedItemMask = {};
+        g_hasSettingsBackdropAnimatedItemMask = false;
+        g_settingsBackdropMaskAnimationFrame = -1;
+    }
+
+    static bool GetAnimatedSettingsBackdropItemMask(float dt,
+        ItemPreview::BlurMask& result)
+    {
+        ItemPreview::BlurMask target{};
+        const bool hasTarget = ItemPreview::GetBlurMask(target);
+
+        // Frame Generation pode apresentar a mesma UI mais de uma vez. Como
+        // no Blur, avançamos a interpolação somente uma vez por frame ImGui.
+        const int frame = ImGui::GetFrameCount();
+        const bool advance = frame != g_settingsBackdropMaskAnimationFrame;
+        if (advance)
+            g_settingsBackdropMaskAnimationFrame = frame;
+
+        const auto animateRadii = [&](const ImVec2& radii, float speed) {
+            if (!advance)
+                return;
+            const float clampedDt = std::clamp(dt, 0.0f, 0.05f);
+            const float factor = 1.0f - std::exp(-speed * clampedDt);
+            g_settingsBackdropAnimatedItemMask.radii.x +=
+                (radii.x - g_settingsBackdropAnimatedItemMask.radii.x) * factor;
+            g_settingsBackdropAnimatedItemMask.radii.y +=
+                (radii.y - g_settingsBackdropAnimatedItemMask.radii.y) * factor;
+        };
+
+        if (hasTarget)
+        {
+            if (!g_hasSettingsBackdropAnimatedItemMask)
+            {
+                // Ao selecionar o primeiro item, a abertura não pode surgir
+                // pronta: nasce no centro do preview e cresce até o raio real.
+                g_settingsBackdropAnimatedItemMask.center = target.center;
+                g_settingsBackdropAnimatedItemMask.radii = {};
+                g_hasSettingsBackdropAnimatedItemMask = true;
+                animateRadii(target.radii, kSettingsBackdropMaskResizeSpeed);
+            }
+            else
+            {
+                animateRadii(target.radii, kSettingsBackdropMaskResizeSpeed);
+                // A posição acompanha o preview imediatamente, como no Blur;
+                // só o tamanho recebe a inércia que elimina o clipping.
+                g_settingsBackdropAnimatedItemMask.center = target.center;
+            }
+
+            result = g_settingsBackdropAnimatedItemMask;
+            return true;
+        }
+
+        if (!g_hasSettingsBackdropAnimatedItemMask)
+            return false;
+
+        if (ItemPreview::IsVisible())
+        {
+            // Durante a breve troca de geometria entre dois itens, conserva a
+            // última abertura em vez de fechar e reabrir num único frame.
+            result = g_settingsBackdropAnimatedItemMask;
+            return true;
+        }
+
+        animateRadii({}, kSettingsBackdropMaskCloseSpeed);
+        if (g_settingsBackdropAnimatedItemMask.radii.x <= 0.01f &&
+            g_settingsBackdropAnimatedItemMask.radii.y <= 0.01f)
+        {
+            ResetSettingsBackdropItemMask();
+            return false;
+        }
+
+        result = g_settingsBackdropAnimatedItemMask;
+        return true;
     }
 
     static void TransitionTrackEditorBackdrop(float target, float duration)
@@ -1221,6 +1327,8 @@ namespace Menu
     static ImVec2 g_altConfigKeyButtonMax{ 0.0f, 0.0f };
     static ImVec2 g_automaticArrowButtonCenter{ 0.0f, 0.0f };
     static float g_automaticArrowButtonRadius = 0.0f;
+    static ImVec2 g_pauseGameDuringHubButtonCenter{ 0.0f, 0.0f };
+    static float g_pauseGameDuringHubButtonRadius = 0.0f;
     static ImVec2 g_radialAnimationButtonMin{ 0.0f, 0.0f };
     static ImVec2 g_radialAnimationButtonMax{ 0.0f, 0.0f };
     static bool g_radialAnimationListOpen = false;
@@ -4572,6 +4680,8 @@ namespace Menu
         {
         
             addRect({ g_languageButtonMin, g_languageButtonMax });
+            add(g_pauseGameDuringHubButtonCenter,
+                std::max(12.0f, g_pauseGameDuringHubButtonRadius));
             add(g_automaticArrowButtonCenter,
                 std::max(12.0f, g_automaticArrowButtonRadius));
         
@@ -5363,6 +5473,8 @@ namespace Menu
             targets.push_back(language);
             addCircle(g_automaticArrowButtonCenter,
                 std::max(g_automaticArrowButtonRadius, 18.0f));
+            addCircle(g_pauseGameDuringHubButtonCenter,
+                std::max(g_pauseGameDuringHubButtonRadius, 18.0f));
         
             for (const auto& center : g_slowTimeScopeCenters)
                 addCircle(center, std::max(g_slowTimeScopeRadius, 10.0f));
@@ -15231,6 +15343,11 @@ namespace Menu
             g_quickDrawEditorStroke = *stored;
         g_quickDrawEditorDrawing = false;
         g_quickDrawEditorOpen = true;
+        g_quickDrawSettingsExpanded = false;
+        g_quickDrawSettingsOpenT = 0.0f;
+        g_quickDrawSettingsActiveSlider = QuickDrawSettingsSlider::None;
+        g_quickDrawEffectPreviewUntil = 0.0f;
+        g_quickDrawEffectPreviewStyle = -1;
         // O fundo do WheelSettings desaparece devagar ao entrar no editor,
         // preservando apenas o Quick Draw sobre o jogo.
         TransitionSettingsBackdrop(0.0f, 0.8f);
@@ -15262,6 +15379,163 @@ namespace Menu
     bool IsQuickDrawEditorOpen()
     {
         return g_quickDrawEditorOpen;
+    }
+
+    static void DrawQuickDrawSettingsPanel(ImDrawList* draw, const ImVec2& center,
+        float alpha)
+    {
+        if (!draw)
+            return;
+
+        const float dt = std::clamp(ImGui::GetIO().DeltaTime, 0.0f, 0.05f);
+        const float openTarget = g_quickDrawSettingsExpanded ? 1.0f : 0.0f;
+        g_quickDrawSettingsOpenT = AnimateSettingsValue(g_quickDrawSettingsOpenT,
+            openTarget, g_quickDrawSettingsExpanded ? 8.0f : 10.0f, dt);
+
+        // O painel ocupa o mesmo disco que delimita o gesto, apenas alguns
+        // pixels para dentro para não cobrir a linha branca de referência.
+        const float panelRadius = QUICK_DRAW_EDITOR_RADIUS - 2.5f;
+        // O seletor fica sob o círculo, no centro do arco inferior.
+        g_quickDrawSettingsButtonCenter = ImVec2(center.x,
+            center.y + QUICK_DRAW_EDITOR_RADIUS + 66.0f);
+
+        const float buttonDx = g_settingsMousePos.x - g_quickDrawSettingsButtonCenter.x;
+        const float buttonDy = g_settingsMousePos.y - g_quickDrawSettingsButtonCenter.y;
+        const bool buttonHovered = buttonDx * buttonDx + buttonDy * buttonDy <=
+            g_quickDrawSettingsButtonRadius * g_quickDrawSettingsButtonRadius;
+        g_quickDrawSettingsClickFlash = std::max(0.0f,
+            g_quickDrawSettingsClickFlash - dt * 5.5f);
+        const float buttonAlpha = alpha * (0.84f + 0.16f * g_quickDrawSettingsOpenT);
+        const float buttonLight = std::max(buttonHovered ? 0.70f : 0.0f,
+            g_quickDrawSettingsClickFlash);
+        draw->AddCircleFilled(g_quickDrawSettingsButtonCenter,
+            g_quickDrawSettingsButtonRadius + (buttonHovered ? 1.5f : 0.0f),
+            FadeColor(buttonLight > 0.0f
+                    ? IM_COL32(255, 255, 255, static_cast<int>(210.0f * buttonLight))
+                    : IM_COL32(20, 20, 25, 235),
+                buttonAlpha), 32);
+        draw->AddCircle(g_quickDrawSettingsButtonCenter,
+            g_quickDrawSettingsButtonRadius + (buttonHovered ? 1.5f : 0.0f),
+            FadeColor(IM_COL32(255, 255, 255,
+                buttonLight > 0.0f ? 255 : 150), buttonAlpha),
+            32, 1.25f);
+
+        if (g_quickDrawSettingsOpenT <= 0.01f)
+        {
+            g_quickDrawSettingsPanelMin = {};
+            g_quickDrawSettingsPanelMax = {};
+            return;
+        }
+
+        // Diferente da versão anterior, não há crescimento geométrico: o
+        // disco já nasce no tamanho final e somente ganha/perde opacidade.
+        const float contentT = g_quickDrawSettingsOpenT * g_quickDrawSettingsOpenT *
+            (3.0f - 2.0f * g_quickDrawSettingsOpenT);
+        g_quickDrawSettingsPanelMin = ImVec2(center.x - panelRadius,
+            center.y - panelRadius);
+        g_quickDrawSettingsPanelMax = ImVec2(center.x + panelRadius,
+            center.y + panelRadius);
+        draw->AddCircleFilled(center, panelRadius,
+            FadeColor(IM_COL32(16, 17, 22, 100), alpha * contentT), 96);
+        draw->AddCircle(center, panelRadius,
+            FadeColor(IM_COL32(205, 185, 140, 135), alpha * contentT), 96, 1.0f);
+
+        // Daqui em diante todos os controles acompanham somente o fade do
+        // disco. Nenhuma coordenada depende do progresso da animação.
+        alpha *= contentT;
+        // Os controles ficam em uma coluna central fixa. Em monitores altos
+        // o círculo pode ser enorme, mas a área legível não deve acompanhar
+        // todo esse diâmetro nem invadir o arco lateral.
+        const float width = std::min(280.0f, panelRadius * 1.6f);
+        const float x = center.x - width * 0.5f;
+        const ImU32 white = IM_COL32(235, 230, 215, 255);
+        const ImU32 fadedWhite = FadeColor(white, alpha);
+        const ImU32 fadedMuted = FadeColor(IM_COL32(180, 165, 130, 230), alpha);
+        const float now = static_cast<float>(ImGui::GetTime());
+
+        const auto drawToggle = [&](std::size_t index, float y, bool enabled,
+            const char* label) {
+            const ImVec2 toggleCenter(x + 11.0f, y);
+            g_quickDrawSettingsToggleCenters[index] = toggleCenter;
+            g_quickDrawSettingsToggleRadii[index] = 10.0f;
+            const float dx = g_settingsMousePos.x - toggleCenter.x;
+            const float dy = g_settingsMousePos.y - toggleCenter.y;
+            const bool hovered = dx * dx + dy * dy <= 100.0f;
+            draw->AddCircleFilled(toggleCenter, hovered ? 11.5f : 10.0f,
+                FadeColor(enabled ? IM_COL32(235, 235, 235, 140) : IM_COL32(20, 20, 25, 235), alpha), 32);
+            draw->AddCircle(toggleCenter, hovered ? 11.5f : 10.0f,
+                FadeColor(IM_COL32(255, 255, 255, hovered ? 230 : 135), alpha), 32, 1.25f);
+            DrawTextWithShadow(draw, ImVec2(x + 31.0f, y - ImGui::GetFontSize() * 0.5f),
+                fadedWhite, label, alpha);
+        };
+        drawToggle(0, center.y - 118.0f, Config::g_drawEffectsGameplay,
+            Language::Get("draw_effects_gameplay").c_str());
+        drawToggle(1, center.y - 84.0f, Config::g_drawEffectsEditor,
+            Language::Get("draw_effects_editor").c_str());
+
+        constexpr int styleCount = QuickDrawMagicEffects::kEdgeEffectStyleCount;
+        static constexpr std::array<const char*, styleCount> styleLabels{
+            "draw_edge_none", "draw_edge_shock", "draw_edge_sine", "draw_edge_squares",
+            "draw_edge_arrows", "draw_edge_prisms", "draw_edge_worldbreaker" };
+        const float styleY = center.y - 40.0f;
+        const float trackY = styleY + 42.0f;
+        g_quickDrawSettingsStyleMin = ImVec2(x, styleY - 4.0f);
+        g_quickDrawSettingsStyleMax = ImVec2(x + width, trackY + 10.0f);
+        const float cellWidth = width / static_cast<float>(styleCount);
+        if (g_quickDrawSettingsActiveSlider == QuickDrawSettingsSlider::Style)
+        {
+            const int previous = Config::g_drawEdgeEffectStyle;
+            const float t = std::clamp((g_settingsMousePos.x - x) / width, 0.0f, 1.0f);
+            Config::g_drawEdgeEffectStyle = std::clamp(static_cast<int>(t * styleCount), 0, styleCount - 1);
+            if (previous != Config::g_drawEdgeEffectStyle)
+            {
+                QuickDrawMagicEffects::ClearEdgeFlashes();
+                g_quickDrawEffectPreviewStyle = Config::g_drawEdgeEffectStyle;
+                g_quickDrawEffectPreviewUntil = now + 2.0f;
+            }
+        }
+        const char* styleName = Language::Get(styleLabels[Config::g_drawEdgeEffectStyle]).c_str();
+        DrawTextWithShadow(draw, ImVec2(x, styleY), fadedWhite,
+            Language::Get("draw_edge_effect").c_str(), alpha);
+        DrawTextWithShadow(draw, ImVec2(x, styleY + 20.0f),
+            fadedMuted, styleName, alpha);
+        draw->AddRectFilled(ImVec2(x, trackY - 6.0f), ImVec2(x + width, trackY + 6.0f),
+            FadeColor(IM_COL32(25, 26, 31, 235), alpha), 4.0f);
+        const float selectedX = x + cellWidth * static_cast<float>(Config::g_drawEdgeEffectStyle);
+        draw->AddRectFilled(ImVec2(selectedX + 0.5f, trackY - 5.5f),
+            ImVec2(selectedX + cellWidth - 0.2f, trackY + 5.5f),
+            FadeColor(IM_COL32(190, 184, 170, 225), alpha), 2.0f);
+
+        const auto drawSlider = [&](QuickDrawSettingsSlider slider, const char* label,
+            float& value, float minimum, float maximum, float y, ImVec2& hitMin, ImVec2& hitMax) {
+            const float sliderY = y + 26.0f;
+            hitMin = ImVec2(x, y - 4.0f);
+            hitMax = ImVec2(x + width, sliderY + 11.0f);
+            if (g_quickDrawSettingsActiveSlider == slider)
+            {
+                const float t = std::clamp((g_settingsMousePos.x - x) / width, 0.0f, 1.0f);
+                value = minimum + (maximum - minimum) * t;
+                g_quickDrawEffectPreviewStyle = Config::g_drawEdgeEffectStyle;
+                g_quickDrawEffectPreviewUntil = now + 0.20f;
+            }
+            value = std::clamp(value, minimum, maximum);
+            const float t = (value - minimum) / std::max(maximum - minimum, 0.001f);
+            const std::string valueText = std::format("{:.0f}%", value);
+            const ImVec2 valueSize = ImGui::CalcTextSize(valueText.c_str());
+            DrawTextWithShadow(draw, ImVec2(x, y), fadedWhite, label, alpha);
+            DrawTextWithShadow(draw, ImVec2(x + width - valueSize.x, y),
+                fadedMuted, valueText.c_str(), alpha);
+            draw->AddRectFilled(ImVec2(x, sliderY - 6.0f), ImVec2(x + width, sliderY + 6.0f),
+                FadeColor(IM_COL32(25, 26, 31, 235), alpha), 4.0f);
+            draw->AddRectFilled(ImVec2(x, sliderY - 6.0f), ImVec2(x + width * t, sliderY + 6.0f),
+                FadeColor(IM_COL32(190, 184, 170, 205), alpha), 4.0f);
+        };
+        drawSlider(QuickDrawSettingsSlider::Size, Language::Get("draw_edge_size").c_str(),
+            Config::g_drawEdgeEffectSize, 25.0f, 250.0f, center.y + 30.0f,
+            g_quickDrawSettingsSizeMin, g_quickDrawSettingsSizeMax);
+        drawSlider(QuickDrawSettingsSlider::Opacity, Language::Get("draw_edge_opacity").c_str(),
+            Config::g_drawEdgeEffectOpacity, 0.0f, 100.0f, center.y + 104.0f,
+            g_quickDrawSettingsOpacityMin, g_quickDrawSettingsOpacityMax);
     }
 
     static void DrawQuickDrawEditor(float alpha)
@@ -15302,40 +15576,59 @@ namespace Menu
         QuickDrawMagicEffects::DrawRelease(draw, alpha, ImGui::GetIO().DeltaTime,
             Config::g_drawEffectsEditor);
 
-        constexpr ImVec2 buttonSize(110.0f, 40.0f);
-        
-        const float buttonsY = center.y + QUICK_DRAW_EDITOR_RADIUS + 28.0f;
-        
-        g_quickDrawEditorResetMin = ImVec2(center.x - buttonSize.x - 8.0f, buttonsY);
-        g_quickDrawEditorResetMax = ImVec2(center.x - 8.0f, buttonsY + buttonSize.y);
-        g_quickDrawEditorOkMin = ImVec2(center.x + 8.0f, buttonsY);
-        g_quickDrawEditorOkMax = ImVec2(center.x + buttonSize.x + 8.0f, buttonsY + buttonSize.y);
+        // Preview isolado dos três controles de borda. Um novo estilo limpa
+        // os flashes do anterior antes de começar sua janela de dois segundos.
+        const float now = static_cast<float>(ImGui::GetTime());
+        if (!g_quickDrawEditorDrawing && now < g_quickDrawEffectPreviewUntil &&
+            g_quickDrawEffectPreviewStyle > 0)
+        {
+            const ImVec2 previewCursor(center.x + QUICK_DRAW_EDITOR_RADIUS * 0.72f,
+                center.y);
+            QuickDrawMagicEffects::DrawLive(draw, {}, center,
+                QUICK_DRAW_EDITOR_RADIUS, previewCursor, true, false, true,
+                g_quickDrawEffectPreviewStyle, Config::g_drawEdgeEffectSize,
+                Config::g_drawEdgeEffectOpacity, alpha, now);
+        }
 
-        const auto drawButton = [&](const ImVec2& min, const ImVec2& max,
-            const char* label) {
-            const bool hovered = PointInQuickDrawRect(g_settingsMousePos, min, max);
-        
-            draw->AddRectFilled(min, max, hovered
-                ? FadeColor(IM_COL32(235, 235, 235, 160), alpha)
-                : FadeColor(IM_COL32(42, 42, 42, 205), alpha), 3.0f);
-        
-            //draw->AddRect(min, max, FadeColor(hovered
-            //    ? IM_COL32(215, 195, 150, 255)
-            //    : IM_COL32(190, 190, 190, 190), alpha), 3.0f, 0, 1.0f);
-        
+        DrawQuickDrawSettingsPanel(draw, center, alpha);
+
+        const float r = QUICK_DRAW_EDITOR_RADIUS;
+        const ImVec2 resetCenter(center.x - r * 0.47f, center.y + r * 1.03f);
+        const ImVec2 okCenter(center.x + r * 0.47f, center.y + r * 1.03f);
+
+        // As áreas de clique acompanham as duas placas inferiores, deixando
+        // livre o pequeno círculo de ajustes no encaixe entre elas.
+        g_quickDrawEditorResetMin = ImVec2(center.x - r * 0.90f, center.y + r * 0.65f);
+        g_quickDrawEditorResetMax = ImVec2(center.x - r * 0.12f, center.y + r * 1.25f);
+        g_quickDrawEditorOkMin = ImVec2(center.x + r * 0.12f, center.y + r * 0.65f);
+        g_quickDrawEditorOkMax = ImVec2(center.x + r * 0.90f, center.y + r * 1.25f);
+
+        const auto drawArcPlate = [&](bool left, const ImVec2& labelCenter,
+            const ImVec2& hitMin, const ImVec2& hitMax, const char* label) {
+            const float side = left ? -1.0f : 1.0f;
+            const bool hovered = PointInQuickDrawRect(g_settingsMousePos, hitMin, hitMax);
+            const ImVec2 outerTop(center.x + side * r * 0.84f, center.y + r * 0.63f);
+            const ImVec2 innerTop(center.x + side * r * 0.13f, center.y + r * 0.99f);
+            const ImVec2 innerBottom(center.x + side * r * 0.13f, center.y + r * 1.22f);
+            const ImVec2 outerBottom(center.x + side * r * 0.67f, center.y + r * 1.10f);
+
+            draw->AddQuadFilled(outerTop, innerTop, innerBottom, outerBottom,
+                hovered ? FadeColor(IM_COL32(235, 235, 235, 165), alpha)
+                        : FadeColor(IM_COL32(42, 42, 42, 212), alpha));
+            draw->AddQuad(outerTop, innerTop, innerBottom, outerBottom,
+                FadeColor(IM_COL32(205, 195, 170, hovered ? 175 : 105), alpha), 1.0f);
+
             const ImVec2 text = ImGui::CalcTextSize(label);
-        
-            draw->AddText(ImVec2((min.x + max.x - text.x) * 0.5f,
-                (min.y + max.y - text.y) * 0.5f),
+            draw->AddText(ImVec2(labelCenter.x - text.x * 0.5f,
+                    labelCenter.y - text.y * 0.5f),
                 FadeColor(hovered ? IM_COL32(25, 25, 25, 255) :
                     IM_COL32(240, 240, 240, 255), alpha), label);
         };
 
-        drawButton(g_quickDrawEditorResetMin, g_quickDrawEditorResetMax,
-            Language::Get("reset").c_str());
-        
-        drawButton(g_quickDrawEditorOkMin, g_quickDrawEditorOkMax,
-            Language::Get("ok").c_str());
+        drawArcPlate(true, resetCenter, g_quickDrawEditorResetMin,
+            g_quickDrawEditorResetMax, Language::Get("reset").c_str());
+        drawArcPlate(false, okCenter, g_quickDrawEditorOkMin,
+            g_quickDrawEditorOkMax, Language::Get("ok").c_str());
 
         // O editor usa sempre a posição central, independentemente do layout
         // configurado para o preview comum do Settings.
@@ -15364,6 +15657,11 @@ namespace Menu
 
         if (!pressed)
         {
+            if (g_quickDrawSettingsActiveSlider != QuickDrawSettingsSlider::None)
+            {
+                g_quickDrawSettingsActiveSlider = QuickDrawSettingsSlider::None;
+                Config::SaveConfig();
+            }
             const bool completedStroke = g_quickDrawEditorDrawing &&
                 g_quickDrawEditorStroke.size() > 1;
             g_quickDrawEditorDrawing = false;
@@ -15375,6 +15673,54 @@ namespace Menu
                     center, QUICK_DRAW_EDITOR_RADIUS, true);
                 Blur::TriggerPulse();
             }
+            return true;
+        }
+
+        const auto insideQuickRect = [&](const ImVec2& minimum, const ImVec2& maximum) {
+            return PointInQuickDrawRect(g_settingsMousePos, minimum, maximum);
+        };
+        const float settingsDx = g_settingsMousePos.x - g_quickDrawSettingsButtonCenter.x;
+        const float settingsDy = g_settingsMousePos.y - g_quickDrawSettingsButtonCenter.y;
+        if (settingsDx * settingsDx + settingsDy * settingsDy <=
+            (g_quickDrawSettingsButtonRadius + 3.0f) *
+                (g_quickDrawSettingsButtonRadius + 3.0f))
+        {
+            g_quickDrawSettingsExpanded = !g_quickDrawSettingsExpanded;
+            g_quickDrawSettingsClickFlash = 1.0f;
+            g_quickDrawSettingsActiveSlider = QuickDrawSettingsSlider::None;
+            return true;
+        }
+
+        if (g_quickDrawSettingsOpenT > 0.98f &&
+            insideQuickRect(g_quickDrawSettingsPanelMin, g_quickDrawSettingsPanelMax))
+        {
+            for (std::size_t i = 0; i < g_quickDrawSettingsToggleCenters.size(); ++i)
+            {
+                const float dx = g_settingsMousePos.x - g_quickDrawSettingsToggleCenters[i].x;
+                const float dy = g_settingsMousePos.y - g_quickDrawSettingsToggleCenters[i].y;
+                const float hitRadius = g_quickDrawSettingsToggleRadii[i] + 3.0f;
+                if (dx * dx + dy * dy <= hitRadius * hitRadius)
+                {
+                    if (i == 0)
+                        Config::g_drawEffectsGameplay = !Config::g_drawEffectsGameplay;
+                    else
+                        Config::g_drawEffectsEditor = !Config::g_drawEffectsEditor;
+                    Config::SaveConfig();
+                    return true;
+                }
+            }
+            if (insideQuickRect(g_quickDrawSettingsStyleMin, g_quickDrawSettingsStyleMax))
+                g_quickDrawSettingsActiveSlider = QuickDrawSettingsSlider::Style;
+            else if (insideQuickRect(g_quickDrawSettingsSizeMin, g_quickDrawSettingsSizeMax))
+                g_quickDrawSettingsActiveSlider = QuickDrawSettingsSlider::Size;
+            else if (insideQuickRect(g_quickDrawSettingsOpacityMin, g_quickDrawSettingsOpacityMax))
+                g_quickDrawSettingsActiveSlider = QuickDrawSettingsSlider::Opacity;
+            else
+                return true;
+
+            QuickDrawMagicEffects::ClearEdgeFlashes();
+            g_quickDrawEffectPreviewStyle = Config::g_drawEdgeEffectStyle;
+            g_quickDrawEffectPreviewUntil = static_cast<float>(ImGui::GetTime()) + 2.0f;
             return true;
         }
 
@@ -15406,6 +15752,10 @@ namespace Menu
         }
 
         // Cada novo clique inicia uma única linha e substitui a anterior.
+        // A abertura de qualquer gesto recolhe o painel de ajustes.
+        g_quickDrawSettingsExpanded = false;
+        g_quickDrawSettingsActiveSlider = QuickDrawSettingsSlider::None;
+        g_quickDrawEffectPreviewUntil = 0.0f;
         g_quickDrawEditorStroke.clear();
         g_quickDrawEditorDrawing = true;
         const ImVec2 center(ImGui::GetIO().DisplaySize.x * 0.5f,
@@ -22574,6 +22924,18 @@ namespace Menu
 
         if (g_settingsSection == SettingsSection::Gameplay)
         {
+            const float pauseDx =
+                g_settingsMousePos.x - g_pauseGameDuringHubButtonCenter.x;
+            const float pauseDy =
+                g_settingsMousePos.y - g_pauseGameDuringHubButtonCenter.y;
+            if (pauseDx * pauseDx + pauseDy * pauseDy <=
+                g_pauseGameDuringHubButtonRadius * g_pauseGameDuringHubButtonRadius)
+            {
+                SettingsMenu::WheelSettingsMenu::SetPauseGameDuringHub(
+                    !Config::g_pauseGameDuringHub);
+                Config::SaveConfig();
+                return true;
+            }
             const float automaticDx =
                 g_settingsMousePos.x - g_automaticArrowButtonCenter.x;
             const float automaticDy =
@@ -22585,29 +22947,16 @@ namespace Menu
                 Config::SaveConfig();
                 return true;
             }
-            if (toggleDrawOption(0, Config::g_drawEffectsGameplay) ||
-                toggleDrawOption(1, Config::g_drawEffectsEditor) ||
-                toggleDrawOption(2, Config::g_showDrawMark))
+            if (toggleDrawOption(2, Config::g_showDrawMark))
                 return true;
-            if (insideRect(g_drawEdgeEffectStyleHitbox.min, g_drawEdgeEffectStyleHitbox.max))
-            {
-                g_drawEdgeEffectStyleDragging = true;
-                return true;
-            }
-            const std::array<LayoutSlider, 3> drawSliders{
-                LayoutSlider::DrawEdgeEffectSize, LayoutSlider::DrawEdgeEffectOpacity,
+            const std::array<LayoutSlider, 1> drawSliders{
                 LayoutSlider::DrawMarkDistance };
             for (const auto slider : drawSliders)
             {
                 const auto index = static_cast<std::size_t>(slider);
                 if (insideRect(g_layoutResetHitboxes[index].min, g_layoutResetHitboxes[index].max))
                 {
-                    if (slider == LayoutSlider::DrawEdgeEffectSize)
-                        Config::g_drawEdgeEffectSize = Config::kDefaultDrawEdgeEffectSize;
-                    else if (slider == LayoutSlider::DrawEdgeEffectOpacity)
-                        Config::g_drawEdgeEffectOpacity = Config::kDefaultDrawEdgeEffectOpacity;
-                    else
-                        Config::g_drawMarkDistance = Config::kDefaultDrawMarkDistance;
+                    Config::g_drawMarkDistance = Config::kDefaultDrawMarkDistance;
                     Config::SaveConfig();
                     return true;
                 }
@@ -23626,7 +23975,31 @@ namespace Menu
             ImVec2(x + width, menuTitleY + ImGui::GetFontSize() * 0.5f),
             FadeColor(IM_COL32(215, 195, 150, 90), alpha), 1.0f);
 
-        const float automaticArrowOptionY = menuTitleY + 32.0f * controlScale;
+        const float pauseGameOptionY = menuTitleY + 32.0f * controlScale;
+        g_pauseGameDuringHubButtonRadius = buttonRadius;
+        g_pauseGameDuringHubButtonCenter = ImVec2(
+            x + 13.0f * controlScale, pauseGameOptionY);
+        const float pauseGameDx =
+            g_settingsMousePos.x - g_pauseGameDuringHubButtonCenter.x;
+        const float pauseGameDy =
+            g_settingsMousePos.y - g_pauseGameDuringHubButtonCenter.y;
+        const bool pauseGameHovered =
+            pauseGameDx * pauseGameDx + pauseGameDy * pauseGameDy <=
+            buttonRadius * buttonRadius;
+        draw->AddCircleFilled(g_pauseGameDuringHubButtonCenter, buttonRadius,
+            FadeColor(Config::g_pauseGameDuringHub
+                ? IM_COL32(235, 235, 235, 140)
+                : IM_COL32(20, 20, 25, 235), alpha), 40);
+        draw->AddCircle(g_pauseGameDuringHubButtonCenter,
+            buttonRadius + (pauseGameHovered ? 2.0f : 0.0f),
+            FadeColor(IM_COL32(255, 255, 255,
+                pauseGameHovered ? 210 : 100), alpha), 40, 1.5f);
+        DrawTextWithShadow(draw,
+            ImVec2(g_pauseGameDuringHubButtonCenter.x + buttonRadius + 12.0f * controlScale,
+                pauseGameOptionY - ImGui::GetFontSize() * 0.5f),
+            white, Language::Get("pause_game_during_hub").c_str(), alpha);
+
+        const float automaticArrowOptionY = pauseGameOptionY + 32.0f * controlScale;
         g_automaticArrowButtonRadius = buttonRadius;
         g_automaticArrowButtonCenter = ImVec2(
             x + 13.0f * controlScale, automaticArrowOptionY);
@@ -23951,70 +24324,6 @@ namespace Menu
                     center.y - ImGui::GetFontSize() * 0.5f),
                 white, label, alpha);
         };
-        drawDrawToggle(0, drawControlsY, Config::g_drawEffectsGameplay,
-            Language::Get("draw_effects_gameplay").c_str());
-        drawDrawToggle(1, drawControlsY + 34.0f * controlScale, Config::g_drawEffectsEditor,
-            Language::Get("draw_effects_editor").c_str());
-
-        const float effectStyleLabelY = drawControlsY + 58.0f * controlScale;
-        const float effectStyleTrackY = effectStyleLabelY + 25.0f * controlScale;
-        const float effectTrackMinX = x + 5.0f * controlScale;
-        const float effectTrackMaxX = x + width - 5.0f * controlScale;
-        const float effectTrackWidth = std::max(effectTrackMaxX - effectTrackMinX, 1.0f);
-        constexpr int effectStyleCount = QuickDrawMagicEffects::kEdgeEffectStyleCount;
-        g_drawEdgeEffectStyleHitbox = { ImVec2(x, effectStyleLabelY - 5.0f * controlScale),
-            ImVec2(x + width, effectStyleTrackY + 13.0f * controlScale) };
-        if (g_drawEdgeEffectStyleDragging)
-        {
-            const float normalized = std::clamp(
-                (g_settingsMousePos.x - effectTrackMinX) / effectTrackWidth, 0.0f, 1.0f);
-            Config::g_drawEdgeEffectStyle = std::clamp(
-                static_cast<int>(normalized * static_cast<float>(effectStyleCount)),
-                0, effectStyleCount - 1);
-        }
-        Config::g_drawEdgeEffectStyle = std::clamp(
-            Config::g_drawEdgeEffectStyle, 0, effectStyleCount - 1);
-        static constexpr std::array<const char*, effectStyleCount> effectStyleLabels{
-            "draw_edge_none", "draw_edge_shock", "draw_edge_sine",
-            "draw_edge_squares", "draw_edge_arrows", "draw_edge_prisms",
-            "draw_edge_worldbreaker" };
-        const char* effectStyleName = Language::Get(
-            effectStyleLabels[Config::g_drawEdgeEffectStyle]).c_str();
-        const ImVec2 effectStyleNameSize = ImGui::CalcTextSize(effectStyleName);
-        const bool effectStyleHovered = g_settingsMousePos.x >= g_drawEdgeEffectStyleHitbox.min.x &&
-            g_settingsMousePos.x <= g_drawEdgeEffectStyleHitbox.max.x &&
-            g_settingsMousePos.y >= g_drawEdgeEffectStyleHitbox.min.y &&
-            g_settingsMousePos.y <= g_drawEdgeEffectStyleHitbox.max.y;
-        DrawTextWithShadow(draw, ImVec2(x, effectStyleLabelY), white,
-            Language::Get("draw_edge_effect").c_str(), alpha);
-        DrawTextWithShadow(draw, ImVec2(x + width - effectStyleNameSize.x, effectStyleLabelY),
-            white, effectStyleName, alpha);
-        const float effectHalfHeight = 8.0f * controlScale;
-        draw->AddRectFilled(ImVec2(effectTrackMinX, effectStyleTrackY - effectHalfHeight),
-            ImVec2(effectTrackMaxX, effectStyleTrackY + effectHalfHeight),
-            FadeColor(IM_COL32(25, 26, 31, 235), alpha), 4.0f * controlScale);
-        draw->AddRect(ImVec2(effectTrackMinX, effectStyleTrackY - effectHalfHeight),
-            ImVec2(effectTrackMaxX, effectStyleTrackY + effectHalfHeight),
-            FadeColor(IM_COL32(145, 145, 150, effectStyleHovered ? 210 : 130), alpha),
-            4.0f * controlScale, 0, 1.2f);
-        const float effectCellWidth = effectTrackWidth / static_cast<float>(effectStyleCount);
-        const float selectedEffectMinX = effectTrackMinX + effectCellWidth *
-            static_cast<float>(Config::g_drawEdgeEffectStyle);
-        draw->AddRectFilled(ImVec2(selectedEffectMinX + 0.5f * controlScale,
-                effectStyleTrackY - effectHalfHeight + 0.5f * controlScale),
-            ImVec2(selectedEffectMinX + effectCellWidth - 0.2f * controlScale,
-                effectStyleTrackY + effectHalfHeight - 0.2f * controlScale),
-            FadeColor(g_drawEdgeEffectStyleDragging || effectStyleHovered
-                ? IM_COL32(245, 240, 220, 245) : IM_COL32(180, 176, 165, 225), alpha),
-            2.0f * controlScale);
-        for (int i = 0; i <= effectStyleCount; ++i)
-        {
-            const float tickX = effectTrackMinX + effectCellWidth * static_cast<float>(i);
-            draw->AddLine(ImVec2(tickX, effectStyleTrackY - 5.0f * controlScale),
-                ImVec2(tickX, effectStyleTrackY + 5.0f * controlScale),
-                FadeColor(IM_COL32(180, 180, 185, 70), alpha), 1.0f);
-        }
-
         const auto drawDrawSlider = [&](LayoutSlider slider, const char* label,
             float& value, float minimum, float maximum, float labelY) {
             const std::size_t index = static_cast<std::size_t>(slider);
@@ -24050,13 +24359,19 @@ namespace Menu
             draw->AddCircle(ImVec2(resetX, trackY), 6.5f * controlScale,
                 FadeColor(IM_COL32(135, 132, 126, 120), alpha), 20, 1.0f);
         };
-        const float edgeSizeY = effectStyleTrackY + 30.0f * controlScale;
-        drawDrawSlider(LayoutSlider::DrawEdgeEffectSize, Language::Get("draw_edge_size").c_str(),
-            Config::g_drawEdgeEffectSize, 25.0f, 250.0f, edgeSizeY);
-        const float edgeOpacityY = edgeSizeY + 49.0f * controlScale;
-        drawDrawSlider(LayoutSlider::DrawEdgeEffectOpacity, Language::Get("draw_edge_opacity").c_str(),
-            Config::g_drawEdgeEffectOpacity, 0.0f, 100.0f, edgeOpacityY);
-        const float drawMarkY = edgeOpacityY + 54.0f * controlScale;
+        // Os efeitos de borda pertencem agora ao painel do Quick Draw Editor.
+        // O Gameplay mantém somente a marca persistente dos itens e distância.
+        g_drawToggleButtonCenters[0] = g_drawToggleButtonCenters[1] = ImVec2(-10000.0f, -10000.0f);
+        g_drawEdgeEffectStyleHitbox = { ImVec2(1.0f, 1.0f), ImVec2(0.0f, 0.0f) };
+        g_layoutSliderHitboxes[static_cast<std::size_t>(LayoutSlider::DrawEdgeEffectSize)] =
+            { ImVec2(1.0f, 1.0f), ImVec2(0.0f, 0.0f) };
+        g_layoutSliderHitboxes[static_cast<std::size_t>(LayoutSlider::DrawEdgeEffectOpacity)] =
+            { ImVec2(1.0f, 1.0f), ImVec2(0.0f, 0.0f) };
+        g_layoutResetHitboxes[static_cast<std::size_t>(LayoutSlider::DrawEdgeEffectSize)] =
+            { ImVec2(1.0f, 1.0f), ImVec2(0.0f, 0.0f) };
+        g_layoutResetHitboxes[static_cast<std::size_t>(LayoutSlider::DrawEdgeEffectOpacity)] =
+            { ImVec2(1.0f, 1.0f), ImVec2(0.0f, 0.0f) };
+        const float drawMarkY = drawControlsY;
         drawDrawToggle(2, drawMarkY, Config::g_showDrawMark,
             Language::Get("show_draw_mark").c_str());
         drawDrawSlider(LayoutSlider::DrawMarkDistance, Language::Get("draw_mark_distance").c_str(),
@@ -26190,6 +26505,9 @@ namespace Menu
         ImVec2 previewCenter{};
         ImVec2 innerRadius{};
         ImVec2 outerRadius{};
+        bool hasItemMask{};
+        ImVec2 itemMaskCenter{};
+        ImVec2 itemMaskRadii{};
         int width{};
         int height{};
 
@@ -26202,7 +26520,9 @@ namespace Menu
     static ID3D11ShaderResourceView* GetSettingsBackdropTexture(
         const ImVec2& minimum, const ImVec2& maximum,
         const ImVec2& previewCenter, const ImVec2& innerRadius,
-        const ImVec2& outerRadius, ImVec2& uvMinimum, ImVec2& uvMaximum)
+        const ImVec2& outerRadius, bool hasItemMask,
+        const ImVec2& itemMaskCenter, const ImVec2& itemMaskRadii,
+        ImVec2& uvMinimum, ImVec2& uvMaximum)
     {
     
         static SettingsBackdropTextureCache cache;
@@ -26234,6 +26554,11 @@ namespace Menu
             cache.innerRadius.y == innerRadius.y &&
             cache.outerRadius.x == outerRadius.x &&
             cache.outerRadius.y == outerRadius.y &&
+            cache.hasItemMask == hasItemMask &&
+            cache.itemMaskCenter.x == itemMaskCenter.x &&
+            cache.itemMaskCenter.y == itemMaskCenter.y &&
+            cache.itemMaskRadii.x == itemMaskRadii.x &&
+            cache.itemMaskRadii.y == itemMaskRadii.y &&
             cache.width == width && cache.height == height;
     
         if (unchanged) return cache.view;
@@ -26252,6 +26577,7 @@ namespace Menu
     
         const float innerRatio = std::min(
             innerRadius.x / outerRadius.x, innerRadius.y / outerRadius.y);
+        const float sideWidth = (maximum.x - minimum.x) * 0.25f;
     
         for (int row = 0; row < height; ++row)
         {
@@ -26271,6 +26597,27 @@ namespace Menu
                 float t = std::clamp((distance - innerRatio) /
                     (1.0f - innerRatio), 0.0f, 1.0f);
                 t = t * t * (3.0f - 2.0f * t);
+
+                // Segunda abertura: acompanha o preview 3D e usa a mesma
+                // elipse de dureza zero do blur do mod.
+                float itemMask = 1.0f;
+                if (hasItemMask && itemMaskRadii.x > 0.0f && itemMaskRadii.y > 0.0f)
+                {
+                    const float maskX = (x - itemMaskCenter.x) / itemMaskRadii.x;
+                    const float maskY = (y - itemMaskCenter.y) / itemMaskRadii.y;
+                    const float maskDistance = std::sqrt(maskX * maskX + maskY * maskY);
+                    itemMask = std::clamp(maskDistance, 0.0f, 1.0f);
+                    itemMask = itemMask * itemMask * (3.0f - 2.0f * itemMask);
+                }
+
+                // A vinheta lateral passa a fazer parte da textura para que
+                // também respeite a abertura dinâmica do preview.
+                const float leftVignette = std::clamp(
+                    (minimum.x + sideWidth - x) / std::max(sideWidth, 1.0f), 0.0f, 1.0f);
+                const float rightVignette = std::clamp(
+                    (x - (maximum.x - sideWidth)) / std::max(sideWidth, 1.0f), 0.0f, 1.0f);
+                const float darkAlpha = std::max(135.0f * t,
+                    115.0f * std::max(leftVignette, rightVignette));
     
                 const std::size_t index = static_cast<std::size_t>(
                     (row * width + column) * 4);
@@ -26278,7 +26625,7 @@ namespace Menu
                 pixels[index] = 5;
                 pixels[index + 1] = 6;
                 pixels[index + 2] = 9;
-                pixels[index + 3] = static_cast<std::uint8_t>(135.0f * t);
+                pixels[index + 3] = static_cast<std::uint8_t>(darkAlpha * itemMask);
             }
         }
 
@@ -26315,6 +26662,9 @@ namespace Menu
         cache.previewCenter = previewCenter;
         cache.innerRadius = innerRadius;
         cache.outerRadius = outerRadius;
+        cache.hasItemMask = hasItemMask;
+        cache.itemMaskCenter = itemMaskCenter;
+        cache.itemMaskRadii = itemMaskRadii;
         cache.width = width;
         cache.height = height;
     
@@ -26350,6 +26700,13 @@ namespace Menu
             std::clamp(settingsAlpha, 0.0f, 0.99f);
 
         UpdateSettingsBackdrop(dt);
+
+        // Enquanto o Scaleform já fechou, o preview 3D continua alguns frames
+        // vivo para acompanhar o fade do fundo. A transparência chega a zero
+        // antes da limpeza final, evitando o sumiço instantâneo ao final.
+        ItemPreview::SetOpacity(g_settingsBackdropClosingOnly
+            ? g_settingsBackdropFade
+            : 1.0f);
 
         // ============================================================
         // CURSOR DO SKYRIM
@@ -26457,11 +26814,18 @@ namespace Menu
 
         ImVec2 backdropUvMin{};
         ImVec2 backdropUvMax{};
+
+        // Apenas o WheelSettings normal recebe essa segunda abertura. Ela usa
+        // as dimensões já calculadas pelo ItemPreview, iguais às do blur.
+        ItemPreview::BlurMask itemMask{};
+        const bool hasItemBackdropMask = !TrackEditor::IsOpen() &&
+            !g_quickDrawEditorOpen && GetAnimatedSettingsBackdropItemMask(dt, itemMask);
     
         if (auto* backdrop = GetSettingsBackdropTexture(
             backdropMin, backdropMax, previewCenter,
             ImVec2(innerRadiusX, innerRadiusY),
             ImVec2(outerRadiusX, outerRadiusY),
+            hasItemBackdropMask, itemMask.center, itemMask.radii,
             backdropUvMin, backdropUvMax))
         {
             bg->AddImage(reinterpret_cast<ImTextureID>(backdrop),
@@ -26486,8 +26850,30 @@ namespace Menu
                 float t = std::clamp((distance - innerRatio) /
                     (1.0f - innerRatio), 0.0f, 1.0f);
                 t = t * t * (3.0f - 2.0f * t);
-                return IM_COL32(5, 6, 9,
-                    static_cast<int>(135.0f * backdropAlpha * t));
+
+                float itemMaskAmount = 1.0f;
+                if (hasItemBackdropMask && itemMask.radii.x > 0.0f &&
+                    itemMask.radii.y > 0.0f)
+                {
+                    const float maskX = (x - itemMask.center.x) / itemMask.radii.x;
+                    const float maskY = (y - itemMask.center.y) / itemMask.radii.y;
+                    const float maskDistance = std::sqrt(maskX * maskX + maskY * maskY);
+                    itemMaskAmount = std::clamp(maskDistance, 0.0f, 1.0f);
+                    itemMaskAmount = itemMaskAmount * itemMaskAmount *
+                        (3.0f - 2.0f * itemMaskAmount);
+                }
+
+                const float sideWidth = (backdropMax.x - backdropMin.x) * 0.25f;
+                const float leftVignette = std::clamp(
+                    (backdropMin.x + sideWidth - x) / std::max(sideWidth, 1.0f),
+                    0.0f, 1.0f);
+                const float rightVignette = std::clamp(
+                    (x - (backdropMax.x - sideWidth)) / std::max(sideWidth, 1.0f),
+                    0.0f, 1.0f);
+                const float darkAlpha = std::max(135.0f * t,
+                    115.0f * std::max(leftVignette, rightVignette));
+                return IM_COL32(5, 6, 9, static_cast<int>(
+                    darkAlpha * backdropAlpha * itemMaskAmount));
             };
             for (float y = backdropMin.y; y < backdropMax.y; y += fallbackCellSize)
             {
@@ -26501,27 +26887,6 @@ namespace Menu
                 }
             }
         }
-
-        // Vinheta discreta nas laterais.
-        const float sideWidth = (backdropMax.x - backdropMin.x) * 0.25f;
-
-        bg->AddRectFilledMultiColor(
-            backdropMin,
-            ImVec2(backdropMin.x + sideWidth, backdropMax.y),
-            IM_COL32(0, 0, 0, static_cast<int>(115.0f * backdropAlpha)),
-            IM_COL32(0, 0, 0, 0),
-            IM_COL32(0, 0, 0, 0),
-            IM_COL32(0, 0, 0, static_cast<int>(115.0f * backdropAlpha))
-        );
-
-        bg->AddRectFilledMultiColor(
-            ImVec2(backdropMax.x - sideWidth, backdropMin.y),
-            backdropMax,
-            IM_COL32(0, 0, 0, 0),
-            IM_COL32(0, 0, 0, static_cast<int>(115.0f * backdropAlpha)),
-            IM_COL32(0, 0, 0, static_cast<int>(115.0f * backdropAlpha)),
-            IM_COL32(0, 0, 0, 0)
-        );
 
         // Backdrop exclusivo do Custom Radial Editor: nasce na borda direita
         // e se estende para trás do painel. Não existe equivalente à esquerda.
@@ -26618,9 +26983,71 @@ namespace Menu
             previewControlClearance;
         const float sideControlsLeftX =
             (wheelLayout.min.x + GetSettingsLockColumnX()) * 0.5f;
-        const float sideControlsTargetX = sideControlsOverlapPreview
+
+        constexpr float sideLockRadius = 15.0f;
+        const float sideMouseRadius = sideLockRadius * 0.5f;
+        const float sideControlSpacing = sideLockRadius + sideMouseRadius + 12.0f;
+        const auto mouseTargetForSideLock = [&](float sideLockX) {
+            const float leftX = sideLockX - sideControlSpacing;
+            const bool wouldLeaveScreen =
+                leftX - sideMouseRadius < wheelLayout.min.x;
+            return wouldLeaveScreen
+                ? sideLockX + sideControlSpacing * 2.0f
+                : leftX;
+        };
+
+        // O preview ativo pode ser tanto o perfil lateral quanto o preview do
+        // próprio Hub. Testamos a área visual dele contra as três bolhas.
+        ImVec2 activePreviewCenter{};
+        float activePreviewRadius = 0.0f;
+        const bool hasActivePreview = GetVisibleItemPreviewMask(
+            activePreviewCenter, activePreviewRadius);
+        const auto previewOverlapsCircle = [&](const ImVec2& circleCenter,
+            float circleRadius) {
+            if (!hasActivePreview)
+                return false;
+            const float dx = activePreviewCenter.x - circleCenter.x;
+            const float dy = activePreviewCenter.y - circleCenter.y;
+            const float combinedRadius = activePreviewRadius + circleRadius;
+            return dx * dx + dy * dy <= combinedRadius * combinedRadius;
+        };
+
+        const float defaultSideLockX = sideControlsOverlapPreview
             ? sideControlsLeftX
             : wheelLayout.leftRadial.x;
+        const float defaultSideMouseX = mouseTargetForSideLock(defaultSideLockX);
+        const float defaultSideScrollX = defaultSideLockX + sideControlSpacing;
+        const bool previewOverlapsSideControls =
+            previewOverlapsCircle(ImVec2(defaultSideMouseX, wheelLayout.leftRadial.y),
+                sideMouseRadius) ||
+            previewOverlapsCircle(ImVec2(defaultSideLockX, wheelLayout.leftRadial.y),
+                sideLockRadius) ||
+            previewOverlapsCircle(ImVec2(defaultSideScrollX, wheelLayout.leftRadial.y),
+                sideMouseRadius);
+
+        const bool sideRadialIsLeft =
+            wheelLayout.leftRadial.x < wheelLayout.center.x;
+        const bool previewOverlapsSideRadial =
+            previewOverlapsCircle(wheelLayout.leftRadial, GetSideRadialRadius());
+
+        float sideControlsTargetX = defaultSideLockX;
+        float sideMouseTargetX = defaultSideMouseX;
+        if (sideRadialIsLeft && previewOverlapsSideRadial)
+        {
+            // Caso especial: o preview cobre um radial que já está à esquerda.
+            // O Lock Radial fica no centro da tela, com Mouse Lock à esquerda
+            // e Lock Scroll à direita. Assim o grupo não varia conforme o
+            // tamanho do modelo exibido.
+            sideControlsTargetX = wheelLayout.center.x;
+            sideMouseTargetX = sideControlsTargetX - sideControlSpacing;
+        }
+        else if (previewOverlapsSideControls)
+        {
+            // Em qualquer outro perfil, cobrir uma das bolhas recupera o
+            // comportamento já existente de afastar o grupo para a esquerda.
+            sideControlsTargetX = sideControlsLeftX;
+            sideMouseTargetX = mouseTargetForSideLock(sideControlsTargetX);
+        }
         if (g_settingsSideLockAnimatedX <= 0.0f)
             g_settingsSideLockAnimatedX = wheelLayout.leftRadial.x;
         if (!layoutSliderDragging)
@@ -26632,12 +27059,9 @@ namespace Menu
                 dt);
         }
 
-        // A trava de câmera acompanha o grupo Side. Quando a posição à
-        // esquerda ficaria fora do monitor, ela atravessa suavemente para
-        // depois do Lock Scroll, mantendo o mesmo espaçamento entre botões.
-        constexpr float sideLockRadius = 15.0f;
-        const float sideMouseTargetX =
-            GetSettingsSideMouseTargetX(sideLockRadius);
+        // A trava de câmera acompanha o mesmo alvo horizontal do grupo Side.
+        // Os três controles, portanto, cruzam juntos o preview quando a
+        // proteção acima muda de lado.
         if (g_settingsSideMouseAnimatedX <= 0.0f)
             g_settingsSideMouseAnimatedX = sideMouseTargetX;
         if (!layoutSliderDragging)
@@ -27398,17 +27822,15 @@ namespace Menu
             ui &&
             ui->IsMenuOpen("WheelSetting");
 
-        // O escurecimento entra pronto ao abrir o WheelSettings, mas recebe
-        // uma passagem exclusiva de saída depois que o menu se fecha.
+        // O escurecimento entra e sai suavemente, sem cortar a cena por trás
+        // do Hub no primeiro frame.
         static bool wasSettingsOpen = false;
         if (settingsOpen && !wasSettingsOpen)
         {
-            g_settingsBackdropFade = 1.0f;
-            g_settingsBackdropFadeStart = 1.0f;
-            g_settingsBackdropFadeTarget = 1.0f;
-            g_settingsBackdropFadeElapsed = 1.0f;
-            g_settingsBackdropFadeDuration = 0.0f;
+            g_settingsBackdropFade = 0.0f;
+            TransitionSettingsBackdrop(1.0f, 0.5f);
             g_settingsBackdropClosingOnly = false;
+            ResetSettingsBackdropItemMask();
             g_trackEditorBackdropT = 0.0f;
             g_trackEditorBackdropStart = 0.0f;
             g_trackEditorBackdropTarget = 0.0f;
@@ -27437,7 +27859,10 @@ namespace Menu
             // Mantém o radial normal fechado enquanto
             // o menu de configurações estiver aberto.
             g_showWindow = false;
-            SetGameplayBlurApplied(false);
+            // O Hub usa o mesmo blur próprio dos radiais. A máscara do
+            // ItemPreview é atualizada pelo Blur::Render e protege o preview
+            // 3D atual dinamicamente.
+            SetGameplayBlurApplied(true);
 
             // O Settings possui seu próprio desenho.
             DrawSettingsMenu();

@@ -68,6 +68,7 @@ namespace Config
     extern int g_secondaryKey;
     extern int g_altConfigKey;
     extern bool g_automaticArrowMenus;
+    extern bool g_pauseGameDuringHub;
     extern int g_radialAnimation;
     extern int g_radialShape;
     extern bool g_customRadial;

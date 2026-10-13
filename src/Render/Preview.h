@@ -114,5 +114,8 @@ namespace SettingsMenu
         static void Close();
 
         static bool IsOpen();
+
+        // Altera o estado de pausa inclusive quando o Hub já está aberto.
+        static void SetPauseGameDuringHub(bool a_enabled);
     };
 }

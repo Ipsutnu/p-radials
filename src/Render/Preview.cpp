@@ -2,6 +2,7 @@
 #include "Item.h"
 #include "Logger.h"
 #include "Input.h"
+#include "Config.h"
 #include "Animation/Track/TrackEditor.h"
 
 namespace ItemPreview
@@ -116,12 +117,12 @@ namespace SettingsMenu
 
     WheelSettingsMenu::WheelSettingsMenu()
     {
-        menuFlags.set(
-            RE::UI_MENU_FLAGS::kPausesGame
-            //RE::UI_MENU_FLAGS::kRendersUnderPauseMenu,
-            //RE::UI_MENU_FLAGS::kUsesCursor,
-            //RE::UI_MENU_FLAGS::kUpdateUsesCursor
-        );
+        if (Config::g_pauseGameDuringHub)
+            menuFlags.set(RE::UI_MENU_FLAGS::kPausesGame);
+
+        //RE::UI_MENU_FLAGS::kRendersUnderPauseMenu,
+        //RE::UI_MENU_FLAGS::kUsesCursor,
+        //RE::UI_MENU_FLAGS::kUpdateUsesCursor
 
         //Logger::GetSingleton().Print(
         //    "Settings: created | flags=0x{:X}",
@@ -180,17 +181,17 @@ namespace SettingsMenu
         // BLUR
         // ============================================================
 
-        if (!g_blurApplied)
-        {
-            auto* blurManager =
-                RE::UIBlurManager::GetSingleton();
-
-            if (blurManager)
-            {
-                blurManager->IncrementBlurCount();
-                g_blurApplied = true;
-            }
-        }
+        // Blur nativo do Skyrim desativado temporariamente: o Hub usa o
+        // Blur::Render do mod, que preserva o preview 3D com máscara dinâmica.
+        //if (!g_blurApplied)
+        //{
+        //    auto* blurManager = RE::UIBlurManager::GetSingleton();
+        //    if (blurManager)
+        //    {
+        //        blurManager->IncrementBlurCount();
+        //        g_blurApplied = true;
+        //    }
+        //}
 
         // ============================================================
         // OPEN SETTINGS
@@ -229,18 +230,13 @@ namespace SettingsMenu
         // REMOVE BLUR
         // ============================================================
 
-        if (g_blurApplied)
-        {
-            auto* blurManager =
-                RE::UIBlurManager::GetSingleton();
-
-            if (blurManager)
-            {
-                blurManager->DecrementBlurCount();
-            }
-
-            g_blurApplied = false;
-        }
+        //if (g_blurApplied)
+        //{
+        //    auto* blurManager = RE::UIBlurManager::GetSingleton();
+        //    if (blurManager)
+        //        blurManager->DecrementBlurCount();
+        //    g_blurApplied = false;
+        //}
 
         // ============================================================
         // CLOSE SETTINGS
@@ -267,5 +263,32 @@ namespace SettingsMenu
 
         return ui &&
             ui->IsMenuOpen(MENU_NAME);
+    }
+
+    void WheelSettingsMenu::SetPauseGameDuringHub(bool a_enabled)
+    {
+        Config::g_pauseGameDuringHub = a_enabled;
+
+        auto* ui = RE::UI::GetSingleton();
+        if (!ui)
+            return;
+
+        auto* menu = static_cast<WheelSettingsMenu*>(ui->GetMenu(MENU_NAME).get());
+        if (!menu || menu->PausesGame() == a_enabled)
+            return;
+
+        // O contador é o estado de pausa efetivo do Skyrim. Como o menu já
+        // está aberto, ajustar somente a flag não atualizaria esse contador.
+        if (a_enabled)
+        {
+            menu->menuFlags.set(RE::UI_MENU_FLAGS::kPausesGame);
+            ++ui->numPausesGame;
+        }
+        else
+        {
+            menu->menuFlags.reset(RE::UI_MENU_FLAGS::kPausesGame);
+            if (ui->numPausesGame > 0)
+                --ui->numPausesGame;
+        }
     }
 }

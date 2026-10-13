@@ -25,6 +25,7 @@ namespace Config
     int g_secondaryKey = 0;
     int g_altConfigKey = 0;
     bool g_automaticArrowMenus = false;
+    bool g_pauseGameDuringHub = true;
     int g_radialAnimation = static_cast<int>(RadialAnimation::Style::SimpleRadial);
     int g_radialShape = static_cast<int>(RadialShape::Style::ClassicOrbit);
     bool g_customRadial = false;
@@ -1012,6 +1013,10 @@ namespace Config
                     g_automaticArrowMenus = normalized == "1" ||
                         normalized == "TRUE" || normalized == "ON";
                 }
+                else if (key == "PauseGameDuringHub")
+                {
+                    g_pauseGameDuringHub = ParseEnabled(value);
+                }
                 else if (key == "RadialAnimation")
                 {
                     g_radialAnimation = static_cast<int>(
@@ -1431,6 +1436,7 @@ namespace Config
         g_secondaryKey = 0;
         g_altConfigKey = 0;
         g_automaticArrowMenus = false;
+        g_pauseGameDuringHub = true;
         g_radialAnimation = static_cast<int>(RadialAnimation::Style::SimpleRadial);
         g_radialShape = static_cast<int>(RadialShape::Style::ClassicOrbit);
         g_customRadial = false;
@@ -1563,6 +1569,8 @@ namespace Config
             g_altConfigKey != 0 ? KeyToString(g_altConfigKey) : "NONE");
         SetIniValue(lines, "Settings", "AutomaticArrowMenus",
             g_automaticArrowMenus ? "1" : "0");
+        SetIniValue(lines, "Settings", "PauseGameDuringHub",
+            g_pauseGameDuringHub ? "1" : "0");
         SetIniValue(lines, "Settings", "SideMouseSensitivity", std::to_string(g_sideMouseSensitivity));
         SetIniValue(lines, "Settings", "SideMouseSmooth", std::to_string(g_sideMouseSmooth));
         SetIniValue(lines, "Settings", "GamepadAnalogSensitivity", std::to_string(g_gamepadAnalogSensitivity));

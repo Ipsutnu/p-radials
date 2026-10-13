@@ -29,6 +29,7 @@ namespace Language
             { "wheel_key", "Wheel Key" }, { "first_key", "First Key" },
             { "second_key", "Second Key" },
             { "automatic_arrow_menus", "Open Menu with arrows" },
+            { "pause_game_during_hub", "Pause game during Hub" },
             { "radial_animation", "Radial Animation" },
             { "radial_shape", "Radial Shape" }, { "animation", "ANIMATION" },
             { "overflow_mechanism", "Overflow Mechanism" },

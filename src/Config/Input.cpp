@@ -724,8 +724,14 @@ RE::BSEventNotifyControl InputHandler::ProcessEvent(
             if (settingsOpen)
             {
                 Menu::UsePhysicalSettingsCursor();
-                // Deixa o Skyrim atualizar o cursor do menu.
-                // Não bloqueia o movimento aqui.
+                // Com o Hub sem pausa, o evento ainda chegaria à câmera do
+                // Skyrim. O cursor físico continua atualizando o Wheel, mas
+                // os deltas de câmera são consumidos pelo próprio Hub.
+                if (!Config::g_pauseGameDuringHub)
+                {
+                    mouseMove->mouseInputX = 0;
+                    mouseMove->mouseInputY = 0;
+                }
                 continue;
             }
 
