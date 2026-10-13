@@ -419,14 +419,15 @@ namespace
 
     void SpawnEdgeFlash(int style, const ImVec2& center, float radius, float angle)
     {
-        switch (std::clamp(style, 0, 5))
+        switch (std::clamp(style, 0, 6))
         {
-        case 1: SpawnSineWaveFlash(center, radius, angle); break;
-        case 2: SpawnSquarePulseFlash(center, radius, angle); break;
-        case 3: SpawnArrowSurgeFlash(center, radius, angle); break;
-        case 4: SpawnPrismShardFlash(center, radius, angle); break;
-        case 5: SpawnWorldbreakerArcFlash(center, radius, angle); break;
-        default: SpawnCrackFlash(center, radius, angle); break;
+        case 1: SpawnCrackFlash(center, radius, angle); break;
+        case 2: SpawnSineWaveFlash(center, radius, angle); break;
+        case 3: SpawnSquarePulseFlash(center, radius, angle); break;
+        case 4: SpawnArrowSurgeFlash(center, radius, angle); break;
+        case 5: SpawnPrismShardFlash(center, radius, angle); break;
+        case 6: SpawnWorldbreakerArcFlash(center, radius, angle); break;
+        default: break;
         }
     }
 
@@ -646,7 +647,8 @@ namespace QuickDrawMagicEffects
         EmitReleaseSparks(!matched);
     }
 
-    void DrawRelease(ImDrawList* draw, float alpha, float deltaTime)
+    void DrawRelease(ImDrawList* draw, float alpha, float deltaTime,
+        bool showConfirmationRings)
     {
         if (!draw)
             return;
@@ -663,11 +665,13 @@ namespace QuickDrawMagicEffects
         
             const float expansion = (1.0f - t) * 228.0f; // Expansão: const float expansion = (1.0f - t) * 28.0f;
         
-            draw->AddCircle(g_releaseCenter, g_releaseRadius + expansion, // Espessura do anel: 1.7f + t * 2.0f
-                WithAlpha(color, visibility * t * 0.62f), 96, 1.7f + t * 2.0f);
-        
-            draw->AddCircle(g_releaseCenter, g_releaseRadius + expansion * 0.42f, // Espessura do anel: 7.0f + t * 5.0f
-                WithAlpha(kCore, visibility * t * 0.18f), 96, 7.0f + t * 5.0f);
+            if (showConfirmationRings)
+            {
+                draw->AddCircle(g_releaseCenter, g_releaseRadius + expansion,
+                    WithAlpha(color, visibility * t * 0.62f), 96, 1.7f + t * 2.0f);
+                draw->AddCircle(g_releaseCenter, g_releaseRadius + expansion * 0.42f,
+                    WithAlpha(kCore, visibility * t * 0.18f), 96, 7.0f + t * 5.0f);
+            }
         
             if (g_releasePath.size() > 1)
             {

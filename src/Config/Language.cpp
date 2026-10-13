@@ -63,6 +63,7 @@ namespace Language
             { "draw_effects_gameplay", "Effects during Gameplay" },
             { "draw_effects_editor", "Effects during Editor" },
             { "draw_edge_effect", "Edge Effect" },
+            { "draw_edge_none", "None" },
             { "draw_edge_shock", "Shock" },
             { "draw_edge_sine", "Sine Wave" },
             { "draw_edge_squares", "Square Pulse" },

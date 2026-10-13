@@ -15213,7 +15213,8 @@ namespace Menu
 
         QuickDrawMagicEffects::DrawLive(draw, g_quickDrawEditorStroke,
             center, QUICK_DRAW_EDITOR_RADIUS, g_settingsMousePos,
-            g_quickDrawEditorDrawing, false, Config::g_drawEffectsEditor,
+            g_quickDrawEditorDrawing, false,
+            Config::g_drawEdgeEffectStyle != 0,
             Config::g_drawEdgeEffectStyle, Config::g_drawEdgeEffectSize,
             Config::g_drawEdgeEffectOpacity, alpha,
             static_cast<float>(ImGui::GetTime()));
@@ -15222,7 +15223,8 @@ namespace Menu
             QUICK_DRAW_EDITOR_RADIUS,
             FadeColor(IM_COL32(255, 255, 255, 240), alpha), 5.0f);
 
-        QuickDrawMagicEffects::DrawRelease(draw, alpha, ImGui::GetIO().DeltaTime);
+        QuickDrawMagicEffects::DrawRelease(draw, alpha, ImGui::GetIO().DeltaTime,
+            Config::g_drawEffectsEditor);
 
         constexpr ImVec2 buttonSize(110.0f, 40.0f);
         
@@ -23900,8 +23902,9 @@ namespace Menu
         Config::g_drawEdgeEffectStyle = std::clamp(
             Config::g_drawEdgeEffectStyle, 0, effectStyleCount - 1);
         static constexpr std::array<const char*, effectStyleCount> effectStyleLabels{
-            "draw_edge_shock", "draw_edge_sine", "draw_edge_squares",
-            "draw_edge_arrows", "draw_edge_prisms", "draw_edge_worldbreaker" };
+            "draw_edge_none", "draw_edge_shock", "draw_edge_sine",
+            "draw_edge_squares", "draw_edge_arrows", "draw_edge_prisms",
+            "draw_edge_worldbreaker" };
         const char* effectStyleName = Language::Get(
             effectStyleLabels[Config::g_drawEdgeEffectStyle]).c_str();
         const ImVec2 effectStyleNameSize = ImGui::CalcTextSize(effectStyleName);
@@ -25423,8 +25426,9 @@ namespace Menu
                 static_cast<float>(Config::g_drawEdgeEffectStyle);
             const float selectedMaxX = selectedMinX + cellWidth;
             static constexpr std::array<const char*, optionCount> labels{
-                "draw_edge_shock", "draw_edge_sine", "draw_edge_squares",
-                "draw_edge_arrows", "draw_edge_prisms", "draw_edge_worldbreaker" };
+                "draw_edge_none", "draw_edge_shock", "draw_edge_sine",
+                "draw_edge_squares", "draw_edge_arrows", "draw_edge_prisms",
+                "draw_edge_worldbreaker" };
 
             const char* value = Language::Get(labels[Config::g_drawEdgeEffectStyle]).c_str();
             const ImVec2 valueSize = ImGui::CalcTextSize(value);
@@ -27589,7 +27593,9 @@ namespace Menu
 
                     QuickDrawMagicEffects::DrawLive(draw, g_quickDrawGameplayStroke,
                         screenCenter, QUICK_DRAW_EDITOR_RADIUS, quickDrawCursor,
-                        g_quickDrawGameplayDrawing, true, Config::g_drawEffectsGameplay,
+                        g_quickDrawGameplayDrawing, true,
+                        Config::g_drawEffectsGameplay &&
+                            Config::g_drawEdgeEffectStyle != 0,
                         Config::g_drawEdgeEffectStyle, Config::g_drawEdgeEffectSize,
                         Config::g_drawEdgeEffectOpacity, centerVisualAlpha,
                         static_cast<float>(ImGui::GetTime()));
@@ -27805,7 +27811,7 @@ namespace Menu
         // do radial. É apenas uma sobreposição visual: equipar/cancelar já
         // ocorreu antes deste ponto.
         QuickDrawMagicEffects::DrawRelease(ImGui::GetForegroundDrawList(),
-            1.0f, deltaTime);
+            1.0f, deltaTime, Config::g_drawEffectsEditor);
 
         // ============================================================
 

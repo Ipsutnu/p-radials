@@ -8,7 +8,7 @@
 // reconhecimento de gestos ou estados de equipamento.
 namespace QuickDrawMagicEffects
 {
-    inline constexpr int kEdgeEffectStyleCount = 6;
+    inline constexpr int kEdgeEffectStyleCount = 7;
 
     void Reset();
 
@@ -23,5 +23,6 @@ namespace QuickDrawMagicEffects
 
     void TriggerRelease(const std::vector<ImVec2>& normalizedPoints,
         const ImVec2& center, float radius, bool matched);
-    void DrawRelease(ImDrawList* draw, float alpha, float deltaTime);
+    void DrawRelease(ImDrawList* draw, float alpha, float deltaTime,
+        bool showConfirmationRings);
 }
