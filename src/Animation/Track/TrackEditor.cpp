@@ -123,6 +123,10 @@ namespace
     SubmenuFocus g_submenuFocus = SubmenuFocus::None;
     enum class PendingSubmenuToggle { None, Radials, Overflow };
     PendingSubmenuToggle g_pendingSubmenuToggle = PendingSubmenuToggle::None;
+    // Quando o painel de baixo fecha enquanto o de cima permanece aberto,
+    // seu cabeçalho compacto continua abaixo do conteúdo aberto. Isso evita
+    // fazê-lo atravessar o painel inteiro apenas para voltar à linha inicial.
+    SubmenuFocus g_collapsedSubmenuBelow = SubmenuFocus::None;
     enum class PresetNameAction { SaveCurrent, RenamePreset };
     PresetNameAction g_presetNameAction = PresetNameAction::SaveCurrent;
     std::string g_presetSource;
@@ -1414,6 +1418,7 @@ namespace TrackEditor
         g_overflowSubmenuT = 0.0f;
         g_submenuFocus = SubmenuFocus::None;
         g_pendingSubmenuToggle = PendingSubmenuToggle::None;
+        g_collapsedSubmenuBelow = SubmenuFocus::None;
         g_pan = ImVec2(0.0f, 0.0f);
         g_zoom = 1.0f;
     }
@@ -1545,15 +1550,29 @@ namespace TrackEditor
             g_pendingSubmenuToggle = PendingSubmenuToggle::None;
             if (pending == PendingSubmenuToggle::Radials)
             {
+                const bool closing = g_radialsSubmenuOpen;
+                g_collapsedSubmenuBelow = closing && g_overflowSubmenuOpen &&
+                    g_submenuFocus == SubmenuFocus::Overflow
+                    ? SubmenuFocus::Radials : SubmenuFocus::None;
                 g_radialsSubmenuOpen = !g_radialsSubmenuOpen;
                 if (g_radialsSubmenuOpen)
+                {
+                    g_collapsedSubmenuBelow = SubmenuFocus::None;
                     g_submenuFocus = SubmenuFocus::Radials;
+                }
             }
             else
             {
+                const bool closing = g_overflowSubmenuOpen;
+                g_collapsedSubmenuBelow = closing && g_radialsSubmenuOpen &&
+                    g_submenuFocus == SubmenuFocus::Radials
+                    ? SubmenuFocus::Overflow : SubmenuFocus::None;
                 g_overflowSubmenuOpen = !g_overflowSubmenuOpen;
                 if (g_overflowSubmenuOpen)
+                {
+                    g_collapsedSubmenuBelow = SubmenuFocus::None;
                     g_submenuFocus = SubmenuFocus::Overflow;
+                }
             }
             g_activeSlider = EditorSlider::None;
         }
@@ -1625,8 +1644,27 @@ namespace TrackEditor
         float overflowHeaderX = submenuRight - submenuClosedWidth;
         float overflowHeaderY = submenuTopY;
         float overflowHeaderWidth = submenuClosedWidth;
+        const bool radialPinnedBelowOverflow =
+            g_collapsedSubmenuBelow == SubmenuFocus::Radials &&
+            !radialsVisible && overflowVisible &&
+            g_submenuFocus == SubmenuFocus::Overflow;
+        const bool overflowPinnedBelowRadials =
+            g_collapsedSubmenuBelow == SubmenuFocus::Overflow &&
+            radialsVisible && !overflowVisible &&
+            g_submenuFocus == SubmenuFocus::Radials;
 
-        if (bothSubmenusVisible)
+        if (overflowPinnedBelowRadials)
+        {
+            radialHeaderWidth = headerWidth(g_radialsSubmenuT);
+            overflowHeaderY = rowTwoY + 302.0f * radialsContentT;
+        }
+        else if (radialPinnedBelowOverflow)
+        {
+            overflowHeaderWidth = headerWidth(g_overflowSubmenuT);
+            overflowHeaderX = submenuRight - overflowHeaderWidth;
+            radialHeaderY = rowTwoY + 64.0f * overflowContentT;
+        }
+        else if (bothSubmenusVisible)
         {
             if (radialsOnTop)
             {
@@ -2784,44 +2822,12 @@ namespace TrackEditor
         }
         if (Inside(mouse, g_radialsSubmenu))
         {
-            const bool submenuTransitioning =
-                g_pendingSubmenuToggle != PendingSubmenuToggle::None ||
-                (g_radialsSubmenuOpen
-                    ? g_radialsSubmenuT < 1.0f
-                    : g_radialsSubmenuT > 0.0f) ||
-                (g_overflowSubmenuOpen
-                    ? g_overflowSubmenuT < 1.0f
-                    : g_overflowSubmenuT > 0.0f);
-            if (submenuTransitioning)
-            {
-                g_pendingSubmenuToggle = PendingSubmenuToggle::Radials;
-                return true;
-            }
-            g_radialsSubmenuOpen = !g_radialsSubmenuOpen;
-            if (g_radialsSubmenuOpen)
-                g_submenuFocus = SubmenuFocus::Radials;
-            g_activeSlider = EditorSlider::None;
+            g_pendingSubmenuToggle = PendingSubmenuToggle::Radials;
             return true;
         }
         if (Inside(mouse, g_overflowSubmenu))
         {
-            const bool submenuTransitioning =
-                g_pendingSubmenuToggle != PendingSubmenuToggle::None ||
-                (g_radialsSubmenuOpen
-                    ? g_radialsSubmenuT < 1.0f
-                    : g_radialsSubmenuT > 0.0f) ||
-                (g_overflowSubmenuOpen
-                    ? g_overflowSubmenuT < 1.0f
-                    : g_overflowSubmenuT > 0.0f);
-            if (submenuTransitioning)
-            {
-                g_pendingSubmenuToggle = PendingSubmenuToggle::Overflow;
-                return true;
-            }
-            g_overflowSubmenuOpen = !g_overflowSubmenuOpen;
-            if (g_overflowSubmenuOpen)
-                g_submenuFocus = SubmenuFocus::Overflow;
-            g_activeSlider = EditorSlider::None;
+            g_pendingSubmenuToggle = PendingSubmenuToggle::Overflow;
             return true;
         }
         if (Inside(mouse, g_ghostItemsSlider))
