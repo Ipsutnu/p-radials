@@ -2706,16 +2706,16 @@ namespace Menu
 
     static PendingNormalWeaponEquip g_pendingNormalWeaponEquip;
 
-    // Fluxo separado para arco/besta. O Skyrim costuma lembrar a última
-    // arma de uma mão ao equipar uma arma de duas mãos e restaurá-la quando
-    // o arco sai. Limpamos as mãos antes de enviar o EquipObject do arco.
+    // Fluxo atômico para qualquer arma de duas mãos. O Skyrim pode lembrar
+    // uma arma de uma mão e restaurá-la durante a troca; por isso limpamos
+    // as duas mãos antes de enviar o EquipObject da arma two-handed.
     enum class TwoHandedEquipStage
     {
         None,
         WaitingForSheathe,
         WaitingForHandsClear,
         WaitingForEquip,
-        WaitingForBowUnequip,
+        WaitingForTwoHandedUnequip,
         WaitingForFinalState
     };
 
@@ -12341,17 +12341,18 @@ namespace Menu
                 return;
             }
 
-            // Ao equipar arco/besta, o próprio EquipObject substitui a arma
-            // atual. Tentar limpar primeiro uma espada na mão esquerda faz o
-            // Skyrim migrá-la visualmente para a direita.
+            // Tanto equipar quanto desequipar passam por uma transição
+            // exclusiva. No caminho de equipamento, a próxima fase limpa as
+            // duas mãos antes de permitir que o Skyrim instale a two-handed.
             pending.stage = pending.unequipOnly
-                ? TwoHandedEquipStage::WaitingForBowUnequip
-                : TwoHandedEquipStage::WaitingForEquip;
+                ? TwoHandedEquipStage::WaitingForTwoHandedUnequip
+                : TwoHandedEquipStage::WaitingForHandsClear;
+            pending.clearRequested = false;
             pending.stageTime = now;
             return;
         }
 
-        if (pending.stage == TwoHandedEquipStage::WaitingForBowUnequip)
+        if (pending.stage == TwoHandedEquipStage::WaitingForTwoHandedUnequip)
         {
             if (!pending.equipRequested)
             {
@@ -12368,7 +12369,7 @@ namespace Menu
                 return;
 
             // O Skyrim pode restaurar a arma anterior um frame depois de
-            // remover uma arma de duas mãos. Como o arco já está guardado,
+            // remover uma arma de duas mãos. Como ela já está guardada,
             // limpamos esse retorno sem o flash de uma arma sacada.
             pending.stage = TwoHandedEquipStage::WaitingForHandsClear;
             pending.clearRequested = false;
@@ -12454,7 +12455,8 @@ namespace Menu
                 return;
             }
 
-            if (actor->GetEquippedObject(false) != weapon)
+            if (actor->GetEquippedObject(false) != weapon &&
+                actor->GetEquippedObject(true) != weapon)
                 return;
 
             pending.stage = TwoHandedEquipStage::WaitingForFinalState;
@@ -13414,12 +13416,17 @@ namespace Menu
         if (auto* weapon = form->As<RE::TESObjectWEAP>())
         {
             // --------------------------------------------------------
-            // BOW / CROSSBOW
+            // ARMAS DE DUAS MÃOS
             // --------------------------------------------------------
 
-            if (IsBowOrCrossbow(weapon))
+            if (IsTwoHandedWeapon(weapon))
             {
-                const bool equipped = actor->GetEquippedObject(false) == weapon;
+                // Dependendo do tipo e do momento da animação, o engine pode
+                // expor a mesma arma na mão direita, na esquerda ou em ambas.
+                // Para a seleção, qualquer uma delas significa que a arma já
+                // está equipada e o próximo clique precisa desequipá-la.
+                const bool equipped = actor->GetEquippedObject(false) == weapon ||
+                    actor->GetEquippedObject(true) == weapon;
 
                 if (equipped)
                 {
