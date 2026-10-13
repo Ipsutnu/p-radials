@@ -595,6 +595,38 @@ namespace Menu
     static ImVec2 g_quickDrawEditorOkMin{};
     static ImVec2 g_quickDrawEditorOkMax{};
 
+    // Fade do fundo do WheelSettings. Ele é separado do alpha geral do menu
+    // porque o Quick Draw precisa esconder e restaurar somente o escurecimento
+    // atrás do editor, sem fazer o restante da interface piscar.
+    static float g_settingsBackdropFade = 1.0f;
+    static float g_settingsBackdropFadeStart = 1.0f;
+    static float g_settingsBackdropFadeTarget = 1.0f;
+    static float g_settingsBackdropFadeElapsed = 1.0f;
+    static float g_settingsBackdropFadeDuration = 0.0f;
+    static bool g_settingsBackdropClosingOnly = false;
+
+    static void TransitionSettingsBackdrop(float target, float duration)
+    {
+        g_settingsBackdropFadeStart = g_settingsBackdropFade;
+        g_settingsBackdropFadeTarget = std::clamp(target, 0.0f, 1.0f);
+        g_settingsBackdropFadeDuration = std::max(duration, 0.001f);
+        g_settingsBackdropFadeElapsed = 0.0f;
+    }
+
+    static void UpdateSettingsBackdrop(float dt)
+    {
+        if (g_settingsBackdropFadeElapsed < g_settingsBackdropFadeDuration)
+        {
+            g_settingsBackdropFadeElapsed = std::min(
+                g_settingsBackdropFadeDuration, g_settingsBackdropFadeElapsed + dt);
+            float t = g_settingsBackdropFadeElapsed / g_settingsBackdropFadeDuration;
+            t = t * t * (3.0f - 2.0f * t);
+            g_settingsBackdropFade = g_settingsBackdropFadeStart +
+                (g_settingsBackdropFadeTarget - g_settingsBackdropFadeStart) * t;
+        }
+
+    }
+
     static bool g_quickDrawGameplayActive = false;
     static bool g_quickDrawGameplayDrawing = false;
     // O botão que iniciou o gesto decide a mão de equipamento, não o radial
@@ -15148,6 +15180,9 @@ namespace Menu
             g_quickDrawEditorStroke = *stored;
         g_quickDrawEditorDrawing = false;
         g_quickDrawEditorOpen = true;
+        // O fundo do WheelSettings desaparece devagar ao entrar no editor,
+        // preservando apenas o Quick Draw sobre o jogo.
+        TransitionSettingsBackdrop(0.0f, 0.8f);
 
         // Todo gesto começa exatamente no centro do círculo. Reposicionamos
         // também o cursor real para que o primeiro delta físico coincida com
@@ -15311,6 +15346,9 @@ namespace Menu
                 g_quickDrawEditorOkMin, g_quickDrawEditorOkMax))
         {
             StoreQuickDrawStroke(g_quickDrawEditorItem, g_quickDrawEditorStroke);
+            // Restaura o fundo do Settings depois de aceitar o gesto, sem o
+            // salto visual que havia ao sair do editor.
+            TransitionSettingsBackdrop(1.0f, 0.5f);
             g_quickDrawEditorOpen = false;
             g_quickDrawEditorDrawing = false;
             return true;
@@ -26260,6 +26298,8 @@ namespace Menu
         const float alpha =
             std::clamp(settingsAlpha, 0.0f, 0.99f);
 
+        UpdateSettingsBackdrop(dt);
+
         // ============================================================
         // CURSOR DO SKYRIM
         // ============================================================
@@ -26272,14 +26312,6 @@ namespace Menu
         // p-radials' virtual space. Keep the Scaleform cursor synchronized
         // without queuing a second event for the following frame.
         io.MousePos = g_settingsMousePos;
-
-        // Quick Draw é um editor modal mais leve que o Editor de trilhos:
-        // preserva somente o preview do item, círculo e ações Reset/OK.
-        if (g_quickDrawEditorOpen)
-        {
-            DrawQuickDrawEditor(alpha);
-            return;
-        }
 
         // ============================================================
         // HITBOXES
@@ -26362,6 +26394,8 @@ namespace Menu
         // every physical pixel, including letterbox/pillarbox areas.
         bg->PushClipRect(backdropMin, backdropMax, false);
 
+        const float backdropAlpha = alpha * g_settingsBackdropFade;
+
         ImVec2 backdropUvMin{};
         ImVec2 backdropUvMax{};
     
@@ -26375,7 +26409,7 @@ namespace Menu
                 backdropMin, backdropMax,
                 backdropUvMin, backdropUvMax,
                 IM_COL32(255, 255, 255,
-                    static_cast<int>(255.0f * alpha)));
+                    static_cast<int>(255.0f * backdropAlpha)));
         }
         else
         {
@@ -26394,7 +26428,7 @@ namespace Menu
                     (1.0f - innerRatio), 0.0f, 1.0f);
                 t = t * t * (3.0f - 2.0f * t);
                 return IM_COL32(5, 6, 9,
-                    static_cast<int>(135.0f * alpha * t));
+                    static_cast<int>(135.0f * backdropAlpha * t));
             };
             for (float y = backdropMin.y; y < backdropMax.y; y += fallbackCellSize)
             {
@@ -26415,22 +26449,40 @@ namespace Menu
         bg->AddRectFilledMultiColor(
             backdropMin,
             ImVec2(backdropMin.x + sideWidth, backdropMax.y),
-            IM_COL32(0, 0, 0, 115),
+            IM_COL32(0, 0, 0, static_cast<int>(115.0f * backdropAlpha)),
             IM_COL32(0, 0, 0, 0),
             IM_COL32(0, 0, 0, 0),
-            IM_COL32(0, 0, 0, 115)
+            IM_COL32(0, 0, 0, static_cast<int>(115.0f * backdropAlpha))
         );
 
         bg->AddRectFilledMultiColor(
             ImVec2(backdropMax.x - sideWidth, backdropMin.y),
             backdropMax,
             IM_COL32(0, 0, 0, 0),
-            IM_COL32(0, 0, 0, 115),
-            IM_COL32(0, 0, 0, 115),
+            IM_COL32(0, 0, 0, static_cast<int>(115.0f * backdropAlpha)),
+            IM_COL32(0, 0, 0, static_cast<int>(115.0f * backdropAlpha)),
             IM_COL32(0, 0, 0, 0)
         );
 
         bg->PopClipRect();
+
+        // Depois de fechar o WheelSettings, mantemos somente este backdrop
+        // por alguns frames para que ele tenha tempo de desaparecer sem
+        // redesenhar os painéis já fechados.
+        if (g_settingsBackdropClosingOnly)
+        {
+            fg->PopClipRect();
+            return;
+        }
+
+        // Quick Draw é modal, porém o backdrop continua sendo desenhado
+        // acima para que suas transições não desapareçam instantaneamente.
+        if (g_quickDrawEditorOpen)
+        {
+            fg->PopClipRect();
+            DrawQuickDrawEditor(alpha);
+            return;
+        }
 
         // O editor de radiais é modal, mas agora é desenhado depois do mesmo
         // backdrop do WheelSettings para conservar o fade escuro com abertura
@@ -27269,6 +27321,25 @@ namespace Menu
             ui &&
             ui->IsMenuOpen("WheelSetting");
 
+        // O escurecimento entra pronto ao abrir o WheelSettings, mas recebe
+        // uma passagem exclusiva de saída depois que o menu se fecha.
+        static bool wasSettingsOpen = false;
+        if (settingsOpen && !wasSettingsOpen)
+        {
+            g_settingsBackdropFade = 1.0f;
+            g_settingsBackdropFadeStart = 1.0f;
+            g_settingsBackdropFadeTarget = 1.0f;
+            g_settingsBackdropFadeElapsed = 1.0f;
+            g_settingsBackdropFadeDuration = 0.0f;
+            g_settingsBackdropClosingOnly = false;
+        }
+        else if (!settingsOpen && wasSettingsOpen)
+        {
+            TransitionSettingsBackdrop(0.0f, 0.5f);
+            g_settingsBackdropClosingOnly = true;
+        }
+        wasSettingsOpen = settingsOpen;
+
         // Escape/fechamentos externos cancelam o editor modal sem salvar o
         // traço parcial, evitando que ele reapareça preso na próxima abertura.
         if (!settingsOpen && g_quickDrawEditorOpen)
@@ -27287,6 +27358,16 @@ namespace Menu
             // O Settings possui seu próprio desenho.
             DrawSettingsMenu();
 
+            return;
+        }
+
+        // O menu Scaleform já fechou, porém continuamos desenhando somente o
+        // backdrop até ele terminar a transição suave para transparente.
+        if (g_settingsBackdropClosingOnly)
+        {
+            DrawSettingsMenu();
+            if (g_settingsBackdropFadeElapsed >= g_settingsBackdropFadeDuration)
+                g_settingsBackdropClosingOnly = false;
             return;
         }
         
