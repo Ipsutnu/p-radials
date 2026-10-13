@@ -15435,9 +15435,10 @@ namespace Menu
         // O painel ocupa o mesmo disco que delimita o gesto, apenas alguns
         // pixels para dentro para não cobrir a linha branca de referência.
         const float panelRadius = QUICK_DRAW_EDITOR_RADIUS - 2.5f;
-        // O seletor fica sob o círculo, no centro do arco inferior.
+        // O seletor fica acima do círculo, espelhando a distância que antes
+        // mantinha em relação ao arco inferior. OK e LIMPAR permanecem abaixo.
         g_quickDrawSettingsButtonCenter = ImVec2(center.x,
-            center.y + QUICK_DRAW_EDITOR_RADIUS + 66.0f);
+            center.y - QUICK_DRAW_EDITOR_RADIUS - 66.0f);
 
         const float buttonDx = g_settingsMousePos.x - g_quickDrawSettingsButtonCenter.x;
         const float buttonDy = g_settingsMousePos.y - g_quickDrawSettingsButtonCenter.y;
@@ -15475,10 +15476,24 @@ namespace Menu
             center.y - panelRadius);
         g_quickDrawSettingsPanelMax = ImVec2(center.x + panelRadius,
             center.y + panelRadius);
-        // Mantém o disco original: preenchimento uniforme e contorno limpo.
-        // A experiência com borda suave/reativa ao cursor foi removida.
+        // Mantém o disco original, mas escurece a periferia de forma gradual:
+        // o centro fica na cor base e a borda recebe apenas ~35% de sombra.
         draw->AddCircleFilled(center, panelRadius,
             FadeColor(IM_COL32(16, 17, 22, 100), alpha * contentT), 96);
+        constexpr int edgeShadeBands = 10;
+        constexpr float edgeShadeStrength = 0.35f;
+        const float edgeBandThickness = panelRadius * 0.095f + 1.0f;
+        for (int band = 0; band < edgeShadeBands; ++band)
+        {
+            const float edgeT = static_cast<float>(band + 1) /
+                static_cast<float>(edgeShadeBands);
+            const float radius = panelRadius * (0.32f + edgeT * 0.68f);
+            const float shadeAlpha = edgeShadeStrength * edgeT * edgeT;
+            draw->AddCircle(center, radius,
+                FadeColor(IM_COL32(4, 5, 8,
+                    static_cast<int>(100.0f * shadeAlpha)), alpha * contentT),
+                96, edgeBandThickness);
+        }
         draw->AddCircle(center, panelRadius,
             FadeColor(IM_COL32(205, 185, 140, 135), alpha * contentT), 96, 1.0f);
 

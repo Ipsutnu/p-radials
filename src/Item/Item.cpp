@@ -40,6 +40,10 @@ namespace ItemPreview
         float g_sizeScale = 1.0f;
         float g_opacity = 1.0f;
         bool g_opacityDirty = true;
+        // Os modelos carregados pelo Inventory3D podem reutilizar materiais
+        // que também aparecem na arma/objeto equipado. Antes do fade, cada
+        // material do preview recebe uma cópia exclusiva.
+        bool g_previewMaterialsIsolated = false;
 
         float g_rotationX = 0.0f;
         float g_rotationY = 0.0f;
@@ -196,6 +200,54 @@ namespace ItemPreview
             }
 
             return nullptr;
+        }
+
+        void IsolatePreviewMaterials(RE::NiAVObject* model)
+        {
+            if (!model || g_previewMaterialsIsolated)
+                return;
+
+            // Uma propriedade pode estar presente em mais de uma geometria
+            // do mesmo modelo; processá-la uma única vez evita cópias extras.
+            std::vector<RE::BSLightingShaderProperty*> processedProperties;
+            std::size_t isolatedCount = 0;
+
+            RE::BSVisit::TraverseScenegraphGeometries(model,
+                [&](RE::BSGeometry* geometry) -> RE::BSVisit::BSVisitControl {
+                    if (!geometry)
+                        return RE::BSVisit::BSVisitControl::kContinue;
+
+                    auto* shader = netimmerse_cast<RE::BSLightingShaderProperty*>(
+                        geometry->GetGeometryRuntimeData().shaderProperty.get());
+                    if (!shader || std::find(processedProperties.begin(),
+                            processedProperties.end(), shader) != processedProperties.end())
+                    {
+                        return RE::BSVisit::BSVisitControl::kContinue;
+                    }
+                    processedProperties.push_back(shader);
+
+                    auto* source = shader->material;
+                    if (!source)
+                        return RE::BSVisit::BSVisitControl::kContinue;
+
+                    auto* isolated = source->Create();
+                    if (!isolated)
+                        return RE::BSVisit::BSVisitControl::kContinue;
+
+                    // CopyMembers é chamado no destino: a cópia preserva
+                    // textura, feature, brilho e todos os ajustes do material.
+                    isolated->CopyMembers(source);
+                    shader->SetMaterial(isolated, true);
+                    ++isolatedCount;
+                    return RE::BSVisit::BSVisitControl::kContinue;
+                });
+
+            // Mesmo um modelo sem material de iluminação não deve repetir a
+            // travessia a cada frame de fechamento.
+            g_previewMaterialsIsolated = true;
+            Logger::GetSingleton().Print(
+                "ItemPreview: materiais exclusivos preparados | count={}",
+                isolatedCount);
         }
 
         bool AttachModelToUIScene(
@@ -713,6 +765,7 @@ namespace ItemPreview
 
         g_visible = true;
         g_opacityDirty = true;
+        g_previewMaterialsIsolated = false;
 
         return true;
     }
@@ -807,6 +860,11 @@ namespace ItemPreview
             return;
         }
 
+        // Faça a separação antes de qualquer UpdateMaterialAlpha. Isso
+        // conserva o fade do preview, mas impede que seu alpha alcance uma
+        // arma em mão que compartilhe o material de origem.
+        IsolatePreviewMaterials(model);
+
         // Normaliza e/ou move o modelo já carregado. Alterar X/Y não troca o
         // item nem a escala, então precisa de uma invalidação própria.
         const bool needsCentering = !g_scaleNormalized || g_hudPositionDirty;
@@ -894,6 +952,7 @@ namespace ItemPreview
         g_modelReady = false;
         g_opacity = 1.0f;
         g_opacityDirty = true;
+        g_previewMaterialsIsolated = false;
         g_uniqueID = 0;
         g_hasUniqueID = false;
 
