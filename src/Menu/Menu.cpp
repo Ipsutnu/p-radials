@@ -594,6 +594,12 @@ namespace Menu
     static ImVec2 g_quickDrawEditorResetMax{};
     static ImVec2 g_quickDrawEditorOkMin{};
     static ImVec2 g_quickDrawEditorOkMax{};
+    static ImVec2 g_quickDrawEditorResetCenter{};
+    static ImVec2 g_quickDrawEditorOkCenter{};
+    static float g_quickDrawEditorResetRadius = 25.0f;
+    static float g_quickDrawEditorOkRadius = 25.0f;
+    static float g_quickDrawEditorResetHoverT = 0.0f;
+    static float g_quickDrawEditorOkHoverT = 0.0f;
     static bool g_quickDrawSettingsExpanded = false;
     static float g_quickDrawSettingsOpenT = 0.0f;
     static ImVec2 g_quickDrawSettingsButtonCenter{};
@@ -4123,6 +4129,11 @@ namespace Menu
                 g_settingsMousePos.y <= g_resetAllConfigHitbox.max.y)
             {
                 Config::ResetToDefaults();
+                // ResetToDefaults altera a preferência, mas o menu já aberto
+                // precisa atualizar também sua flag nativa e o contador de
+                // pausa do Skyrim imediatamente.
+                SettingsMenu::WheelSettingsMenu::SetPauseGameDuringHub(
+                    Config::g_pauseGameDuringHub);
                 return true;
             }
 
@@ -15348,6 +15359,8 @@ namespace Menu
         g_quickDrawSettingsActiveSlider = QuickDrawSettingsSlider::None;
         g_quickDrawEffectPreviewUntil = 0.0f;
         g_quickDrawEffectPreviewStyle = -1;
+        g_quickDrawEditorResetHoverT = 0.0f;
+        g_quickDrawEditorOkHoverT = 0.0f;
         // O fundo do WheelSettings desaparece devagar ao entrar no editor,
         // preservando apenas o Quick Draw sobre o jogo.
         TransitionSettingsBackdrop(0.0f, 0.8f);
@@ -15435,6 +15448,8 @@ namespace Menu
             center.y - panelRadius);
         g_quickDrawSettingsPanelMax = ImVec2(center.x + panelRadius,
             center.y + panelRadius);
+        // Mantém o disco original: preenchimento uniforme e contorno limpo.
+        // A experiência com borda suave/reativa ao cursor foi removida.
         draw->AddCircleFilled(center, panelRadius,
             FadeColor(IM_COL32(16, 17, 22, 100), alpha * contentT), 96);
         draw->AddCircle(center, panelRadius,
@@ -15508,7 +15523,9 @@ namespace Menu
 
         const auto drawSlider = [&](QuickDrawSettingsSlider slider, const char* label,
             float& value, float minimum, float maximum, float y, ImVec2& hitMin, ImVec2& hitMax) {
-            const float sliderY = y + 26.0f;
+            // Fonte e sombra ocupam mais altura que o trilho estreito. Uma
+            // margem maior evita que texto e slider compartilhem pixels.
+            const float sliderY = y + 42.0f;
             hitMin = ImVec2(x, y - 4.0f);
             hitMax = ImVec2(x + width, sliderY + 11.0f);
             if (g_quickDrawSettingsActiveSlider == slider)
@@ -15531,10 +15548,10 @@ namespace Menu
                 FadeColor(IM_COL32(190, 184, 170, 205), alpha), 4.0f);
         };
         drawSlider(QuickDrawSettingsSlider::Size, Language::Get("draw_edge_size").c_str(),
-            Config::g_drawEdgeEffectSize, 25.0f, 250.0f, center.y + 30.0f,
+            Config::g_drawEdgeEffectSize, 25.0f, 250.0f, center.y + 58.0f,
             g_quickDrawSettingsSizeMin, g_quickDrawSettingsSizeMax);
         drawSlider(QuickDrawSettingsSlider::Opacity, Language::Get("draw_edge_opacity").c_str(),
-            Config::g_drawEdgeEffectOpacity, 0.0f, 100.0f, center.y + 104.0f,
+            Config::g_drawEdgeEffectOpacity, 0.0f, 100.0f, center.y + 158.0f,
             g_quickDrawSettingsOpacityMin, g_quickDrawSettingsOpacityMax);
     }
 
@@ -15593,42 +15610,62 @@ namespace Menu
         DrawQuickDrawSettingsPanel(draw, center, alpha);
 
         const float r = QUICK_DRAW_EDITOR_RADIUS;
-        const ImVec2 resetCenter(center.x - r * 0.47f, center.y + r * 1.03f);
-        const ImVec2 okCenter(center.x + r * 0.47f, center.y + r * 1.03f);
+        // Os dois comandos ficam lado a lado com o seletor de configurações:
+        // compactos em repouso e circulares/maiores somente no hover.
+        constexpr float commandBaseRadius = 24.0f;
+        constexpr float commandExpandedRadius = 45.0f;
+        const float commandSpacing = 82.0f;
+        const float commandsY = center.y + r + 66.0f;
+        g_quickDrawEditorResetCenter = ImVec2(center.x - commandSpacing, commandsY);
+        g_quickDrawEditorOkCenter = ImVec2(center.x + commandSpacing, commandsY);
 
-        // As áreas de clique acompanham as duas placas inferiores, deixando
-        // livre o pequeno círculo de ajustes no encaixe entre elas.
-        g_quickDrawEditorResetMin = ImVec2(center.x - r * 0.90f, center.y + r * 0.65f);
-        g_quickDrawEditorResetMax = ImVec2(center.x - r * 0.12f, center.y + r * 1.25f);
-        g_quickDrawEditorOkMin = ImVec2(center.x + r * 0.12f, center.y + r * 0.65f);
-        g_quickDrawEditorOkMax = ImVec2(center.x + r * 0.90f, center.y + r * 1.25f);
+        const auto circleHovered = [&](const ImVec2& buttonCenter, float radius) {
+            return IsSettingsCircleHovered(g_settingsMousePos, buttonCenter, radius);
+        };
+        const float dt = std::clamp(ImGui::GetIO().DeltaTime, 0.0f, 0.05f);
+        g_quickDrawEditorResetHoverT = AnimateSettingsValue(
+            g_quickDrawEditorResetHoverT,
+            circleHovered(g_quickDrawEditorResetCenter, commandExpandedRadius) ? 1.0f : 0.0f,
+            13.0f, dt);
+        g_quickDrawEditorOkHoverT = AnimateSettingsValue(
+            g_quickDrawEditorOkHoverT,
+            circleHovered(g_quickDrawEditorOkCenter, commandExpandedRadius) ? 1.0f : 0.0f,
+            13.0f, dt);
 
-        const auto drawArcPlate = [&](bool left, const ImVec2& labelCenter,
-            const ImVec2& hitMin, const ImVec2& hitMax, const char* label) {
-            const float side = left ? -1.0f : 1.0f;
-            const bool hovered = PointInQuickDrawRect(g_settingsMousePos, hitMin, hitMax);
-            const ImVec2 outerTop(center.x + side * r * 0.84f, center.y + r * 0.63f);
-            const ImVec2 innerTop(center.x + side * r * 0.13f, center.y + r * 0.99f);
-            const ImVec2 innerBottom(center.x + side * r * 0.13f, center.y + r * 1.22f);
-            const ImVec2 outerBottom(center.x + side * r * 0.67f, center.y + r * 1.10f);
+        const auto drawCommandCircle = [&](const ImVec2& buttonCenter, float hoverT,
+            float& outRadius, const char* label) {
+            outRadius = commandBaseRadius + (commandExpandedRadius - commandBaseRadius) * hoverT;
+            draw->AddCircleFilled(buttonCenter, outRadius,
+                FadeColor(IM_COL32(35, 36, 42, 220), alpha), 40);
+            draw->AddCircle(buttonCenter, outRadius,
+                FadeColor(IM_COL32(210, 198, 168,
+                    static_cast<int>(110.0f + 110.0f * hoverT)), alpha), 40, 1.25f);
 
-            draw->AddQuadFilled(outerTop, innerTop, innerBottom, outerBottom,
-                hovered ? FadeColor(IM_COL32(235, 235, 235, 165), alpha)
-                        : FadeColor(IM_COL32(42, 42, 42, 212), alpha));
-            draw->AddQuad(outerTop, innerTop, innerBottom, outerBottom,
-                FadeColor(IM_COL32(205, 195, 170, hovered ? 175 : 105), alpha), 1.0f);
-
-            const ImVec2 text = ImGui::CalcTextSize(label);
-            draw->AddText(ImVec2(labelCenter.x - text.x * 0.5f,
-                    labelCenter.y - text.y * 0.5f),
-                FadeColor(hovered ? IM_COL32(25, 25, 25, 255) :
-                    IM_COL32(240, 240, 240, 255), alpha), label);
+            if (hoverT <= 0.01f)
+                return;
+            const ImVec2 textSize = ImGui::CalcTextSize(label);
+            draw->AddText(ImVec2(buttonCenter.x - textSize.x * 0.5f,
+                    buttonCenter.y - textSize.y * 0.5f),
+                FadeColor(IM_COL32(245, 242, 232, 255), alpha * hoverT), label);
         };
 
-        drawArcPlate(true, resetCenter, g_quickDrawEditorResetMin,
-            g_quickDrawEditorResetMax, Language::Get("reset").c_str());
-        drawArcPlate(false, okCenter, g_quickDrawEditorOkMin,
-            g_quickDrawEditorOkMax, Language::Get("ok").c_str());
+        drawCommandCircle(g_quickDrawEditorResetCenter,
+            g_quickDrawEditorResetHoverT, g_quickDrawEditorResetRadius,
+            Language::Get("reset").c_str());
+        drawCommandCircle(g_quickDrawEditorOkCenter,
+            g_quickDrawEditorOkHoverT, g_quickDrawEditorOkRadius,
+            Language::Get("ok").c_str());
+
+        // Mantemos os retângulos atualizados apenas como envelope de
+        // compatibilidade; o clique efetivo abaixo é circular.
+        g_quickDrawEditorResetMin = g_quickDrawEditorResetCenter -
+            ImVec2(g_quickDrawEditorResetRadius, g_quickDrawEditorResetRadius);
+        g_quickDrawEditorResetMax = g_quickDrawEditorResetCenter +
+            ImVec2(g_quickDrawEditorResetRadius, g_quickDrawEditorResetRadius);
+        g_quickDrawEditorOkMin = g_quickDrawEditorOkCenter -
+            ImVec2(g_quickDrawEditorOkRadius, g_quickDrawEditorOkRadius);
+        g_quickDrawEditorOkMax = g_quickDrawEditorOkCenter +
+            ImVec2(g_quickDrawEditorOkRadius, g_quickDrawEditorOkRadius);
 
         // O editor usa sempre a posição central, independentemente do layout
         // configurado para o preview comum do Settings.
@@ -15724,8 +15761,8 @@ namespace Menu
             return true;
         }
 
-        if (PointInQuickDrawRect(g_settingsMousePos,
-                g_quickDrawEditorResetMin, g_quickDrawEditorResetMax))
+        if (IsSettingsCircleHovered(g_settingsMousePos,
+                g_quickDrawEditorResetCenter, g_quickDrawEditorResetRadius))
         {
             if (!g_quickDrawEditorStroke.empty())
             {
@@ -15739,8 +15776,8 @@ namespace Menu
             StoreQuickDrawStroke(g_quickDrawEditorItem, {});
             return true;
         }
-        if (PointInQuickDrawRect(g_settingsMousePos,
-                g_quickDrawEditorOkMin, g_quickDrawEditorOkMax))
+        if (IsSettingsCircleHovered(g_settingsMousePos,
+                g_quickDrawEditorOkCenter, g_quickDrawEditorOkRadius))
         {
             StoreQuickDrawStroke(g_quickDrawEditorItem, g_quickDrawEditorStroke);
             // Restaura o fundo do Settings depois de aceitar o gesto, sem o
