@@ -209,7 +209,9 @@ namespace ItemPreview
 
             // Uma propriedade pode estar presente em mais de uma geometria
             // do mesmo modelo; processá-la uma única vez evita cópias extras.
-            std::vector<RE::BSLightingShaderProperty*> processedProperties;
+            // BSShaderProperty cobre tanto meshes comuns (Lighting) quanto
+            // os materiais BSEffect usados pelos previews de spell.
+            std::vector<RE::BSShaderProperty*> processedProperties;
             std::size_t isolatedCount = 0;
 
             RE::BSVisit::TraverseScenegraphGeometries(model,
@@ -217,8 +219,8 @@ namespace ItemPreview
                     if (!geometry)
                         return RE::BSVisit::BSVisitControl::kContinue;
 
-                    auto* shader = netimmerse_cast<RE::BSLightingShaderProperty*>(
-                        geometry->GetGeometryRuntimeData().shaderProperty.get());
+                    auto* shader =
+                        geometry->GetGeometryRuntimeData().shaderProperty.get();
                     if (!shader || std::find(processedProperties.begin(),
                             processedProperties.end(), shader) != processedProperties.end())
                     {
@@ -242,12 +244,34 @@ namespace ItemPreview
                     return RE::BSVisit::BSVisitControl::kContinue;
                 });
 
-            // Mesmo um modelo sem material de iluminação não deve repetir a
+            // Mesmo um modelo sem material compatível não deve repetir a
             // travessia a cada frame de fechamento.
             g_previewMaterialsIsolated = true;
             Logger::GetSingleton().Print(
                 "ItemPreview: materiais exclusivos preparados | count={}",
                 isolatedCount);
+        }
+
+        void ApplyPreviewOpacity(RE::NiAVObject* model, float opacity)
+        {
+            if (!model)
+                return;
+
+            RE::BSVisit::TraverseScenegraphGeometries(model,
+                [opacity](RE::BSGeometry* geometry) -> RE::BSVisit::BSVisitControl {
+                    if (geometry)
+                    {
+                        if (auto* shader =
+                                geometry->GetGeometryRuntimeData().shaderProperty.get())
+                        {
+                            // O método virtual cobre BSLightingShaderProperty
+                            // e BSEffectShaderProperty. O segundo é o caminho
+                            // que faz spells acompanharem o mesmo fade.
+                            shader->SetMaterialAlpha(opacity);
+                        }
+                    }
+                    return RE::BSVisit::BSVisitControl::kContinue;
+                });
         }
 
         bool AttachModelToUIScene(
@@ -860,7 +884,7 @@ namespace ItemPreview
             return;
         }
 
-        // Faça a separação antes de qualquer UpdateMaterialAlpha. Isso
+        // Faça a separação antes de qualquer alteração de alpha. Isso
         // conserva o fade do preview, mas impede que seu alpha alcance uma
         // arma em mão que compartilhe o material de origem.
         IsolatePreviewMaterials(model);
@@ -878,12 +902,12 @@ namespace ItemPreview
             g_hudPositionDirty = false;
         }
 
-        // O modelo pertence exclusivamente à cena de preview. Alterar a
-        // transparência aqui permite que ele acompanhe o fade do Hub sem
-        // encolher, reposicionar ou afetar os objetos do mundo.
+        // O modelo pertence exclusivamente à cena de preview. A aplicação
+        // virtual inclui Lighting e Effect shaders, para que spells recebam
+        // o mesmo fade de armas e demais itens.
         if (g_opacityDirty)
         {
-            model->UpdateMaterialAlpha(g_opacity, false);
+            ApplyPreviewOpacity(model, g_opacity);
             g_opacityDirty = false;
         }
 

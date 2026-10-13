@@ -637,6 +637,11 @@ namespace Menu
     static float g_settingsBackdropFadeElapsed = 1.0f;
     static float g_settingsBackdropFadeDuration = 0.0f;
     static bool g_settingsBackdropClosingOnly = false;
+    // Após chegar a zero, o preview precisa de um curto frame de assentamento
+    // para o Tick do menu silencioso realmente aplicar alpha=0 antes do Hide.
+    // Sem isso ele podia exibir um último frame claro ao fechar o Hub.
+    static float g_settingsPreviewFadeSettleElapsed = 0.0f;
+    static constexpr float kSettingsPreviewFadeSettleDuration = 0.075f;
 
     // A segunda abertura do fade (a que protege o preview 3D) usa a mesma
     // inércia de tamanho da máscara do Blur. Assim a troca de item não corta
@@ -657,6 +662,58 @@ namespace Menu
     static float g_trackEditorBackdropDuration = 0.0f;
     static bool g_trackEditorBackdropWasOpen = false;
     static float g_trackEditorPanelFade = 0.0f;
+
+    // Fechamento visual exclusivo dos previews do gameplay. Não participa
+    // das trocas de item: estas continuam instantâneas para o próximo modelo.
+    static bool g_gameplayPreviewFadeOut = false;
+    static float g_gameplayPreviewFadeAlpha = 1.0f;
+    static int g_gameplayPreviewFadeFrame = -1;
+    static constexpr float kGameplayPreviewFadeOutSpeed = 10.0f;
+
+    static void BeginGameplayPreviewFadeOut()
+    {
+        if (!ItemPreview::IsVisible() || g_gameplayPreviewFadeOut)
+            return;
+
+        g_gameplayPreviewFadeOut = true;
+        g_gameplayPreviewFadeAlpha = 1.0f;
+        g_gameplayPreviewFadeFrame = -1;
+    }
+
+    static void CancelGameplayPreviewFadeOut()
+    {
+        g_gameplayPreviewFadeOut = false;
+        g_gameplayPreviewFadeAlpha = 1.0f;
+        g_gameplayPreviewFadeFrame = -1;
+        if (ItemPreview::IsVisible())
+            ItemPreview::SetOpacity(1.0f);
+    }
+
+    static void UpdateGameplayPreviewFadeOut(float dt)
+    {
+        if (!g_gameplayPreviewFadeOut)
+            return;
+
+        // Frame Generation pode apresentar a mesma UI mais de uma vez.
+        // A opacidade avança apenas uma vez por frame ImGui.
+        const int frame = ImGui::GetFrameCount();
+        if (frame != g_gameplayPreviewFadeFrame)
+        {
+            g_gameplayPreviewFadeFrame = frame;
+            g_gameplayPreviewFadeAlpha = std::max(0.0f,
+                g_gameplayPreviewFadeAlpha - std::clamp(dt, 0.0f, 0.05f) *
+                    kGameplayPreviewFadeOutSpeed);
+            ItemPreview::SetOpacity(g_gameplayPreviewFadeAlpha);
+        }
+
+        if (g_gameplayPreviewFadeAlpha > 0.0f)
+            return;
+
+        ItemPreview::Hide();
+        ItemPreview::SilentPreviewMenu::Close();
+        g_gameplayPreviewFadeOut = false;
+        g_gameplayPreviewFadeFrame = -1;
+    }
 
     static void TransitionSettingsBackdrop(float target, float duration)
     {
@@ -9074,6 +9131,10 @@ namespace Menu
 
         // Apenas avisa que deve fechar (inicia o fade-out)
         g_showWindow = false;
+        // O preview continua alguns frames no menu silencioso para sumir
+        // suavemente junto do radial. A cópia isolada de materiais garante
+        // que este alpha não alcance o objeto equipado do personagem.
+        BeginGameplayPreviewFadeOut();
 
         // ============================================================
         // RESETA O ESTADO TEMPORÁRIO DO TOGGLE
@@ -20762,6 +20823,15 @@ namespace Menu
             return;
         }
 
+        // Durante o fechamento lógico, não deixe a seleção antiga restaurar
+        // opacidade. O fade só é iniciado por CloseRadialMenu; iniciar outro
+        // aqui confundiria o retorno do WheelSettings com um radial fechando
+        // e faria o preview já invisível reaparecer por um frame.
+        if (!g_showWindow)
+        {
+            return;
+        }
+
         ImVec2 mouse = GetRadialMousePosition();
 
         RadialItem* selected = nullptr;
@@ -20860,7 +20930,7 @@ namespace Menu
             !selected->valid ||
             !selected->form)
         {
-            ItemPreview::Hide();
+            BeginGameplayPreviewFadeOut();
             return;
         }
 
@@ -20922,6 +20992,9 @@ namespace Menu
 
         if (Config::g_showItemPreviewGameplay)
         {
+            // Selecionar outro item substitui o preview sem transição de
+            // saída; o fade é reservado a desseleção e fechamento do radial.
+            CancelGameplayPreviewFadeOut();
             ItemPreview::SilentPreviewMenu::Open();
             ItemPreview::Show(
                 selected->form,
@@ -20931,6 +21004,7 @@ namespace Menu
         }
         else
         {
+            g_gameplayPreviewFadeOut = false;
             ItemPreview::Hide();
             ItemPreview::SilentPreviewMenu::Close();
         }
@@ -27992,6 +28066,7 @@ namespace Menu
             g_settingsBackdropFade = 0.0f;
             TransitionSettingsBackdrop(1.0f, 0.5f);
             g_settingsBackdropClosingOnly = false;
+            g_settingsPreviewFadeSettleElapsed = 0.0f;
             ResetSettingsBackdropItemMask();
             g_trackEditorBackdropT = 0.0f;
             g_trackEditorBackdropStart = 0.0f;
@@ -28005,6 +28080,7 @@ namespace Menu
         {
             TransitionSettingsBackdrop(0.0f, 0.5f);
             g_settingsBackdropClosingOnly = true;
+            g_settingsPreviewFadeSettleElapsed = 0.0f;
         }
         wasSettingsOpen = settingsOpen;
 
@@ -28038,7 +28114,18 @@ namespace Menu
         {
             DrawSettingsMenu();
             if (g_settingsBackdropFadeElapsed >= g_settingsBackdropFadeDuration)
-                g_settingsBackdropClosingOnly = false;
+            {
+                // Mantém o preview com alpha zero por alguns milissegundos.
+                // Isso elimina o flash causado pela defasagem entre o render
+                // do ImGui e o Tick que atualiza a cena UI3D.
+                g_settingsPreviewFadeSettleElapsed +=
+                    std::clamp(deltaTime, 0.0f, 0.05f);
+                if (g_settingsPreviewFadeSettleElapsed >=
+                    kSettingsPreviewFadeSettleDuration)
+                {
+                    g_settingsBackdropClosingOnly = false;
+                }
+            }
             return;
         }
         
@@ -28095,6 +28182,11 @@ namespace Menu
             if (g_globalAlpha < 0.0f) g_globalAlpha = 0.0f;
         }
 
+        // O preview 3D tem uma saída própria, independente do alpha do HUD.
+        // Isso também mantém o menu silencioso vivo apenas até o último frame
+        // da transparência do item.
+        UpdateGameplayPreviewFadeOut(deltaTime);
+
         // RESET LIMPO: Só limpa o estado quando o menu sumir da tela por completo
         if (g_globalAlpha <= 0.0f)
         {   
@@ -28102,8 +28194,11 @@ namespace Menu
             SetGameplayBlurApplied(false);
             g_radialParticles.clear();
             
-            ItemPreview::Hide();
-            ItemPreview::SilentPreviewMenu::Close();
+            if (!g_gameplayPreviewFadeOut)
+            {
+                ItemPreview::Hide();
+                ItemPreview::SilentPreviewMenu::Close();
+            }
 
             g_menuAlpha = 0.0f;
             g_radialSide = RadialSide::None;
