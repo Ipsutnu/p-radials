@@ -54,6 +54,46 @@ namespace
         float lifetime = 0.0f;
     };
 
+    // Os quatro estilos abaixo não usam as rachaduras: cada um tem seu próprio
+    // ciclo de vida para não parecer uma variação do mesmo raio estático.
+    struct BouncingLaser
+    {
+        ImVec2 position{};
+        ImVec2 velocity{};
+        float age = 0.0f;
+        float lifetime = 0.0f;
+        float size = 1.0f;
+        int bounces = 0;
+        int maxBounces = 5;
+    };
+
+    struct FallingEdgeSpark
+    {
+        ImVec2 position{};
+        ImVec2 velocity{};
+        float age = 0.0f;
+        float lifetime = 0.0f;
+        float size = 1.0f;
+    };
+
+    struct GhostCircle
+    {
+        ImVec2 position{};
+        ImVec2 linkTarget{};
+        float age = 0.0f;
+        float lifetime = 0.0f;
+        float radius = 0.0f;
+        bool linked = false;
+    };
+
+    struct GeometryTrace
+    {
+        std::vector<ImVec2> points;
+        float age = 0.0f;
+        float lifetime = 0.0f;
+        float drawDuration = 0.0f;
+    };
+
     std::vector<Spark> g_releaseSparks;
     std::vector<ImVec2> g_releasePath;
     ImVec2 g_releaseCenter{};
@@ -65,6 +105,12 @@ namespace
     float g_lastCrackAngle = 0.0f;
     bool g_hasLastCrackAngle = false;
     int g_crackSeed = 0;
+    std::vector<BouncingLaser> g_bouncingLasers;
+    std::vector<FallingEdgeSpark> g_fallingEdgeSparks;
+    std::vector<GhostCircle> g_ghostCircles;
+    std::vector<GeometryTrace> g_geometryTraces;
+    float g_lastSpecialSpawnTime = -100.0f;
+    int g_specialSeed = 0;
 
     ImU32 WithAlpha(ImU32 color, float alpha)
     {
@@ -99,6 +145,21 @@ namespace
     float AngleDelta(float a, float b)
     {
         return std::atan2(std::sin(a - b), std::cos(a - b));
+    }
+
+    ImVec2 Add(const ImVec2& a, const ImVec2& b)
+    {
+        return ImVec2(a.x + b.x, a.y + b.y);
+    }
+
+    ImVec2 Scale(const ImVec2& value, float amount)
+    {
+        return ImVec2(value.x * amount, value.y * amount);
+    }
+
+    ImVec2 DirectionFromAngle(float angle)
+    {
+        return ImVec2(std::cos(angle), std::sin(angle));
     }
 
     void AppendCrackBranch(CrackFlash& flash, ImVec2 start, float angle,
@@ -417,6 +478,150 @@ namespace
         g_crackFlashes.push_back(std::move(flash));
     }
 
+    void SpawnRicochetLasers(const ImVec2& center, float radius, float angle)
+    {
+        const int seed = ++g_specialSeed * 131;
+        const int count = 1 + static_cast<int>(Random01(seed + 1) * 2.0f);
+        const ImVec2 direction = DirectionFromAngle(angle);
+        const ImVec2 tangent(-direction.y, direction.x);
+        for (int i = 0; i < count; ++i)
+        {
+            const float spread = (Random01(seed + i * 17) - 0.5f) * 0.22f;
+            const ImVec2 laserDirection = DirectionFromAngle(angle + spread);
+            const float tangentOffset = (Random01(seed + i * 23) - 0.5f) * radius * 0.20f;
+            BouncingLaser laser{};
+            laser.position = Add(Add(center, Scale(direction, radius + 3.0f)),
+                Scale(tangent, tangentOffset));
+            laser.velocity = Scale(laserDirection,
+                640.0f + Random01(seed + i * 29) * 410.0f);
+            laser.lifetime = 1.2f + Random01(seed + i * 31) * 1.15f;
+            laser.size = 0.75f + Random01(seed + i * 37) * 0.85f;
+            laser.maxBounces = 5 + static_cast<int>(Random01(seed + i * 41) * 11.0f);
+            g_bouncingLasers.push_back(laser);
+        }
+        if (g_bouncingLasers.size() > 28)
+            g_bouncingLasers.erase(g_bouncingLasers.begin(), g_bouncingLasers.begin() +
+                static_cast<std::ptrdiff_t>(g_bouncingLasers.size() - 28));
+    }
+
+    void SpawnFallingSparks(const ImVec2& center, float radius)
+    {
+        const int seed = ++g_specialSeed * 137;
+        const int count = 3 + static_cast<int>(Random01(seed + 1) * 5.0f);
+        for (int i = 0; i < count; ++i)
+        {
+            const float angle = Random01(seed + i * 19) * kTwoPi;
+            const ImVec2 radial = DirectionFromAngle(angle);
+            FallingEdgeSpark spark{};
+            spark.position = Add(center, Scale(radial,
+                radius * (0.80f + Random01(seed + i * 23) * 0.26f)));
+            spark.velocity = ImVec2((Random01(seed + i * 29) - 0.5f) * 78.0f,
+                55.0f + Random01(seed + i * 31) * 115.0f);
+            spark.lifetime = 0.60f + Random01(seed + i * 37) * 0.85f;
+            spark.size = 0.55f + Random01(seed + i * 41) * 1.10f;
+            g_fallingEdgeSparks.push_back(spark);
+        }
+        if (g_fallingEdgeSparks.size() > 150)
+            g_fallingEdgeSparks.erase(g_fallingEdgeSparks.begin(), g_fallingEdgeSparks.begin() +
+                static_cast<std::ptrdiff_t>(g_fallingEdgeSparks.size() - 150));
+    }
+
+    ImVec2 BiasedScreenPosition(int seed, const ImVec2& center, float radius, float angle)
+    {
+        const ImVec2 screen = ImGui::GetIO().DisplaySize;
+        // A maior parte nasce no sentido do gesto; o restante preenche a tela
+        // para o efeito nunca parecer preso a um único trilho radial.
+        if (Random01(seed) < 0.72f)
+        {
+            const ImVec2 direction = DirectionFromAngle(angle +
+                (Random01(seed + 3) - 0.5f) * 1.05f);
+            const float reach = radius + 65.0f + Random01(seed + 5) *
+                std::max(screen.x, screen.y) * 0.42f;
+            return ImVec2(std::clamp(center.x + direction.x * reach, 18.0f, screen.x - 18.0f),
+                std::clamp(center.y + direction.y * reach, 18.0f, screen.y - 18.0f));
+        }
+        return ImVec2(24.0f + Random01(seed + 7) * std::max(1.0f, screen.x - 48.0f),
+            24.0f + Random01(seed + 11) * std::max(1.0f, screen.y - 48.0f));
+    }
+
+    void SpawnGhostCircle(const ImVec2& center, float radius, float angle)
+    {
+        const int seed = ++g_specialSeed * 149;
+        GhostCircle circle{};
+        const ImVec2 screen = ImGui::GetIO().DisplaySize;
+        // Em vez de pingos independentes, a maior parte dos anéis nasce de
+        // outro anel ainda vivo: uma rede de circuitos em expansão.
+        if (!g_ghostCircles.empty() && Random01(seed) < 0.78f)
+        {
+            const GhostCircle& parent = g_ghostCircles.back();
+            const ImVec2 branch = DirectionFromAngle(Random01(seed + 1) * kTwoPi);
+            const float distance = 48.0f + Random01(seed + 2) * 176.0f;
+            circle.position = ImVec2(
+                std::clamp(parent.position.x + branch.x * distance, 28.0f, screen.x - 28.0f),
+                std::clamp(parent.position.y + branch.y * distance, 28.0f, screen.y - 28.0f));
+            circle.linkTarget = parent.position;
+            circle.linked = true;
+        }
+        else
+        {
+            circle.position = BiasedScreenPosition(seed, center, radius, angle);
+        }
+        circle.radius = 13.0f + Random01(seed + 3) * 50.0f;
+        circle.lifetime = 0.54f + Random01(seed + 5) * 0.70f;
+        g_ghostCircles.push_back(circle);
+        if (g_ghostCircles.size() > 32)
+            g_ghostCircles.erase(g_ghostCircles.begin(), g_ghostCircles.begin() +
+                static_cast<std::ptrdiff_t>(g_ghostCircles.size() - 32));
+    }
+
+    void SpawnGeometryTrace(const ImVec2& center, float radius, float angle)
+    {
+        const int seed = ++g_specialSeed * 157;
+        GeometryTrace trace{};
+        const ImVec2 pivot = BiasedScreenPosition(seed, center, radius, angle);
+        const int sides = 3 + static_cast<int>(Random01(seed + 1) * 6.0f);
+        const float shapeRadius = 18.0f + Random01(seed + 2) * 52.0f;
+        const float rotation = Random01(seed + 3) * kTwoPi;
+        trace.points.reserve(static_cast<std::size_t>(sides + 1));
+        for (int i = 0; i < sides; ++i)
+        {
+            const float a = rotation + kTwoPi * static_cast<float>(i) / static_cast<float>(sides);
+            const float jitter = 0.76f + Random01(seed + i * 17) * 0.35f;
+            trace.points.push_back(Add(pivot, Scale(DirectionFromAngle(a), shapeRadius * jitter)));
+        }
+        trace.points.push_back(trace.points.front());
+        trace.drawDuration = 0.16f + Random01(seed + 5) * 0.30f;
+        trace.lifetime = trace.drawDuration + 0.34f + Random01(seed + 7) * 0.42f;
+        g_geometryTraces.push_back(std::move(trace));
+        if (g_geometryTraces.size() > 18)
+            g_geometryTraces.erase(g_geometryTraces.begin(), g_geometryTraces.begin() +
+                static_cast<std::ptrdiff_t>(g_geometryTraces.size() - 18));
+    }
+
+    void SpawnSpecialEdgeEffect(int style, const ImVec2& center, float radius, float angle)
+    {
+        switch (style)
+        {
+        case 7: SpawnRicochetLasers(center, radius, angle); break;
+        case 8: SpawnFallingSparks(center, radius); break;
+        case 9: SpawnGhostCircle(center, radius, angle); break;
+        case 10: SpawnGeometryTrace(center, radius, angle); break;
+        default: break;
+        }
+    }
+
+    float SpecialSpawnInterval(int style)
+    {
+        switch (style)
+        {
+        case 7: return 0.09f;
+        case 8: return 0.035f;
+        case 9: return 0.12f;
+        case 10: return 0.18f;
+        default: return kCrackSpawnInterval;
+        }
+    }
+
     void SpawnEdgeFlash(int style, const ImVec2& center, float radius, float angle)
     {
         switch (std::clamp(style, 0, 6))
@@ -472,6 +677,132 @@ namespace
         });
     }
 
+    void DrawSpecialEdgeEffects(ImDrawList* draw, float alpha, float deltaTime,
+        float globalSize)
+    {
+        const float dt = std::clamp(deltaTime, 0.0f, 0.05f);
+        const ImVec2 screen = ImGui::GetIO().DisplaySize;
+
+        for (auto& laser : g_bouncingLasers)
+        {
+            laser.age += dt;
+            ImVec2 next = Add(laser.position, Scale(laser.velocity, dt));
+            if (next.x < 0.0f || next.x > screen.x)
+            {
+                next.x = std::clamp(next.x, 0.0f, screen.x);
+                laser.velocity.x = -laser.velocity.x;
+                ++laser.bounces;
+            }
+            if (next.y < 0.0f || next.y > screen.y)
+            {
+                next.y = std::clamp(next.y, 0.0f, screen.y);
+                laser.velocity.y = -laser.velocity.y;
+                ++laser.bounces;
+            }
+            laser.position = next;
+            const float life = std::max(0.0f, 1.0f - laser.age / laser.lifetime);
+            const ImVec2 tail = Add(laser.position,
+                Scale(Normalized(laser.velocity), -13.0f * globalSize));
+            draw->AddLine(tail, laser.position, WithAlpha(kGold, alpha * life * 0.20f),
+                5.0f * laser.size * globalSize);
+            draw->AddLine(tail, laser.position, WithAlpha(kCore, alpha * life),
+                1.15f * laser.size * globalSize);
+            draw->AddCircleFilled(laser.position, 2.5f * laser.size * globalSize,
+                WithAlpha(kCore, alpha * life * 0.90f), 10);
+        }
+        std::erase_if(g_bouncingLasers, [](const BouncingLaser& laser) {
+            return laser.age >= laser.lifetime || laser.bounces >= laser.maxBounces;
+        });
+
+        for (auto& spark : g_fallingEdgeSparks)
+        {
+            spark.age += dt;
+            spark.velocity.y += 185.0f * dt;
+            spark.position = Add(spark.position, Scale(spark.velocity, dt));
+            const float life = std::max(0.0f, 1.0f - spark.age / spark.lifetime);
+            const ImVec2 tail = Add(spark.position, Scale(Normalized(spark.velocity),
+                -7.0f * spark.size * globalSize));
+            draw->AddLine(tail, spark.position, WithAlpha(kGold, alpha * life * 0.24f),
+                3.0f * spark.size * globalSize);
+            draw->AddCircleFilled(spark.position, 1.15f * spark.size * globalSize,
+                WithAlpha(kCore, alpha * life), 10);
+        }
+        std::erase_if(g_fallingEdgeSparks, [&](const FallingEdgeSpark& spark) {
+            return spark.age >= spark.lifetime || spark.position.y > screen.y + 18.0f;
+        });
+
+        for (auto& circle : g_ghostCircles)
+        {
+            circle.age += dt;
+            const float progress = std::clamp(circle.age / circle.lifetime, 0.0f, 1.0f);
+            const float drawProgress = Smooth(std::min(1.0f, progress * 4.6f));
+            const float life = 1.0f - progress;
+            const float radius = circle.radius * globalSize;
+            if (circle.linked)
+            {
+                const float connection = Smooth(std::min(1.0f, progress * 4.6f));
+                const ImVec2 end(circle.linkTarget.x + (circle.position.x - circle.linkTarget.x) * connection,
+                    circle.linkTarget.y + (circle.position.y - circle.linkTarget.y) * connection);
+                draw->AddLine(circle.linkTarget, end, WithAlpha(kRadial, alpha * life * 0.15f),
+                    4.0f * globalSize);
+                draw->AddLine(circle.linkTarget, end, WithAlpha(kCore, alpha * life * 0.78f),
+                    0.85f * globalSize);
+            }
+            // O anel tem raio fixo: ele é desenhado a partir de um ponto,
+            // completa a volta e só então desaparece, sem parecer uma gota.
+            constexpr int segments = 40;
+            const int drawnSegments = std::max(1, static_cast<int>(std::ceil(
+                static_cast<float>(segments) * drawProgress)));
+            for (int i = 0; i < drawnSegments; ++i)
+            {
+                const float a0 = kTwoPi * static_cast<float>(i) / static_cast<float>(segments) - 1.5708f;
+                const float a1 = kTwoPi * static_cast<float>(i + 1) / static_cast<float>(segments) - 1.5708f;
+                const ImVec2 from = Add(circle.position, Scale(DirectionFromAngle(a0), radius));
+                const ImVec2 to = Add(circle.position, Scale(DirectionFromAngle(a1), radius));
+                draw->AddLine(from, to, WithAlpha(kRadial, alpha * life * 0.16f),
+                    4.6f * globalSize);
+                draw->AddLine(from, to, WithAlpha(kCore, alpha * life * 0.90f),
+                    0.95f * globalSize);
+            }
+            draw->AddCircleFilled(circle.position, 1.4f * globalSize,
+                WithAlpha(kCore, alpha * life), 10);
+        }
+        std::erase_if(g_ghostCircles, [](const GhostCircle& circle) {
+            return circle.age >= circle.lifetime;
+        });
+
+        for (auto& trace : g_geometryTraces)
+        {
+            trace.age += dt;
+            if (trace.points.size() < 2)
+                continue;
+            const float progress = std::clamp(trace.age / trace.drawDuration, 0.0f, 1.0f);
+            const float fade = std::max(0.0f, 1.0f - trace.age / trace.lifetime);
+            const float scaledSegments = progress * static_cast<float>(trace.points.size() - 1);
+            const int complete = std::min(static_cast<int>(scaledSegments),
+                static_cast<int>(trace.points.size() - 1));
+            for (int i = 0; i < complete; ++i)
+            {
+                draw->AddLine(trace.points[i], trace.points[i + 1],
+                    WithAlpha(kGold, alpha * fade * 0.18f), 4.0f * globalSize);
+                draw->AddLine(trace.points[i], trace.points[i + 1],
+                    WithAlpha(kCore, alpha * fade * 0.80f), 0.9f * globalSize);
+            }
+            if (complete < static_cast<int>(trace.points.size() - 1))
+            {
+                const float partial = scaledSegments - static_cast<float>(complete);
+                const ImVec2 from = trace.points[complete];
+                const ImVec2 to = trace.points[complete + 1];
+                const ImVec2 tip(from.x + (to.x - from.x) * partial,
+                    from.y + (to.y - from.y) * partial);
+                draw->AddLine(from, tip, WithAlpha(kCore, alpha * fade), 1.05f * globalSize);
+            }
+        }
+        std::erase_if(g_geometryTraces, [](const GeometryTrace& trace) {
+            return trace.age >= trace.lifetime;
+        });
+    }
+
     void EmitReleaseSparks(bool cold)
     {
         if (g_releasePath.empty())
@@ -504,6 +835,11 @@ namespace QuickDrawMagicEffects
         g_crackFlashes.clear();
         g_lastCrackSpawnTime = -100.0f;
         g_hasLastCrackAngle = false;
+        g_bouncingLasers.clear();
+        g_fallingEdgeSparks.clear();
+        g_ghostCircles.clear();
+        g_geometryTraces.clear();
+        g_lastSpecialSpawnTime = -100.0f;
     }
 
     void ClearEdgeFlashes()
@@ -511,6 +847,11 @@ namespace QuickDrawMagicEffects
         g_crackFlashes.clear();
         g_lastCrackSpawnTime = -100.0f;
         g_hasLastCrackAngle = false;
+        g_bouncingLasers.clear();
+        g_fallingEdgeSparks.clear();
+        g_ghostCircles.clear();
+        g_geometryTraces.clear();
+        g_lastSpecialSpawnTime = -100.0f;
     }
 
     void DrawLive(ImDrawList* draw, const std::vector<ImVec2>& normalizedPoints,
@@ -524,8 +865,7 @@ namespace QuickDrawMagicEffects
         const float visibility = std::clamp(alpha, 0.0f, 1.0f);
         if (!showCracks)
         {
-            g_crackFlashes.clear();
-            g_hasLastCrackAngle = false;
+            ClearEdgeFlashes();
         }
         else if (drawing)
         {
@@ -536,12 +876,24 @@ namespace QuickDrawMagicEffects
 
             const bool changedDirection = !g_hasLastCrackAngle ||
                 std::abs(AngleDelta(angle, g_lastCrackAngle)) > 0.035f;
-            if (changedDirection || time - g_lastCrackSpawnTime >= kCrackSpawnInterval)
+            if (edgeEffectStyle <= 6 &&
+                (changedDirection || time - g_lastCrackSpawnTime >= kCrackSpawnInterval))
             {
                 SpawnEdgeFlash(edgeEffectStyle, center, radius, angle);
                 g_lastCrackSpawnTime = time;
                 g_lastCrackAngle = angle;
                 g_hasLastCrackAngle = true;
+            }
+            else if (edgeEffectStyle >= 7 && edgeEffectStyle < kEdgeEffectStyleCount)
+            {
+                const float interval = SpecialSpawnInterval(edgeEffectStyle);
+                if (changedDirection || time - g_lastSpecialSpawnTime >= interval)
+                {
+                    SpawnSpecialEdgeEffect(edgeEffectStyle, center, radius, angle);
+                    g_lastSpecialSpawnTime = time;
+                    g_lastCrackAngle = angle;
+                    g_hasLastCrackAngle = true;
+                }
             }
 
             const float edgeProximity = Smooth(
@@ -554,6 +906,11 @@ namespace QuickDrawMagicEffects
         // As geometrias já nascem completas e não se rearranjam: só fazem
         // um flash curto e desaparecem, inclusive após o cursor parar.
         DrawCrackFlashes(draw,
+            visibility * std::clamp(edgeEffectOpacity, 0.0f, 100.0f) / 100.0f,
+            ImGui::GetIO().DeltaTime,
+            std::clamp(edgeEffectSize, 25.0f, 250.0f) / 100.0f);
+
+        DrawSpecialEdgeEffects(draw,
             visibility * std::clamp(edgeEffectOpacity, 0.0f, 100.0f) / 100.0f,
             ImGui::GetIO().DeltaTime,
             std::clamp(edgeEffectSize, 25.0f, 250.0f) / 100.0f);

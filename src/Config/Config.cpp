@@ -540,7 +540,7 @@ namespace Config
         if (key == "DrawEffectsEditor") { g_drawEffectsEditor = ParseEnabled(value); return true; }
         if (key == "DrawEdgeEffectStyle")
         {
-            try { g_drawEdgeEffectStyle = std::clamp(std::stoi(value), 0, 6); }
+            try { g_drawEdgeEffectStyle = std::clamp(std::stoi(value), 0, 10); }
             catch (...) { return false; }
             return true;
         }
@@ -1193,7 +1193,7 @@ namespace Config
                 }
                 else if (key == "DrawEdgeEffectStyle")
                 {
-                    try { g_drawEdgeEffectStyle = std::clamp(std::stoi(value), 0, 6); }
+                    try { g_drawEdgeEffectStyle = std::clamp(std::stoi(value), 0, 10); }
                     catch (...) {}
                 }
                 else if (key == "DrawEdgeEffectSize" || key == "DrawEdgeEffectOpacity")

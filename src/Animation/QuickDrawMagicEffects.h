@@ -8,7 +8,7 @@
 // reconhecimento de gestos ou estados de equipamento.
 namespace QuickDrawMagicEffects
 {
-    inline constexpr int kEdgeEffectStyleCount = 7;
+    inline constexpr int kEdgeEffectStyleCount = 11;
 
     void Reset();
     // Limpa somente os flashes temporários da borda, preservando a
