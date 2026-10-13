@@ -727,7 +727,7 @@ namespace
         draw->PathStroke(tool, 0, 2.0f);
         draw->PathArcTo(horizontalFlipCenter, 10.0f, 1.5707963f, 4.7123890f, 16);
         
-        draw->PathStroke(IM_COL32(235, 220, 180, 130), 0, 1.5f); //círculos completos. A metade original continua forte e a metade complementar usa 20% de opacidade.
+        draw->PathStroke(IM_COL32(235, 220, 180, 110), 0, 1.5f); //círculos completos flip horizontal. A metade original continua forte e a metade complementar usa 20% de opacidade.
         
         const ImVec2 verticalFlipCenter(gizmo.x, gizmo.y + 38.0f);
         
@@ -737,7 +737,7 @@ namespace
         draw->PathArcTo(verticalFlipCenter, 10.0f, 0.0f, 3.141592654f, 16);
         draw->PathStroke(tool, 0, 2.0f);
         draw->PathArcTo(verticalFlipCenter, 10.0f, 3.141592654f, 6.283185307f, 16);
-        draw->PathStroke(IM_COL32(235, 220, 180, 51), 0, 1.5f);
+        draw->PathStroke(IM_COL32(235, 220, 180, 110), 0, 1.5f);  //círculos completos flip vertical. A metade original continua forte e a metade complementar usa 20% de opacidade.
     }
 
     float DistanceToSegment(const ImVec2& p, const ImVec2& a, const ImVec2& b)
