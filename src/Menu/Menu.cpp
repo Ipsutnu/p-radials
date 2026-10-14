@@ -23191,11 +23191,21 @@ namespace Menu
         // ALTURA MÁXIMA DO SCROLL
         // ========================================================
 
+        // O cálculo da rolagem precisa usar exatamente a mesma área visível
+        // do clip do INFORMATION. Depois do corte pelo radial Bottom,
+        // panel.height ainda representava a altura antiga inteira e impedia
+        // o scroll de conteúdos que ficavam apenas abaixo desse novo limite.
+        constexpr float infoPaddingY = 5.0f;
+        const float infoContentBottom =
+            GetSettingsPanelContentBottom(panel, infoPaddingY);
+        const float infoVisibleHeight =
+            infoContentBottom - (panel.min.y + infoPaddingY);
+
         const float maxScroll =
             std::max(
                 0.0f,
                 g_settingsInfoContentHeight -
-                panel.height
+                infoVisibleHeight
             );
 
         // ========================================================
@@ -23852,8 +23862,14 @@ namespace Menu
         const float contentWidth =
             panel.width - paddingX * 2.0f;
 
+        // Mantém o INFORMATION no mesmo limite dinâmico dos painéis de
+        // configuração: o conteúdo termina antes do radial Bottom e passa a
+        // usar sua própria rolagem quando ultrapassa esse ponto.
+        const float contentBottom =
+            GetSettingsPanelContentBottom(panel, paddingY);
+
         const float visibleHeight =
-            panel.height - paddingY * 2.0f;
+            contentBottom - (panel.min.y + paddingY);
 
         if (contentWidth <= 0.0f ||
             visibleHeight <= 0.0f)
@@ -23896,7 +23912,7 @@ namespace Menu
 
         const ImVec2 clipMax(
             panel.max.x - paddingX,
-            panel.max.y - paddingY
+            contentBottom
         );
 
         // ========================================================
