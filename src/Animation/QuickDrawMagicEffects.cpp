@@ -919,11 +919,15 @@ namespace QuickDrawMagicEffects
         // original continua por cima para preservar a leitura já existente.
         if (normalizedPoints.size() > 1)
         {
-            const ImU32 trailColor = gameplay ? kCore : kGold;
+            // const ImU32 trailColor = gameplay ? kCore : kGold;
+            const ImU32 trailColor = kCore;
             std::vector<ImVec2> path;
+            
             path.reserve(normalizedPoints.size());
+            
             for (const auto& point : normalizedPoints)
                 path.push_back(ToScreen(point, center, radius));
+            
             draw->AddPolyline(path.data(), static_cast<int>(path.size()),
                 WithAlpha(trailColor, visibility * 0.12f), 0, 15.0f);
             draw->AddPolyline(path.data(), static_cast<int>(path.size()),
