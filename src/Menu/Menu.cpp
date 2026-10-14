@@ -16703,7 +16703,7 @@ namespace Menu
                 ? (now < g_quickDrawEditorHotkeyConflictLabelUntil
                     ? g_quickDrawEditorHotkeyConflictLabel
                     : Language::Get("waiting_key"))
-                : "HOTKEY";
+                : Language::Get("hotkey");
             const ImVec2 hintSize = ImGui::CalcTextSize(hint.c_str());
             draw->AddText(ImVec2(g_quickDrawEditorHotkeyCenter.x - hintSize.x * 0.5f,
                     g_quickDrawEditorHotkeyCenter.y - kQuickDrawEditorHotkeyRadius -
@@ -16744,12 +16744,12 @@ namespace Menu
             FadeColor(IM_COL32(245, 242, 232, gateHovered ? 210 : 100), alpha), 24, 1.1f);
         if (gateHovered)
         {
-            constexpr const char* gateHint = "REQUIRE WHEEL KEY";
-            const ImVec2 hintSize = ImGui::CalcTextSize(gateHint);
+            const std::string& gateHint = Language::Get("require_wheel_key");
+            const ImVec2 hintSize = ImGui::CalcTextSize(gateHint.c_str());
             draw->AddText(ImVec2(g_quickDrawEditorHotkeyGateCenter.x -
                     kQuickDrawEditorHotkeyGateRadius - hintSize.x - 12.0f,
                     g_quickDrawEditorHotkeyGateCenter.y - hintSize.y * 0.5f),
-                FadeColor(IM_COL32(235, 230, 215, 255), alpha), gateHint);
+                FadeColor(IM_COL32(235, 230, 215, 255), alpha), gateHint.c_str());
         }
 
         // Mantemos os retângulos atualizados apenas como envelope de

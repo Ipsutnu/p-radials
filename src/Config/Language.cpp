@@ -35,6 +35,8 @@ namespace Language
             { "overflow_mechanism", "Overflow Mechanism" },
             { "radial_system", "Radial System" },
             { "waiting_key", "Waiting key..." },
+            { "hotkey", "HOTKEY" },
+            { "require_wheel_key", "REQUIRE WHEEL KEY" },
             { "show_item_information", "Show item information during Gameplay" },
             { "menu_section", "MENU" },
             { "slow_time_during_radial_selection", "Slowtime during radial selection" },
