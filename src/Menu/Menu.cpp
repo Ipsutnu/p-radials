@@ -672,6 +672,59 @@ namespace Menu
     static int g_gameplayPreviewFadeFrame = -1;
     static constexpr float kGameplayPreviewFadeOutSpeed = 10.0f;
 
+    // Ao remover um item diretamente do Hub, a seleção persistida ainda
+    // poderia mantê-lo como último hovered. Este fechamento é exclusivo do
+    // preview do WheelSettings: ele preserva o modelo por alguns frames para
+    // desaparecer com a mesma máscara suave, antes de limpar a seleção.
+    static bool g_settingsPreviewFadeOut = false;
+    static float g_settingsPreviewFadeAlpha = 1.0f;
+    static int g_settingsPreviewFadeFrame = -1;
+    static constexpr float kSettingsPreviewFadeOutSpeed = 10.0f;
+
+    static void BeginSettingsPreviewFadeOut()
+    {
+        if (!ItemPreview::IsVisible() || g_settingsPreviewFadeOut)
+            return;
+
+        g_settingsPreviewFadeOut = true;
+        g_settingsPreviewFadeAlpha = 1.0f;
+        g_settingsPreviewFadeFrame = -1;
+    }
+
+    static void CancelSettingsPreviewFadeOut()
+    {
+        g_settingsPreviewFadeOut = false;
+        g_settingsPreviewFadeAlpha = 1.0f;
+        g_settingsPreviewFadeFrame = -1;
+        if (ItemPreview::IsVisible())
+            ItemPreview::SetOpacity(1.0f);
+    }
+
+    static void UpdateSettingsPreviewFadeOut(float dt)
+    {
+        if (!g_settingsPreviewFadeOut)
+            return;
+
+        // Frame Generation pode apresentar a mesma UI mais de uma vez.
+        const int frame = ImGui::GetFrameCount();
+        if (frame != g_settingsPreviewFadeFrame)
+        {
+            g_settingsPreviewFadeFrame = frame;
+            g_settingsPreviewFadeAlpha = std::max(0.0f,
+                g_settingsPreviewFadeAlpha - std::clamp(dt, 0.0f, 0.05f) *
+                    kSettingsPreviewFadeOutSpeed);
+            ItemPreview::SetOpacity(g_settingsPreviewFadeAlpha);
+        }
+
+        if (g_settingsPreviewFadeAlpha > 0.0f)
+            return;
+
+        ItemPreview::Hide();
+        ItemPreview::SilentPreviewMenu::Close();
+        g_settingsPreviewFadeOut = false;
+        g_settingsPreviewFadeFrame = -1;
+    }
+
     static void BeginGameplayPreviewFadeOut()
     {
         if (!ItemPreview::IsVisible() || g_gameplayPreviewFadeOut)
@@ -6856,6 +6909,19 @@ namespace Menu
             return;
         }
 
+        // O preview do Hub retém o último hovered por alguns segundos. Se
+        // esta é justamente a instância removida, a retenção é cancelada e
+        // o modelo atual pode sair suavemente antes de ser limpo.
+        const bool removedItemOwnsPreview =
+            g_settingsPreviewSelectionActive &&
+            SameSettingsItem(
+                g_settingsPreviewSelection.form,
+                g_settingsPreviewSelection.uniqueID,
+                g_settingsPreviewSelection.hasUniqueID,
+                item.form,
+                item.uniqueID,
+                item.hasUniqueID);
+
         // ============================================================
         // REMOVE SOMENTE A INSTÂNCIA SELECIONADA
         // ============================================================
@@ -6865,6 +6931,14 @@ namespace Menu
             item.uniqueID,
             item.hasUniqueID))
         {
+            if (removedItemOwnsPreview)
+            {
+                g_settingsPreviewSelection = {};
+                g_settingsPreviewSelectionActive = false;
+                g_settingsPreviewLastHoverTime = 0.0;
+                BeginSettingsPreviewFadeOut();
+            }
+
             // ========================================================
             // EXPLOSÃO DE PARTÍCULAS
             // ========================================================
@@ -21670,7 +21744,11 @@ namespace Menu
                     : std::nullopt) ||
             !previewItem.form)
         {
-            ItemPreview::Hide();
+            // A exclusão pelo botão direito deixa o último modelo terminar
+            // seu fade. Os demais casos sem seleção continuam ocultando na
+            // hora, como antes.
+            if (!g_settingsPreviewFadeOut)
+                ItemPreview::Hide();
             return;
         }
 
@@ -21707,6 +21785,9 @@ namespace Menu
         );
         ItemPreview::SetSizeScale(previewLayout.itemSize * 0.01f);
 
+        // Uma nova seleção vence qualquer saída pendente; a troca entre
+        // previews continua imediata e não herda a transparência anterior.
+        CancelSettingsPreviewFadeOut();
         ItemPreview::SilentPreviewMenu::Open();
 
         // ============================================================
@@ -27239,12 +27320,8 @@ namespace Menu
         const bool layoutSliderDragging =
             g_activeLayoutSlider != LayoutSlider::None;
 
-        // Mantém os controles laterais fora da região central do preview.
-        // O alvo fica entre a borda esquerda e a coluna dos locks Top/Bottom.
-        constexpr float previewControlClearance = 96.0f;
-        const bool sideControlsOverlapPreview =
-            std::abs(wheelLayout.leftRadial.x - wheelLayout.center.x) <=
-            previewControlClearance;
+        // O destino alternativo à esquerda fica entre a borda e a coluna dos
+        // locks Top/Bottom. A outra posição segura é o centro da tela.
         const float sideControlsLeftX =
             (wheelLayout.min.x + GetSettingsLockColumnX()) * 0.5f;
 
@@ -27266,52 +27343,57 @@ namespace Menu
         float activePreviewRadius = 0.0f;
         const bool hasActivePreview = GetVisibleItemPreviewMask(
             activePreviewCenter, activePreviewRadius);
-        const auto previewOverlapsCircle = [&](const ImVec2& circleCenter,
-            float circleRadius) {
+        struct SideLockPlacement
+        {
+            float lockX{};
+            float mouseX{};
+            float clearance{};
+        };
+        const auto circleClearance = [&](float x, float buttonRadius) {
             if (!hasActivePreview)
-                return false;
-            const float dx = activePreviewCenter.x - circleCenter.x;
-            const float dy = activePreviewCenter.y - circleCenter.y;
-            const float combinedRadius = activePreviewRadius + circleRadius;
-            return dx * dx + dy * dy <= combinedRadius * combinedRadius;
+                return 1000000.0f;
+            const float dx = activePreviewCenter.x - x;
+            const float dy = activePreviewCenter.y - wheelLayout.leftRadial.y;
+            return std::sqrt(dx * dx + dy * dy) - (activePreviewRadius + buttonRadius);
+        };
+        const auto makePlacement = [&](float lockX) {
+            const float mouseX = mouseTargetForSideLock(lockX);
+            const float scrollX = lockX + sideControlSpacing;
+            return SideLockPlacement{
+                lockX, mouseX,
+                std::min({ circleClearance(mouseX, sideMouseRadius),
+                    circleClearance(lockX, sideLockRadius),
+                    circleClearance(scrollX, sideMouseRadius) })
+            };
         };
 
-        const float defaultSideLockX = sideControlsOverlapPreview
-            ? sideControlsLeftX
-            : wheelLayout.leftRadial.x;
-        const float defaultSideMouseX = mouseTargetForSideLock(defaultSideLockX);
-        const float defaultSideScrollX = defaultSideLockX + sideControlSpacing;
-        const bool previewOverlapsSideControls =
-            previewOverlapsCircle(ImVec2(defaultSideMouseX, wheelLayout.leftRadial.y),
-                sideMouseRadius) ||
-            previewOverlapsCircle(ImVec2(defaultSideLockX, wheelLayout.leftRadial.y),
-                sideLockRadius) ||
-            previewOverlapsCircle(ImVec2(defaultSideScrollX, wheelLayout.leftRadial.y),
-                sideMouseRadius);
-
-        const bool sideRadialIsLeft =
-            wheelLayout.leftRadial.x < wheelLayout.center.x;
-        const bool previewOverlapsSideRadial =
-            previewOverlapsCircle(wheelLayout.leftRadial, GetSideRadialRadius());
-
-        float sideControlsTargetX = defaultSideLockX;
-        float sideMouseTargetX = defaultSideMouseX;
-        if (sideRadialIsLeft && previewOverlapsSideRadial)
+        // A posição normal segue o radial. Só quando o preview se aproxima do
+        // grupo é que escolhemos entre os dois refúgios já definidos.
+        const SideLockPlacement radialPlacement = makePlacement(wheelLayout.leftRadial.x);
+        const SideLockPlacement leftPlacement = makePlacement(sideControlsLeftX);
+        const SideLockPlacement centerPlacement = makePlacement(wheelLayout.center.x);
+        SideLockPlacement selectedPlacement = radialPlacement;
+        constexpr float previewSafetyGap = 10.0f;
+        constexpr float placementHysteresis = 18.0f;
+        if (hasActivePreview && radialPlacement.clearance < previewSafetyGap)
         {
-            // Caso especial: o preview cobre um radial que já está à esquerda.
-            // O Lock Radial fica no centro da tela, com Mouse Lock à esquerda
-            // e Lock Scroll à direita. Assim o grupo não varia conforme o
-            // tamanho do modelo exibido.
-            sideControlsTargetX = wheelLayout.center.x;
-            sideMouseTargetX = sideControlsTargetX - sideControlSpacing;
+            if (std::abs(leftPlacement.clearance - centerPlacement.clearance) <=
+                placementHysteresis)
+            {
+                // Quando os dois lados são equivalentes, mantém o destino mais
+                // próximo da animação atual para não alternar quadro a quadro.
+                selectedPlacement = std::abs(g_settingsSideLockAnimatedX - leftPlacement.lockX) <=
+                    std::abs(g_settingsSideLockAnimatedX - centerPlacement.lockX)
+                    ? leftPlacement : centerPlacement;
+            }
+            else
+            {
+                selectedPlacement = leftPlacement.clearance > centerPlacement.clearance
+                    ? leftPlacement : centerPlacement;
+            }
         }
-        else if (previewOverlapsSideControls)
-        {
-            // Em qualquer outro perfil, cobrir uma das bolhas recupera o
-            // comportamento já existente de afastar o grupo para a esquerda.
-            sideControlsTargetX = sideControlsLeftX;
-            sideMouseTargetX = mouseTargetForSideLock(sideControlsTargetX);
-        }
+        const float sideControlsTargetX = selectedPlacement.lockX;
+        const float sideMouseTargetX = selectedPlacement.mouseX;
         if (g_settingsSideLockAnimatedX <= 0.0f)
             g_settingsSideLockAnimatedX = wheelLayout.leftRadial.x;
         if (!layoutSliderDragging)
@@ -27544,6 +27626,7 @@ namespace Menu
 
         // Atualiza o modelo 3D utilizando a seleção.
         UpdateSettingsPreview();
+        UpdateSettingsPreviewFadeOut(dt);
 
         // ============================================================
         // SELETOR DE SEÇÕES
@@ -28095,6 +28178,9 @@ namespace Menu
             TransitionSettingsBackdrop(1.0f, 0.5f);
             g_settingsBackdropClosingOnly = false;
             g_settingsPreviewFadeSettleElapsed = 0.0f;
+            g_settingsPreviewFadeOut = false;
+            g_settingsPreviewFadeAlpha = 1.0f;
+            g_settingsPreviewFadeFrame = -1;
             ResetSettingsBackdropItemMask();
             g_trackEditorBackdropT = 0.0f;
             g_trackEditorBackdropStart = 0.0f;
