@@ -610,7 +610,7 @@ namespace Menu
     static constexpr float kQuickDrawEditorAutoUseRadius = 45.0f;
     static float g_quickDrawEditorAutoUseClickFlash = 0.0f;
     static float g_quickDrawEditorAutoUseShadowT = 0.0f;
-    static constexpr float kQuickDrawEditorHotkeyRadius = 34.0f;
+    static constexpr float kQuickDrawEditorHotkeyRadius = 68.0f;
     static constexpr float kQuickDrawEditorHotkeyGateRadius = 12.0f;
     static constexpr float kQuickDrawEditorHotkeyClearRadius = 10.0f;
     static bool g_quickDrawEditorWaitingHotkey = false;
@@ -16407,10 +16407,18 @@ namespace Menu
         const float hotkeyDt = std::clamp(ImGui::GetIO().DeltaTime, 0.0f, 0.05f);
         constexpr float hotkeyTraceRadius = QUICK_DRAW_EDITOR_RADIUS + 21.0f;
         constexpr float hotkeyButtonOffset = 76.0f;
+        constexpr float hotkeyButtonShiftX = -150.0f;
         constexpr float hotkeyButtonRadius = kQuickDrawEditorHotkeyRadius;
-        const ImVec2 connectorStart(center.x - QUICK_DRAW_EDITOR_RADIUS -
-                hotkeyButtonOffset + hotkeyButtonRadius, center.y);
+        const ImVec2 hotkeyCenterForTrace(center.x - QUICK_DRAW_EDITOR_RADIUS -
+                hotkeyButtonOffset + hotkeyButtonShiftX, center.y);
         const ImVec2 connectorEnd(center.x - hotkeyTraceRadius, center.y);
+        // O botão agora fica dentro do limite externo do círculo. A linha
+        // nasce na borda voltada para o anel, preservando um elo contínuo.
+        const ImVec2 connectorStart(
+            hotkeyCenterForTrace.x > connectorEnd.x
+                ? hotkeyCenterForTrace.x - hotkeyButtonRadius
+                : hotkeyCenterForTrace.x + hotkeyButtonRadius,
+            center.y);
         const auto* savedHotkey = FindQuickDrawGesture(g_quickDrawEditorItem);
         const bool hasSavedHotkey = savedHotkey && savedHotkey->hotkey != 0;
         if (g_quickDrawEditorHotkeyTraceT >= 0.0f)
@@ -16526,9 +16534,11 @@ namespace Menu
             g_quickDrawEditorOkCenter.x + 180.0f,  //aumentar manda p direita
             g_quickDrawEditorOkCenter.y - 100.0f); //aumentar sobe
         // Atalho do item: à esquerda do círculo, centralizado verticalmente.
-        g_quickDrawEditorHotkeyCenter = ImVec2(center.x - r - 76.0f, center.y);
+        g_quickDrawEditorHotkeyCenter = ImVec2(
+            center.x - r - 76.0f - 150.0f, center.y);
         g_quickDrawEditorHotkeyGateCenter = ImVec2(
-            g_quickDrawEditorHotkeyCenter.x - 53.0f, center.y);
+            g_quickDrawEditorHotkeyCenter.x -
+                kQuickDrawEditorHotkeyRadius - 19.0f, center.y);
         g_quickDrawEditorHotkeyClearCenter = ImVec2(
             g_quickDrawEditorHotkeyCenter.x,
             g_quickDrawEditorHotkeyCenter.y + kQuickDrawEditorHotkeyRadius + 19.0f);
@@ -16656,7 +16666,7 @@ namespace Menu
         if (g_quickDrawEditorHotkeyShadowT > 0.001f)
         {
             constexpr int shadowSteps = 10;
-            constexpr float shadowReach = 60.0f;
+            constexpr float shadowReach = 120.0f;
             for (int step = shadowSteps; step >= 0; --step)
             {
                 const float t = static_cast<float>(step) / shadowSteps;
