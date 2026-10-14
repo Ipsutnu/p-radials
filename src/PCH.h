@@ -186,6 +186,8 @@ namespace Menu {
     bool HandleTopBottomGameplayMouseButton(int button, bool pressed);
     bool IsQuickDrawGameplayActive();
     bool CaptureQuickDrawHotkey(RE::ButtonEvent* buttonEvent);
+    bool BeginQuickDrawHotkeyCaptureAtCursor();
+    bool CancelQuickDrawHotkeyCaptureFromMouse(int button);
     bool HandleQuickDrawHotkey(int virtualKey, bool activationHeld);
     bool HandleQuickDrawHotkeyRelease(int virtualKey);
     bool HandleQuickDrawHotkeyHandKey(int virtualKey, bool firstPress);

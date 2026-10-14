@@ -300,6 +300,19 @@ RE::BSEventNotifyControl InputHandler::ProcessEvent(
                     }
                     if (primary || secondary)
                     {
+                        // Sobre o botão de hotkey do Quick Draw, a primeira
+                        // ou segunda tecla inicia a captura em vez de
+                        // confirmar/fechar o editor.
+                        if (button->IsDown() &&
+                            button->GetRuntimeData().heldDownSecs <= 0.0f &&
+                            Menu::BeginQuickDrawHotkeyCaptureAtCursor())
+                        {
+                            button->GetRuntimeData().value = 0.0f;
+                            button->GetRuntimeData().heldDownSecs = 0.0f;
+                            button->SetUserEvent("");
+                            button->SetIDCode(0xFF);
+                            continue;
+                        }
                         const bool previous = AnyActivationHeld();
                         if (button->IsDown() && button->GetRuntimeData().heldDownSecs <= 0.0f)
                         {
@@ -832,6 +845,41 @@ RE::BSEventNotifyControl InputHandler::ProcessEvent(
         {
             const uint32_t mouseButton =
                 buttonEvent->GetIDCode();
+
+            // O editor de Quick Draw é modal mesmo quando o WheelSettings
+            // principal já não está aberto. Trata o clique antes do fluxo de
+            // gameplay, que de outro modo o consumia como início de desenho.
+            if (Menu::IsQuickDrawEditorOpen() &&
+                (mouseButton == 0 || mouseButton == 1))
+            {
+                // O clique pode chegar antes de um MouseMove no mesmo frame;
+                // atualiza a posição física antes de testar se ele está fora.
+                Menu::UsePhysicalSettingsCursor();
+                // A captura não depende mais do timing de heldDownSecs:
+                // qualquer evento ainda pressionado fora do botão encerra a
+                // espera imediatamente, inclusive o clique no X de reset.
+                if ((buttonEvent->IsDown() || buttonEvent->IsPressed()) &&
+                    Menu::CancelQuickDrawHotkeyCaptureFromMouse(
+                        static_cast<int>(mouseButton)))
+                {
+                    consumeButton(buttonEvent);
+                    continue;
+                }
+                // Alguns drivers entregam o primeiro clique do editor já
+                // com heldDownSecs acima de zero. IsDown é a borda confiável
+                // aqui e permite cancelar a captura imediatamente.
+                const bool firstDown = buttonEvent->IsDown();
+                const bool released = !buttonEvent->IsPressed();
+                const bool handled = (firstDown || released)
+                    ? Menu::HandleQuickDrawEditorMouseButton(
+                        static_cast<int>(mouseButton), !released)
+                    : true;
+                if (handled)
+                {
+                    consumeButton(buttonEvent);
+                    continue;
+                }
+            }
 
             // ========================================================
             // QUICK DRAW - GAMEPLAY
