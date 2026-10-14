@@ -354,7 +354,14 @@ namespace
         case RadialShape::Style::CometTail: return Tr("shape_comet_tail");
         case RadialShape::Style::RoseEngine: return Tr("shape_rose_engine");
         case RadialShape::Style::QuantumRipple: return Tr("shape_quantum_ripple");
+        case RadialShape::Style::Flower: return Tr("shape_flower");
+        case RadialShape::Style::FourPointStar: return Tr("shape_four_point_star");
+        case RadialShape::Style::Hexagon: return Tr("shape_hexagon");
+        case RadialShape::Style::Triangle: return Tr("shape_triangle");
+        case RadialShape::Style::Diamond: return Tr("shape_diamond");
         case RadialShape::Style::Star: return Tr("shape_star");
+        case RadialShape::Style::Heart: return Tr("shape_heart");
+        case RadialShape::Style::SixPointStar: return Tr("shape_six_point_star");
         default: return Tr("shape_classic_orbit");
         }
     }

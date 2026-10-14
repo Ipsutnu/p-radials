@@ -1579,7 +1579,7 @@ namespace Config
             RadialAnimation::Name(static_cast<RadialAnimation::Style>(
                 std::clamp(g_radialAnimation, 0, RadialAnimation::Count() - 1))));
         SetIniValue(lines, "Gameplay", "RadialShape",
-            RadialShape::Name(static_cast<RadialShape::Style>(
+            RadialShape::PersistentName(static_cast<RadialShape::Style>(
                 std::clamp(g_radialShape, 0, RadialShape::Count() - 1))));
         SetIniValue(lines, "Gameplay", "CustomRadial", g_customRadial ? "1" : "0");
         SetIniValue(lines, "Gameplay", "SlowTimeMultiplier",

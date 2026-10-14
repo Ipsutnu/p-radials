@@ -26,6 +26,8 @@
 #include "Serialization.h"
 #include "Slowtime.h"
 
+#include <imgui_internal.h>
+
 #include <fstream>
 #include <string>
 #include <filesystem>
@@ -15537,23 +15539,30 @@ namespace Menu
             center.y - panelRadius);
         g_quickDrawSettingsPanelMax = ImVec2(center.x + panelRadius,
             center.y + panelRadius);
-        // Mantém o disco original, mas escurece a periferia de forma gradual:
-        // o centro fica na cor base e a borda recebe apenas ~35% de sombra.
-        draw->AddCircleFilled(center, panelRadius,
-            FadeColor(IM_COL32(16, 17, 22, 100), alpha * contentT), 96);
-        constexpr int edgeShadeBands = 10;
-        constexpr float edgeShadeStrength = 0.35f;
-        const float edgeBandThickness = panelRadius * 0.095f + 1.0f;
-        for (int band = 0; band < edgeShadeBands; ++band)
+        // Uma única máscara radial: a transparência é interpolada do centro
+        // para a borda no próprio mesh. Assim não há anéis concêntricos
+        // visíveis tentando imitar o degradê.
+        constexpr int fadeSegments = 96;
+        const ImU32 fadeCenter = FadeColor(IM_COL32(4, 5, 8, 0), alpha * contentT);
+        const ImU32 fadeEdge = FadeColor(IM_COL32(4, 5, 8, 150), alpha * contentT);
+        const ImVec2 fadeUv = draw->_Data->TexUvWhitePixel;
+        draw->PrimReserve(fadeSegments * 3, fadeSegments * 3);
+        for (int segment = 0; segment < fadeSegments; ++segment)
         {
-            const float edgeT = static_cast<float>(band + 1) /
-                static_cast<float>(edgeShadeBands);
-            const float radius = panelRadius * (0.32f + edgeT * 0.68f);
-            const float shadeAlpha = edgeShadeStrength * edgeT * edgeT;
-            draw->AddCircle(center, radius,
-                FadeColor(IM_COL32(4, 5, 8,
-                    static_cast<int>(100.0f * shadeAlpha)), alpha * contentT),
-                96, edgeBandThickness);
+            constexpr float twoPi = 6.28318530718f;
+            const float a0 = (static_cast<float>(segment) / fadeSegments) * twoPi;
+            const float a1 = (static_cast<float>(segment + 1) / fadeSegments) * twoPi;
+            const ImVec2 outer0(center.x + std::cos(a0) * panelRadius,
+                center.y + std::sin(a0) * panelRadius);
+            const ImVec2 outer1(center.x + std::cos(a1) * panelRadius,
+                center.y + std::sin(a1) * panelRadius);
+            const ImDrawIdx base = static_cast<ImDrawIdx>(draw->_VtxCurrentIdx);
+            draw->PrimWriteIdx(base);
+            draw->PrimWriteIdx(base + 1);
+            draw->PrimWriteIdx(base + 2);
+            draw->PrimWriteVtx(center, fadeUv, fadeCenter);
+            draw->PrimWriteVtx(outer0, fadeUv, fadeEdge);
+            draw->PrimWriteVtx(outer1, fadeUv, fadeEdge);
         }
         draw->AddCircle(center, panelRadius,
             FadeColor(IM_COL32(205, 185, 140, 135), alpha * contentT), 96, 1.0f);
@@ -15634,7 +15643,9 @@ namespace Menu
         constexpr int styleCount = QuickDrawMagicEffects::kEdgeEffectStyleCount;
         static constexpr std::array<const char*, styleCount> styleLabels{
             "draw_edge_none", "draw_edge_shock", "draw_edge_sine", "draw_edge_squares",
-            "draw_edge_arrows", "draw_edge_prisms", "draw_edge_worldbreaker" };
+            "draw_edge_arrows", "draw_edge_prisms", "draw_edge_worldbreaker",
+            "draw_edge_ricochet_lasers", "draw_edge_falling_sparks",
+            "draw_edge_ghost_circles", "draw_edge_geometry" };
         const float styleLabelY = y;
         const float styleTrackY = styleLabelY + labelToTrack;
         g_quickDrawSettingsStyleMin = ImVec2(controlLeft, styleLabelY - 4.0f);
@@ -15654,7 +15665,9 @@ namespace Menu
                 g_quickDrawEffectPreviewUntil = now + 2.0f;
             }
         }
-        const char* styleName = Language::Get(styleLabels[Config::g_drawEdgeEffectStyle]).c_str();
+        const char* styleName = Config::g_drawEdgeEffectStyle == 0
+            ? Language::Get("none").c_str()
+            : Language::Get(styleLabels[Config::g_drawEdgeEffectStyle]).c_str();
         const ImVec2 styleNameSize = ImGui::CalcTextSize(styleName);
         DrawTextWithShadow(draw, ImVec2(controlLeft, styleLabelY), fadedWhite,
             Language::Get("draw_edge_effect").c_str(), alpha);
@@ -15671,13 +15684,17 @@ namespace Menu
             FadeColor(IM_COL32(190, 184, 170, 225), alpha), 2.0f);
         y += sliderBlockHeight;
 
+        const bool edgeEffectEnabled = Config::g_drawEdgeEffectStyle != 0;
         const auto drawSlider = [&](QuickDrawSettingsSlider slider, const char* label,
-            float& value, float minimum, float maximum, ImVec2& hitMin, ImVec2& hitMax) {
+            float& value, float minimum, float maximum, ImVec2& hitMin,
+            ImVec2& hitMax, bool enabled) {
             const float labelY = y;
             const float sliderY = labelY + labelToTrack;
             hitMin = ImVec2(controlLeft, labelY - 4.0f);
             hitMax = ImVec2(controlRight, sliderY + 11.0f);
-            if (g_quickDrawSettingsActiveSlider == slider)
+            if (!enabled && g_quickDrawSettingsActiveSlider == slider)
+                g_quickDrawSettingsActiveSlider = QuickDrawSettingsSlider::None;
+            if (enabled && g_quickDrawSettingsActiveSlider == slider)
             {
                 const float t = std::clamp((g_settingsMousePos.x - controlLeft) /
                     controlWidth, 0.0f, 1.0f);
@@ -15689,23 +15706,26 @@ namespace Menu
             const float t = (value - minimum) / std::max(maximum - minimum, 0.001f);
             const std::string valueText = std::format("{:.0f}%", value);
             const ImVec2 valueSize = ImGui::CalcTextSize(valueText.c_str());
-            DrawTextWithShadow(draw, ImVec2(controlLeft, labelY), fadedWhite, label, alpha);
+            const float enabledAlpha = enabled ? 1.0f : 0.32f;
+            DrawTextWithShadow(draw, ImVec2(controlLeft, labelY),
+                FadeColor(white, alpha * enabledAlpha), label, alpha * enabledAlpha);
             DrawTextWithShadow(draw, ImVec2(controlRight - valueSize.x, labelY),
-                fadedMuted, valueText.c_str(), alpha);
+                FadeColor(IM_COL32(180, 165, 130, 230), alpha * enabledAlpha),
+                valueText.c_str(), alpha * enabledAlpha);
             draw->AddRectFilled(ImVec2(controlLeft, sliderY - 6.0f),
                 ImVec2(controlRight, sliderY + 6.0f),
-                FadeColor(IM_COL32(25, 26, 31, 235), alpha), 4.0f);
+                FadeColor(IM_COL32(25, 26, 31, enabled ? 235 : 150), alpha), 4.0f);
             draw->AddRectFilled(ImVec2(controlLeft, sliderY - 6.0f),
                 ImVec2(controlLeft + controlWidth * t, sliderY + 6.0f),
-                FadeColor(IM_COL32(190, 184, 170, 205), alpha), 4.0f);
+                FadeColor(IM_COL32(190, 184, 170, enabled ? 205 : 55), alpha), 4.0f);
             y += sliderBlockHeight;
         };
         drawSlider(QuickDrawSettingsSlider::Size, Language::Get("draw_edge_size").c_str(),
             Config::g_drawEdgeEffectSize, 25.0f, 250.0f,
-            g_quickDrawSettingsSizeMin, g_quickDrawSettingsSizeMax);
+            g_quickDrawSettingsSizeMin, g_quickDrawSettingsSizeMax, edgeEffectEnabled);
         drawSlider(QuickDrawSettingsSlider::Opacity, Language::Get("draw_edge_opacity").c_str(),
             Config::g_drawEdgeEffectOpacity, 0.0f, 100.0f,
-            g_quickDrawSettingsOpacityMin, g_quickDrawSettingsOpacityMax);
+            g_quickDrawSettingsOpacityMin, g_quickDrawSettingsOpacityMax, edgeEffectEnabled);
         draw->PopClipRect();
 
         // Scrollbar do retângulo central: já acompanha o conteúdo atual e
@@ -15934,9 +15954,11 @@ namespace Menu
             }
             if (insideQuickRect(g_quickDrawSettingsStyleMin, g_quickDrawSettingsStyleMax))
                 g_quickDrawSettingsActiveSlider = QuickDrawSettingsSlider::Style;
-            else if (insideQuickRect(g_quickDrawSettingsSizeMin, g_quickDrawSettingsSizeMax))
+            else if (Config::g_drawEdgeEffectStyle != 0 &&
+                insideQuickRect(g_quickDrawSettingsSizeMin, g_quickDrawSettingsSizeMax))
                 g_quickDrawSettingsActiveSlider = QuickDrawSettingsSlider::Size;
-            else if (insideQuickRect(g_quickDrawSettingsOpacityMin, g_quickDrawSettingsOpacityMax))
+            else if (Config::g_drawEdgeEffectStyle != 0 &&
+                insideQuickRect(g_quickDrawSettingsOpacityMin, g_quickDrawSettingsOpacityMax))
                 g_quickDrawSettingsActiveSlider = QuickDrawSettingsSlider::Opacity;
             else
                 return true;
@@ -26052,7 +26074,9 @@ namespace Menu
             static constexpr std::array<const char*, optionCount> labels{
                 "draw_edge_none", "draw_edge_shock", "draw_edge_sine",
                 "draw_edge_squares", "draw_edge_arrows", "draw_edge_prisms",
-                "draw_edge_worldbreaker" };
+                "draw_edge_worldbreaker", "draw_edge_ricochet_lasers",
+                "draw_edge_falling_sparks", "draw_edge_ghost_circles",
+                "draw_edge_geometry" };
 
             const char* value = Language::Get(labels[Config::g_drawEdgeEffectStyle]).c_str();
             const ImVec2 valueSize = ImGui::CalcTextSize(value);

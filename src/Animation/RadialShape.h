@@ -19,12 +19,22 @@ namespace RadialShape
         CometTail,
         RoseEngine,
         QuantumRipple,
+        Flower,
+        FourPointStar,
+        Hexagon,
+        Triangle,
+        Diamond,
         Star,
+        Heart,
+        SixPointStar,
         Count
     };
 
     constexpr int Count() { return static_cast<int>(Style::Count); }
     const char* Name(Style style);
+    // Nome estável usado no INI. Permite renomear o texto visível sem quebrar
+    // uma escolha que já estava salva pelo jogador.
+    const char* PersistentName(Style style);
     Style FromName(std::string_view name);
 
     ImVec2 PositionAtAngle(Style style, const ImVec2& center,
