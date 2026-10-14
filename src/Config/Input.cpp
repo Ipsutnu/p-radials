@@ -849,7 +849,8 @@ RE::BSEventNotifyControl InputHandler::ProcessEvent(
             // O editor de Quick Draw é modal mesmo quando o WheelSettings
             // principal já não está aberto. Trata o clique antes do fluxo de
             // gameplay, que de outro modo o consumia como início de desenho.
-            if (Menu::IsQuickDrawEditorOpen() &&
+            if ((Menu::IsQuickDrawEditorOpen() ||
+                    Menu::IsQuickDrawKeyboardBrowserOpen()) &&
                 (mouseButton == 0 || mouseButton == 1))
             {
                 // O clique pode chegar antes de um MouseMove no mesmo frame;

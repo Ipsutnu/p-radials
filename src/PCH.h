@@ -180,6 +180,7 @@ namespace Menu {
     // Quick Draw: desenhos por item usados pelo seletor rápido.
     bool BeginQuickDrawEditor();
     bool IsQuickDrawEditorOpen();
+    bool IsQuickDrawKeyboardBrowserOpen();
     bool HandleQuickDrawEditorMouseButton(int button, bool pressed);
     bool ScrollQuickDrawEditorSettings(int direction);
     bool BeginQuickDrawGameplayStroke(int button, bool pressed);

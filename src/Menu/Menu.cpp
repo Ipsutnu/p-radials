@@ -605,6 +605,7 @@ namespace Menu
     static ImVec2 g_quickDrawEditorHotkeyCenter{};
     static ImVec2 g_quickDrawEditorHotkeyGateCenter{};
     static ImVec2 g_quickDrawEditorHotkeyClearCenter{};
+    static ImVec2 g_quickDrawEditorHotkeyKeyboardCenter{};
     static float g_quickDrawEditorResetRadius = 25.0f;
     static float g_quickDrawEditorOkRadius = 25.0f;
     static constexpr float kQuickDrawEditorAutoUseRadius = 45.0f;
@@ -614,6 +615,53 @@ namespace Menu
     static constexpr float kQuickDrawEditorHotkeyGateRadius = 12.0f;
     static constexpr float kQuickDrawEditorHotkeyClearRadius = 10.0f;
     static bool g_quickDrawEditorWaitingHotkey = false;
+    void DrawSelectedItemName(
+        const RadialItem& item,
+        float alpha,
+        float verticalPosition,
+        bool useConfiguredPosition,
+        bool useConfiguredOpacity,
+        Config::ItemPreviewProfile profile);
+    struct QuickDrawKeyboardCard
+    {
+        QuickDrawKey key{};
+        int hotkey = 0;
+        float removeT = -1.0f;
+        ImVec2 min{};
+        ImVec2 max{};
+        ImVec2 clearCenter{};
+        // Estado físico leve do cartão. A posição-base é dada pela grade;
+        // este offset e a velocidade recebem forças de atração/repulsão.
+        ImVec2 simulationOffset{};
+        ImVec2 simulationVelocity{};
+        bool simulationInitialized = false;
+        // Posição preservada por um frame quando outro cartão some. Ela evita
+        // que a troca de índice da grade cause teleporte antes da mola levar
+        // o cartão ao novo destino.
+        ImVec2 reflowPreservedCenter{};
+        bool preserveReflowPosition = false;
+    };
+    static bool g_quickDrawKeyboardOpen = false;
+    enum class QuickDrawKeyboardReturnTarget
+    {
+        QuickDrawEditor,
+        WheelSettings
+    };
+    static QuickDrawKeyboardReturnTarget g_quickDrawKeyboardReturnTarget =
+        QuickDrawKeyboardReturnTarget::QuickDrawEditor;
+    static std::vector<QuickDrawKeyboardCard> g_quickDrawKeyboardCards;
+    static ImVec2 g_quickDrawKeyboardCloseCenter{};
+    static float g_quickDrawKeyboardCloseRadius = 22.0f;
+    static float g_quickDrawKeyboardScroll = 0.0f;
+    static float g_quickDrawKeyboardMaxScroll = 0.0f;
+    static int g_quickDrawKeyboardHoveredCard = -1;
+    static ImVec2 g_settingsHotkeyButtonCenter{};
+    static float g_settingsHotkeyButtonHoverT = 0.0f;
+    static constexpr float kSettingsHotkeyButtonBaseRadius = 24.0f;
+    static constexpr float kSettingsHotkeyButtonExpandedRadius = 45.0f;
+    static bool PointInQuickDrawRect(const ImVec2& point,
+        const ImVec2& minimum, const ImVec2& maximum);
+    static void OpenQuickDrawKeyboardBrowser(QuickDrawKeyboardReturnTarget returnTarget);
     static float g_quickDrawEditorHotkeyClickFlash = 0.0f;
     static float g_quickDrawEditorHotkeyClearClickFlash = 0.0f;
     static float g_quickDrawEditorHotkeyShadowT = 0.0f;
@@ -624,6 +672,12 @@ namespace Menu
     static float g_quickDrawEditorHotkeyTraceT = -1.0f;
     static float g_quickDrawEditorHotkeyUntraceT = -1.0f;
     static float g_quickDrawEditorHotkeyPulseT = -1.0f;
+    // Entrada independente do botão de hotkey. O traço só pode começar
+    // depois que esta órbita alcança o lado esquerdo do editor.
+    static float g_quickDrawEditorHotkeyEntryT = 1.0f;
+    static bool g_quickDrawEditorHotkeyEntryTraceStarted = true;
+    static float g_quickDrawEditorHotkeyEntryFadeT = 1.0f;
+    static float g_quickDrawEditorHotkeyAuxiliaryT = 1.0f;
     static float g_quickDrawEditorResetHoverT = 0.0f;
     static float g_quickDrawEditorOkHoverT = 0.0f;
     static bool g_quickDrawSettingsExpanded = false;
@@ -3345,6 +3399,16 @@ namespace Menu
 
         const ImVec2 mouse =
             g_settingsMousePos;
+
+        const float hotkeyButtonDx = mouse.x - g_settingsHotkeyButtonCenter.x;
+        const float hotkeyButtonDy = mouse.y - g_settingsHotkeyButtonCenter.y;
+        if (hotkeyButtonDx * hotkeyButtonDx + hotkeyButtonDy * hotkeyButtonDy <=
+            (kSettingsHotkeyButtonExpandedRadius + 3.0f) *
+                (kSettingsHotkeyButtonExpandedRadius + 3.0f))
+        {
+            OpenQuickDrawKeyboardBrowser(QuickDrawKeyboardReturnTarget::WheelSettings);
+            return true;
+        }
 
         // ========================================================
         // POSIÇÕES DOS BOTÕES PRINCIPAIS
@@ -13462,6 +13526,85 @@ namespace Menu
             activate();
     }
 
+    // Magias normais instantâneas de autocast não usam o slot de voz. Este é
+    // o conjunto seguro para Auto-Use: Candlelight, flesh spells, Muffle e
+    // outras Fire-and-Forget entregues no próprio jogador. Concentração e
+    // alvo/mira continuam fora para não simular um cast incompleto.
+    static bool IsQuickDrawInstantSelfSpell(const RE::SpellItem* spell)
+    {
+        return spell &&
+            spell->GetSpellType() == RE::MagicSystem::SpellType::kSpell &&
+            spell->GetCastingType() == RE::MagicSystem::CastingType::kFireAndForget &&
+            spell->GetDelivery() == RE::MagicSystem::Delivery::kSelf;
+    }
+
+    static void ScheduleQuickDrawInstantSelfSpellAutoUse(RE::FormID formID)
+    {
+        auto cast = [formID]()
+        {
+            auto* player = RE::PlayerCharacter::GetSingleton();
+            auto* spell = RE::TESForm::LookupByID<RE::SpellItem>(formID);
+            if (!player || !IsQuickDrawInstantSelfSpell(spell))
+                return;
+
+            auto* caster = player->GetMagicCaster(
+                RE::MagicSystem::CastingSource::kInstant);
+            if (!caster)
+            {
+                spdlog::warn("QUICK DRAW AUTO-USE | no instant caster {:08X}", formID);
+                return;
+            }
+
+            // CheckCast preserva as regras nativas — magicka, estado atual,
+            // cooldown e demais condições do ator — antes do cast imediato.
+            RE::MagicSystem::CannotCastReason reason =
+                RE::MagicSystem::CannotCastReason::kOK;
+            float effectiveness = 1.0f;
+            if (!caster->CheckCast(spell, false, std::addressof(effectiveness),
+                    std::addressof(reason), false))
+            {
+                spdlog::info("QUICK DRAW AUTO-USE | instant spell blocked {:08X} reason={}",
+                    formID, static_cast<int>(reason));
+                return;
+            }
+
+            // CastSpellImmediate aplica o efeito diretamente e não percorre
+            // o trecho do input normal que debita o recurso. Calculamos o
+            // mesmo custo final usado pelo jogo (skill/perks/modificadores),
+            // exigimos magicka suficiente e descontamos antes do efeito.
+            // ActorValueOwner muda de offset entre runtimes; nunca o acesse
+            // pelo cast implícito de PlayerCharacter.
+            auto* actorValues = player->AsActorValueOwner();
+            if (!actorValues)
+            {
+                spdlog::warn("QUICK DRAW AUTO-USE | no actor values {:08X}", formID);
+                return;
+            }
+
+            const float magickaCost = std::max(0.0f,
+                spell->CalculateMagickaCost(player));
+            const float currentMagicka = std::max(0.0f,
+                actorValues->GetActorValue(RE::ActorValue::kMagicka));
+            if (!std::isfinite(magickaCost) ||
+                currentMagicka + 0.001f < magickaCost)
+            {
+                spdlog::info("QUICK DRAW AUTO-USE | insufficient magicka {:08X} cost={} current={}",
+                    formID, magickaCost, currentMagicka);
+                return;
+            }
+            if (magickaCost > 0.0f)
+                actorValues->DamageActorValue(RE::ActorValue::kMagicka, magickaCost);
+
+            caster->CastSpellImmediate(spell,
+                false, player, effectiveness, false, 0.0f, player);
+        };
+
+        if (auto* tasks = SKSE::GetTaskInterface())
+            tasks->AddTask(std::move(cast));
+        else
+            cast();
+    }
+
     void UseSelectedRadialItem()
     {
         if (g_radialSide == RadialSide::None && !g_quickDrawSelectionOverride)
@@ -13667,6 +13810,13 @@ namespace Menu
 
         if (auto* spell = form->As<RE::SpellItem>())
         {
+            if (quickDrawSelection && g_quickDrawSelectionAutoUse &&
+                IsQuickDrawInstantSelfSpell(spell))
+            {
+                ScheduleQuickDrawInstantSelfSpellAutoUse(spell->GetFormID());
+                return;
+            }
+
             if (quickDrawSelection && g_quickDrawSelectionAutoUse &&
                 IsQuickDrawAutoUseEligible(spell))
             {
@@ -15392,9 +15542,9 @@ namespace Menu
     {
         if (const auto* gesture = FindQuickDrawGesture(item))
             return gesture->autoUse;
-        // Novos desenhos de Shout/Power já nascem ativados. Um registro só
-        // é necessário quando o usuário decide desligar o recurso.
-        return IsQuickDrawAutoUseEligible(item.form);
+        // Auto-Use é sempre opt-in. A compatibilidade do item apenas decide
+        // se o botão aparece; nunca liga a preferência por conta própria.
+        return false;
     }
 
     static void SetQuickDrawAutoUse(const RadialItem& item, bool enabled)
@@ -15469,7 +15619,7 @@ namespace Menu
             QuickDrawGesture gesture{};
             gesture.key = key;
             gesture.points = points;
-            gesture.autoUse = IsQuickDrawAutoUseEligible(item.form);
+            gesture.autoUse = false;
             g_quickDrawGestures.push_back(std::move(gesture));
         }
         else
@@ -15515,7 +15665,7 @@ namespace Menu
         QuickDrawGesture gesture{};
         gesture.key = itemKey;
         gesture.hotkey = key;
-        gesture.autoUse = IsQuickDrawAutoUseEligible(item.form);
+        gesture.autoUse = false;
         g_quickDrawGestures.push_back(std::move(gesture));
     }
 
@@ -15575,6 +15725,349 @@ namespace Menu
         return true;
     }
 
+    static void OpenQuickDrawKeyboardBrowser(QuickDrawKeyboardReturnTarget returnTarget)
+    {
+        g_quickDrawKeyboardCards.clear();
+        for (const auto& gesture : g_quickDrawGestures)
+        {
+            if (gesture.hotkey == 0)
+                continue;
+            g_quickDrawKeyboardCards.push_back({ gesture.key, gesture.hotkey });
+        }
+        std::sort(g_quickDrawKeyboardCards.begin(), g_quickDrawKeyboardCards.end(),
+            [](const QuickDrawKeyboardCard& a, const QuickDrawKeyboardCard& b) {
+                return a.hotkey < b.hotkey;
+            });
+        g_quickDrawKeyboardOpen = true;
+        g_quickDrawKeyboardReturnTarget = returnTarget;
+        g_quickDrawKeyboardScroll = 0.0f;
+        g_quickDrawKeyboardMaxScroll = 0.0f;
+        g_quickDrawKeyboardHoveredCard = -1;
+        g_quickDrawEditorWaitingHotkey = false;
+        g_quickDrawSettingsExpanded = false;
+    }
+
+    static void CloseQuickDrawKeyboardBrowser()
+    {
+        g_quickDrawKeyboardOpen = false;
+        g_quickDrawKeyboardCards.clear();
+        g_quickDrawKeyboardScroll = 0.0f;
+        g_quickDrawKeyboardMaxScroll = 0.0f;
+        g_quickDrawKeyboardHoveredCard = -1;
+        g_quickDrawKeyboardReturnTarget = QuickDrawKeyboardReturnTarget::QuickDrawEditor;
+    }
+
+    static void DrawQuickDrawKeyboardBrowser(ImDrawList* draw, float alpha)
+    {
+        if (!draw)
+            return;
+
+        const ImVec2 screen = Resolution::GetVirtualSize();
+        const ImVec2 center(screen.x * 0.5f, screen.y * 0.5f);
+        const float time = static_cast<float>(ImGui::GetTime());
+        const float dt = std::clamp(ImGui::GetIO().DeltaTime, 0.0f, 0.05f);
+        constexpr float cardWidth = 184.0f;
+        constexpr float cardHeight = 126.0f;
+        constexpr float gapX = 20.0f;
+        constexpr float gapY = 18.0f;
+        constexpr float edgeMargin = 30.0f;
+        const int columns = std::max(1, static_cast<int>(std::floor(
+            (screen.x - edgeMargin * 2.0f + gapX) / (cardWidth + gapX))));
+        const int visibleCount = static_cast<int>(g_quickDrawKeyboardCards.size());
+        const int rows = std::max(1, (visibleCount + columns - 1) / columns);
+        const float totalWidth = columns * cardWidth + (columns - 1) * gapX;
+        const float totalHeight = rows * cardHeight + (rows - 1) * gapY;
+        // A lista nasce no centro. Quando é maior que a tela, o scroll pode
+        // revelar as linhas acima e abaixo sem alterar a distribuição em X.
+        // A origem fica centrada. Por isso o scroll é simétrico: há o mesmo
+        // espaço para deslocar a grade para cima ou para baixo.
+        g_quickDrawKeyboardMaxScroll = std::max(0.0f,
+            (totalHeight + edgeMargin * 2.0f - screen.y) * 0.5f);
+        g_quickDrawKeyboardScroll = std::clamp(g_quickDrawKeyboardScroll,
+            -g_quickDrawKeyboardMaxScroll, g_quickDrawKeyboardMaxScroll);
+        const ImVec2 gridMin(center.x - totalWidth * 0.5f,
+            center.y - totalHeight * 0.5f - g_quickDrawKeyboardScroll);
+
+        // Monta as âncoras da grade. A simulação abaixo usa essas âncoras
+        // como mola de retorno, sem prender os cartões nelas.
+        std::vector<ImVec2> baseCenters(g_quickDrawKeyboardCards.size());
+        std::vector<ImVec2> visualCenters(g_quickDrawKeyboardCards.size());
+        for (std::size_t i = 0; i < g_quickDrawKeyboardCards.size(); ++i)
+        {
+            auto& card = g_quickDrawKeyboardCards[i];
+            const int column = static_cast<int>(i) % columns;
+            const int row = static_cast<int>(i) / columns;
+            const float phase = static_cast<float>(card.hotkey % 19) * 0.42f;
+            const ImVec2 floatOffset(std::sin(time * 0.70f + phase) * 2.2f,
+                std::cos(time * 0.82f + phase * 1.4f) * 2.0f);
+            const ImVec2 baseMin = ImVec2(gridMin.x + column * (cardWidth + gapX),
+                gridMin.y + row * (cardHeight + gapY)) + floatOffset;
+            baseCenters[i] = baseMin + ImVec2(cardWidth, cardHeight) * 0.5f;
+            if (card.preserveReflowPosition)
+            {
+                // A grade mudou após uma remoção: começa exatamente da
+                // posição antiga e deixa a mola/damping já existentes fazerem
+                // a acomodação gradual até esta nova âncora.
+                card.simulationOffset = card.reflowPreservedCenter - baseCenters[i];
+                card.simulationVelocity = {};
+                card.simulationInitialized = true;
+                card.preserveReflowPosition = false;
+            }
+            visualCenters[i] = baseCenters[i] +
+                (card.simulationInitialized ? card.simulationOffset : ImVec2{});
+        }
+
+        // O hit-test usa a posição física do frame anterior, e não a grade
+        // rígida. Assim um cartão continua coerente enquanto flutua.
+        g_quickDrawKeyboardHoveredCard = -1;
+        for (std::size_t i = 0; i < g_quickDrawKeyboardCards.size(); ++i)
+        {
+            auto& card = g_quickDrawKeyboardCards[i];
+            if (card.removeT >= 0.0f)
+                continue;
+            const ImVec2 min = visualCenters[i] -
+                ImVec2(cardWidth, cardHeight) * 0.5f;
+            if (PointInQuickDrawRect(g_settingsMousePos, min,
+                    min + ImVec2(cardWidth, cardHeight)))
+            {
+                g_quickDrawKeyboardHoveredCard = static_cast<int>(i);
+                break;
+            }
+        }
+
+        RadialItem hoveredItem{};
+        const bool hasHoveredItem = g_quickDrawKeyboardHoveredCard >= 0 &&
+            BuildQuickDrawHotkeyPreviewItem(
+                g_quickDrawKeyboardCards[static_cast<std::size_t>(
+                    g_quickDrawKeyboardHoveredCard)].key,
+                hoveredItem);
+        constexpr float previewClearRadius = 150.0f;
+
+        // Simulação: mola para a posição-base + repulsão de todos os
+        // vizinhos + repulsão radial do preview central. O alcance maior que
+        // a colisão faz toda a malha reagir, em vez de apenas os cartões que
+        // tocam diretamente a borda da área central.
+        std::vector<ImVec2> forces(g_quickDrawKeyboardCards.size());
+        // A repulsão entre cartões deve existir apenas quando seus envelopes
+        // realmente se aproximam. O antigo raio amplo empurrava também a
+        // grade já acomodada; nas colunas externas faltava a reação do lado
+        // de fora e os primeiros cartões à esquerda ficavam presos fora do
+        // lugar. A margem pequena mantém um espaço vivo, mas neutro no slot.
+        constexpr float neighborSafeGap = 12.0f;
+        constexpr float neighborForce = 3400.0f;
+        constexpr float springForce = 7.5f;
+        constexpr float velocityDamping = 5.5f;
+        constexpr float previewForce = 3800.0f;
+        const float cardRadius = 0.5f * std::sqrt(
+            cardWidth * cardWidth + cardHeight * cardHeight);
+        const float previewRange = previewClearRadius + cardRadius + 42.0f;
+
+        for (std::size_t i = 0; i < g_quickDrawKeyboardCards.size(); ++i)
+        {
+            const auto& card = g_quickDrawKeyboardCards[i];
+            if (card.removeT >= 0.0f)
+                continue;
+
+            const ImVec2 offset = card.simulationInitialized
+                ? card.simulationOffset : ImVec2{};
+            forces[i] = offset * -springForce -
+                card.simulationVelocity * velocityDamping;
+
+            if (hasHoveredItem)
+            {
+                const ImVec2 delta = visualCenters[i] - center;
+                const float distance = std::sqrt(delta.x * delta.x + delta.y * delta.y);
+                if (distance < previewRange)
+                {
+                    const ImVec2 direction = distance > 0.01f
+                        ? delta * (1.0f / distance)
+                        : ImVec2((i & 1) ? 1.0f : -1.0f, (i & 2) ? 0.7f : -0.7f);
+                    const float falloff = (previewRange - distance) / previewRange;
+                    // O cartão em hover também participa da dinâmica, mas
+                    // recebe força menor para não escapar abruptamente do mouse.
+                    const float hoverFactor = static_cast<int>(i) ==
+                        g_quickDrawKeyboardHoveredCard ? 0.35f : 1.0f;
+                    forces[i] += direction * (previewForce * falloff * hoverFactor);
+                }
+            }
+        }
+
+        for (std::size_t i = 0; i < g_quickDrawKeyboardCards.size(); ++i)
+        {
+            if (g_quickDrawKeyboardCards[i].removeT >= 0.0f)
+                continue;
+            for (std::size_t j = i + 1; j < g_quickDrawKeyboardCards.size(); ++j)
+            {
+                if (g_quickDrawKeyboardCards[j].removeT >= 0.0f)
+                    continue;
+                const ImVec2 delta = visualCenters[i] - visualCenters[j];
+                const float overlapX = (cardWidth + neighborSafeGap) - std::abs(delta.x);
+                const float overlapY = (cardHeight + neighborSafeGap) - std::abs(delta.y);
+                if (overlapX <= 0.0f || overlapY <= 0.0f)
+                    continue;
+
+                // Separa pelo menor eixo de penetração, como dois cartões
+                // físicos. Assim a pressão se transmite aos vizinhos sem
+                // criar uma direção preferencial permanente nas extremidades.
+                ImVec2 direction{};
+                float penetration = 0.0f;
+                if (overlapX < overlapY)
+                {
+                    direction = ImVec2(delta.x >= 0.0f ? 1.0f : -1.0f, 0.0f);
+                    penetration = overlapX;
+                }
+                else
+                {
+                    direction = ImVec2(0.0f, delta.y >= 0.0f ? 1.0f : -1.0f);
+                    penetration = overlapY;
+                }
+                const float normalizedPenetration = std::clamp(
+                    penetration / neighborSafeGap, 0.0f, 1.0f);
+                const ImVec2 force = direction * (neighborForce *
+                    normalizedPenetration * normalizedPenetration);
+                forces[i] += force;
+                forces[j] -= force;
+            }
+        }
+
+        for (std::size_t i = 0; i < g_quickDrawKeyboardCards.size(); ++i)
+        {
+            auto& card = g_quickDrawKeyboardCards[i];
+            if (!card.simulationInitialized)
+                card.simulationInitialized = true;
+            card.simulationVelocity += forces[i] * dt;
+            const float speed = std::sqrt(card.simulationVelocity.x * card.simulationVelocity.x +
+                card.simulationVelocity.y * card.simulationVelocity.y);
+            if (speed > 620.0f)
+                card.simulationVelocity *= 620.0f / speed;
+            card.simulationOffset += card.simulationVelocity * dt;
+            visualCenters[i] = baseCenters[i] + card.simulationOffset;
+        }
+
+        for (std::size_t i = 0; i < g_quickDrawKeyboardCards.size();)
+        {
+            auto& card = g_quickDrawKeyboardCards[i];
+            const bool hovered = static_cast<int>(i) == g_quickDrawKeyboardHoveredCard;
+            const float cardScale = hovered ? 1.05f : 1.0f;
+            const ImVec2 scaledSize(cardWidth * cardScale, cardHeight * cardScale);
+            const ImVec2 cardCenter = visualCenters[i];
+            card.min = cardCenter - scaledSize * 0.5f;
+            card.max = cardCenter + scaledSize * 0.5f;
+            card.clearCenter = ImVec2(card.max.x - 18.0f, card.min.y + 18.0f);
+
+            if (card.removeT >= 0.0f)
+                card.removeT += dt;
+            const float iconAlpha = card.removeT < 0.0f ? 1.0f :
+                std::clamp(1.0f - card.removeT / 0.20f, 0.0f, 1.0f);
+            const float cardAlpha = card.removeT < 0.20f ? 1.0f :
+                std::clamp(1.0f - (card.removeT - 0.20f) / 0.42f, 0.0f, 1.0f);
+
+            draw->AddRectFilled(card.min, card.max,
+                FadeColor(IM_COL32(20, 20, 25, 180), alpha * cardAlpha), 14.0f);
+            draw->AddRect(card.min, card.max,
+                FadeColor(hovered ? IM_COL32(255, 255, 255, 230) :
+                    IM_COL32(235, 230, 215, 125), alpha * cardAlpha),
+                14.0f, 0, hovered ? 2.0f : 1.2f);
+
+            const std::string keyText = Config::KeyToString(card.hotkey);
+            const ImVec2 keyTextSize = ImGui::CalcTextSize(keyText.c_str());
+            draw->AddText(ImVec2(card.min.x + 13.0f,
+                    card.max.y - keyTextSize.y - 11.0f),
+                FadeColor(IM_COL32(235, 230, 215, 230), alpha * cardAlpha), keyText.c_str());
+
+            RadialItem item{};
+            if (BuildQuickDrawHotkeyPreviewItem(card.key, item))
+            {
+                if (auto* icon = ItemIcon::Get(item.form))
+                {
+                    const ImVec2 iconCenter((card.min.x + card.max.x) * 0.5f,
+                        (card.min.y + card.max.y) * 0.5f + 7.0f);
+                    constexpr float iconRadius = 39.0f;
+                    // Reutiliza o resolvedor dos radiais: poções, escolas,
+                    // encantamentos e ícones customizados permanecem com a
+                    // mesma linguagem visual. O browser aplica 80% como
+                    // opacidade-base, além do fade de remoção do cartão.
+                    const int iconOpacity = static_cast<int>(std::lround(
+                        255.0f * 0.80f * alpha * iconAlpha));
+                    const ImU32 iconColor = MakeGameplayIconColor(item,
+                        iconOpacity, 1.0f, false, RadialSide::Left);
+                    draw->AddImage(reinterpret_cast<ImTextureID>(icon),
+                        iconCenter - ImVec2(iconRadius, iconRadius),
+                        iconCenter + ImVec2(iconRadius, iconRadius),
+                        ImVec2(0.0f, 0.0f), ImVec2(1.0f, 1.0f),
+                        iconColor);
+                }
+            }
+
+            draw->AddCircleFilled(card.clearCenter, 11.0f,
+                FadeColor(IM_COL32(35, 36, 42, 240), alpha * cardAlpha), 20);
+            draw->AddCircle(card.clearCenter, 11.0f,
+                FadeColor(IM_COL32(245, 242, 232, 150), alpha * cardAlpha), 20, 1.0f);
+            draw->AddLine(card.clearCenter - ImVec2(3.6f, 3.6f),
+                card.clearCenter + ImVec2(3.6f, 3.6f),
+                FadeColor(IM_COL32(245, 242, 232, 220), alpha * cardAlpha), 1.1f);
+            draw->AddLine(card.clearCenter + ImVec2(3.6f, -3.6f),
+                card.clearCenter + ImVec2(-3.6f, 3.6f),
+                FadeColor(IM_COL32(245, 242, 232, 220), alpha * cardAlpha), 1.1f);
+
+            if (card.removeT >= 0.62f)
+            {
+                // A remoção altera os índices e a geometria centralizada da
+                // grade. Guardamos a posição física de todos os sobreviventes
+                // antes do erase para que nenhum deles teleporte no próximo
+                // frame; cada um será atraído lentamente ao novo slot.
+                for (std::size_t survivor = 0;
+                    survivor < g_quickDrawKeyboardCards.size(); ++survivor)
+                {
+                    if (survivor == i)
+                        continue;
+                    auto& other = g_quickDrawKeyboardCards[survivor];
+                    other.reflowPreservedCenter = visualCenters[survivor];
+                    other.preserveReflowPosition = true;
+                }
+                g_quickDrawKeyboardCards.erase(g_quickDrawKeyboardCards.begin() + i);
+                baseCenters.erase(baseCenters.begin() + i);
+                visualCenters.erase(visualCenters.begin() + i);
+                continue;
+            }
+            ++i;
+        }
+
+        // Mesmo ponto inferior usado pelo círculo dourado que fecha o Hub.
+        g_quickDrawKeyboardCloseCenter =
+            GetSettingsCloseButtonTarget(GetWheelLayout());
+        const bool closeHovered = IsSettingsCircleHovered(g_settingsMousePos,
+            g_quickDrawKeyboardCloseCenter, g_quickDrawKeyboardCloseRadius);
+        draw->AddCircleFilled(g_quickDrawKeyboardCloseCenter,
+            g_quickDrawKeyboardCloseRadius,
+            FadeColor(closeHovered ? IM_COL32(235, 230, 215, 175) :
+                IM_COL32(20, 20, 25, 230), alpha), 32);
+        draw->AddCircle(g_quickDrawKeyboardCloseCenter,
+            g_quickDrawKeyboardCloseRadius,
+            FadeColor(IM_COL32(245, 242, 232, closeHovered ? 230 : 105), alpha), 32, 1.0f);
+
+        // O browser substitui o editor, mas o cartão sob o mouse usa o mesmo
+        // preview 3D central do WheelSettings, com nome abaixo dele.
+        if (hasHoveredItem && hoveredItem.form)
+        {
+            ItemPreview::SetHudPosition(center);
+            ItemPreview::SetSizeScale(1.0f);
+            ItemPreview::SilentPreviewMenu::Open();
+            ItemPreview::Show(hoveredItem.form, hoveredItem.uniqueID,
+                hoveredItem.hasUniqueID);
+            ItemPreview::SetOpacity(alpha);
+            DrawSelectedItemName(hoveredItem, alpha,
+                std::clamp((center.y + 128.0f) / std::max(screen.y, 1.0f),
+                    0.0f, 1.0f), false, false,
+                Config::ItemPreviewProfile::Menu);
+        }
+        else
+        {
+            ItemPreview::Hide();
+        }
+        DrawSettingsCursor();
+    }
+
     static void ExecuteQuickDrawHotkeyItem(const RadialItem& item, bool left)
     {
         g_quickDrawHotkeyPendingItem = item;
@@ -15590,7 +16083,27 @@ namespace Menu
 
     bool CaptureQuickDrawHotkey(RE::ButtonEvent* buttonEvent)
     {
-        if (!g_quickDrawEditorWaitingHotkey || !buttonEvent)
+        if (!buttonEvent)
+            return false;
+
+        // O navegador de binds é modal: ESC retorna ao Quick Draw e as demais
+        // teclas são consumidas para não confirmarem/fecharem o editor atrás.
+        if (g_quickDrawKeyboardOpen &&
+            buttonEvent->GetDevice() == RE::INPUT_DEVICE::kKeyboard)
+        {
+            if (buttonEvent->IsDown() &&
+                buttonEvent->GetRuntimeData().heldDownSecs <= 0.0f)
+            {
+                const int key = static_cast<int>(MapVirtualKeyW(
+                    static_cast<UINT>(buttonEvent->GetIDCode()), MAPVK_VSC_TO_VK_EX));
+                if (key == VK_ESCAPE || key == Config::g_toggleKey ||
+                    (Config::g_secondaryKey != 0 && key == Config::g_secondaryKey))
+                    CloseQuickDrawKeyboardBrowser();
+            }
+            return true;
+        }
+
+        if (!g_quickDrawEditorWaitingHotkey)
             return false;
         // A captura de bind aceita somente teclado. Mouse deve continuar o
         // fluxo até o editor para poder cancelar ao clicar fora ou no X.
@@ -15641,6 +16154,8 @@ namespace Menu
         }
         SetQuickDrawHotkey(g_quickDrawEditorItem, key);
         g_quickDrawEditorWaitingHotkey = false;
+        g_quickDrawKeyboardOpen = false;
+        g_quickDrawKeyboardCards.clear();
         g_quickDrawEditorHotkeyClickFlash = 1.0f;
         g_quickDrawEditorHotkeyTraceT = 0.0f;
         g_quickDrawEditorHotkeyUntraceT = -1.0f;
@@ -15960,7 +16475,8 @@ namespace Menu
             return false;
 
         const auto type = spell->GetSpellType();
-        return type == RE::MagicSystem::SpellType::kPower ||
+        return IsQuickDrawInstantSelfSpell(spell) ||
+            type == RE::MagicSystem::SpellType::kPower ||
             type == RE::MagicSystem::SpellType::kLesserPower ||
             type == RE::MagicSystem::SpellType::kVoicePower;
     }
@@ -16085,6 +16601,8 @@ namespace Menu
         g_quickDrawEditorAutoUseClickFlash = 0.0f;
         g_quickDrawEditorAutoUseShadowT = 0.0f;
         g_quickDrawEditorWaitingHotkey = false;
+        g_quickDrawKeyboardOpen = false;
+        g_quickDrawKeyboardCards.clear();
         g_quickDrawEditorHotkeyClickFlash = 0.0f;
         g_quickDrawEditorHotkeyClearClickFlash = 0.0f;
         g_quickDrawEditorHotkeyShadowT = 0.0f;
@@ -16095,6 +16613,10 @@ namespace Menu
         g_quickDrawEditorHotkeyTraceT = -1.0f;
         g_quickDrawEditorHotkeyUntraceT = -1.0f;
         g_quickDrawEditorHotkeyPulseT = -1.0f;
+        g_quickDrawEditorHotkeyEntryT = 0.0f;
+        g_quickDrawEditorHotkeyEntryTraceStarted = false;
+        g_quickDrawEditorHotkeyEntryFadeT = 0.0f;
+        g_quickDrawEditorHotkeyAuxiliaryT = 0.0f;
         // O fundo do WheelSettings desaparece devagar ao entrar no editor,
         // preservando apenas o Quick Draw sobre o jogo.
         TransitionSettingsBackdrop(0.0f, 0.8f);
@@ -16128,8 +16650,24 @@ namespace Menu
         return g_quickDrawEditorOpen;
     }
 
+    bool IsQuickDrawKeyboardBrowserOpen()
+    {
+        return g_quickDrawKeyboardOpen;
+    }
+
     bool ScrollQuickDrawEditorSettings(int direction)
     {
+        if (g_quickDrawKeyboardOpen)
+        {
+            // O navegador ocupa a tela toda; a roda desloca a grade apenas
+            // enquanto houver conteúdo para revelar acima/abaixo.
+            g_quickDrawKeyboardScroll = std::clamp(g_quickDrawKeyboardScroll -
+                static_cast<float>(direction) * 72.0f,
+                -g_quickDrawKeyboardMaxScroll,
+                g_quickDrawKeyboardMaxScroll);
+            return true;
+        }
+
         if (!g_quickDrawEditorOpen || !g_quickDrawSettingsExpanded ||
             g_quickDrawSettingsOpenT < 0.98f)
             return false;
@@ -16205,7 +16743,7 @@ namespace Menu
         // visíveis tentando imitar o degradê.
         constexpr int fadeSegments = 96;
         const ImU32 fadeCenter = FadeColor(IM_COL32(35, 36, 42, 0), alpha * contentT);
-        const ImU32 fadeEdge = FadeColor(IM_COL32(35, 36, 42, 150), alpha * contentT);
+        const ImU32 fadeEdge = FadeColor(IM_COL32(18, 19, 24, 195), alpha * contentT);
         const ImVec2 fadeUv = draw->_Data->TexUvWhitePixel;
         draw->PrimReserve(fadeSegments * 3, fadeSegments * 3);
         for (int segment = 0; segment < fadeSegments; ++segment)
@@ -16423,6 +16961,15 @@ namespace Menu
         if (!draw)
             return;
 
+        // O teclado de hotkeys ocupa a camada do editor e preserva somente o
+        // blur já aplicado por ele. Nenhum círculo, gesto ou botão do Quick
+        // Draw permanece visível enquanto a biblioteca está aberta.
+        if (g_quickDrawKeyboardOpen)
+        {
+            DrawQuickDrawKeyboardBrowser(draw, alpha);
+            return;
+        }
+
         // A coleta dos pontos ocorre no render para acompanhar a posição
         // física do cursor do Skyrim mesmo entre eventos de mouse.
         if (g_quickDrawEditorDrawing)
@@ -16483,7 +17030,32 @@ namespace Menu
             center.y);
         const auto* savedHotkey = FindQuickDrawGesture(g_quickDrawEditorItem);
         const bool hasSavedHotkey = savedHotkey && savedHotkey->hotkey != 0;
-        if (g_quickDrawEditorHotkeyTraceT >= 0.0f)
+        // A órbita precisa terminar no ponto final real antes de liberar o
+        // traço. A interpolação exponencial chegava a 90% e era forçada para
+        // 100%, produzindo o teleporte perceptível pouco antes do anel.
+        constexpr float hotkeyEntryDuration = 1.25f;
+        g_quickDrawEditorHotkeyEntryT = std::min(1.0f,
+            g_quickDrawEditorHotkeyEntryT + hotkeyDt / hotkeyEntryDuration);
+        // O fade possui sua própria duração, mais longa que o deslocamento.
+        // Assim a peça ganha presença gradualmente sem segurar a animação
+        // do anel no rastro assintótico da interpolação de posição.
+        g_quickDrawEditorHotkeyEntryFadeT = AnimateSettingsValue(
+            g_quickDrawEditorHotkeyEntryFadeT, 1.0f, 2.05f, hotkeyDt);
+        const bool hotkeyEntryFinished = g_quickDrawEditorHotkeyEntryT >= 1.0f;
+        g_quickDrawEditorHotkeyAuxiliaryT = AnimateSettingsValue(
+            g_quickDrawEditorHotkeyAuxiliaryT,
+            hotkeyEntryFinished ? 1.0f : 0.0f, 7.0f, hotkeyDt);
+        if (hotkeyEntryFinished && !g_quickDrawEditorHotkeyEntryTraceStarted)
+        {
+            g_quickDrawEditorHotkeyEntryTraceStarted = true;
+            // Um bind que já existia não aparece pronto: depois da órbita,
+            // ele reconstrói o elo e o círculo pelo mesmo fluxo de criação.
+            if (hasSavedHotkey && g_quickDrawEditorHotkeyTraceT < 0.0f &&
+                g_quickDrawEditorHotkeyUntraceT < 0.0f)
+                g_quickDrawEditorHotkeyTraceT = 0.0f;
+        }
+
+        if (hotkeyEntryFinished && g_quickDrawEditorHotkeyTraceT >= 0.0f)
         {
             // Primeiro nasce o elo reto; só então o anel começa a contornar.
             g_quickDrawEditorHotkeyTraceT += hotkeyDt;
@@ -16520,7 +17092,7 @@ namespace Menu
                 g_quickDrawEditorHotkeyPulseT = 0.0f;
             }
         }
-        else if (g_quickDrawEditorHotkeyUntraceT >= 0.0f)
+        else if (hotkeyEntryFinished && g_quickDrawEditorHotkeyUntraceT >= 0.0f)
         {
             // Ao limpar um bind, o elo e o anel voltam pelo caminho oposto
             // ao de criação, em vez de sumirem instantaneamente.
@@ -16562,7 +17134,7 @@ namespace Menu
                     g_quickDrawEditorHotkeyUntraceT = -1.0f;
             }
         }
-        else if (hasSavedHotkey)
+        else if (hotkeyEntryFinished && hasSavedHotkey)
         {
             // Um bind já salvo chega ao editor com sua ligação visível.
             draw->AddLine(connectorStart, connectorEnd,
@@ -16592,18 +17164,56 @@ namespace Menu
         g_quickDrawEditorOkCenter = ImVec2(center.x + commandSpacing, commandsY);
         // Acompanha a curvatura inferior direita, mas mantém o mesmo raio
         // máximo do OK mesmo fora do hover.
-        g_quickDrawEditorAutoUseCenter = ImVec2(
-            g_quickDrawEditorOkCenter.x + 180.0f,  //aumentar manda p direita
+        const ImVec2 autoUseRestCenter(
+            g_quickDrawEditorOkCenter.x + 230.0f,  //aumentar manda p direita
             g_quickDrawEditorOkCenter.y - 100.0f); //aumentar sobe
-        // Atalho do item: à esquerda do círculo, centralizado verticalmente.
-        g_quickDrawEditorHotkeyCenter = ImVec2(
+        const float autoUseFloatTime = static_cast<float>(ImGui::GetTime());
+        g_quickDrawEditorAutoUseCenter = autoUseRestCenter + ImVec2(
+            std::sin(autoUseFloatTime * 0.78f) * 2.0f,
+            std::cos(autoUseFloatTime * 0.92f) * 3.5f);
+
+        // Atalho do item: nasce no topo e percorre o arco superior esquerdo
+        // em sentido anti-horário antes de se acomodar no ponto final.
+        const ImVec2 hotkeyRestCenter(
             center.x - r - 76.0f - 120.0f, center.y);
+        const ImVec2 hotkeyRestDelta = hotkeyRestCenter - center;
+        const float hotkeyOrbitRadius = std::sqrt(hotkeyRestDelta.x * hotkeyRestDelta.x +
+            hotkeyRestDelta.y * hotkeyRestDelta.y);
+        const float hotkeyEntryEase = g_quickDrawEditorHotkeyEntryT *
+            g_quickDrawEditorHotkeyEntryT *
+            (3.0f - 2.0f * g_quickDrawEditorHotkeyEntryT);
+        constexpr float pi = 3.14159265359f;
+        const float hotkeyEntryAngle = -pi * 0.5f - pi * 0.5f * hotkeyEntryEase;
+        g_quickDrawEditorHotkeyCenter = ImVec2(
+            center.x + std::cos(hotkeyEntryAngle) * hotkeyOrbitRadius,
+            center.y + std::sin(hotkeyEntryAngle) * hotkeyOrbitRadius);
+        const float hotkeyEntryAlpha = SmoothSettingsProgress(
+            g_quickDrawEditorHotkeyEntryFadeT);
+        const bool hotkeyAuxiliaryInteractive =
+            g_quickDrawEditorHotkeyAuxiliaryT >= 0.95f;
+        const float hotkeyAuxiliaryAlpha = alpha * SmoothSettingsProgress(
+            g_quickDrawEditorHotkeyAuxiliaryT);
         g_quickDrawEditorHotkeyGateCenter = ImVec2(
             g_quickDrawEditorHotkeyCenter.x -
-                kQuickDrawEditorHotkeyRadius - 19.0f, center.y);
+                kQuickDrawEditorHotkeyRadius - 19.0f, g_quickDrawEditorHotkeyCenter.y);
         g_quickDrawEditorHotkeyClearCenter = ImVec2(
             g_quickDrawEditorHotkeyCenter.x,
             g_quickDrawEditorHotkeyCenter.y + kQuickDrawEditorHotkeyRadius + 19.0f);
+        // Biblioteca de atalhos: abaixo do X, usando a mesma linguagem visual
+        // do pequeno botão "Require wheel key".
+        g_quickDrawEditorHotkeyKeyboardCenter = ImVec2(
+            g_quickDrawEditorHotkeyClearCenter.x,
+            g_quickDrawEditorHotkeyClearCenter.y + 34.0f);
+        // Os dois controles auxiliares recebem uma flutuação sutil própria.
+        // As coordenadas globais são atualizadas antes dos testes de hover e
+        // clique, para que o desenho e a interação permaneçam coincidentes.
+        const float hotkeyAuxiliaryFloatTime = static_cast<float>(ImGui::GetTime());
+        g_quickDrawEditorHotkeyGateCenter += ImVec2(
+            std::sin(hotkeyAuxiliaryFloatTime * 0.91f + 0.45f) * 1.35f,
+            std::cos(hotkeyAuxiliaryFloatTime * 0.73f + 0.45f) * 2.0f);
+        g_quickDrawEditorHotkeyKeyboardCenter += ImVec2(
+            std::sin(hotkeyAuxiliaryFloatTime * 0.77f + 2.10f) * 1.55f,
+            std::cos(hotkeyAuxiliaryFloatTime * 0.96f + 2.10f) * 2.25f);
 
         const auto circleHovered = [&](const ImVec2& buttonCenter, float radius) {
             return IsSettingsCircleHovered(g_settingsMousePos, buttonCenter, radius);
@@ -16709,9 +17319,14 @@ namespace Menu
         const bool requiresActivation = hotkeyGesture && hotkeyGesture->hotkeyRequiresActivation;
         const bool hotkeyHovered = IsSettingsCircleHovered(g_settingsMousePos,
             g_quickDrawEditorHotkeyCenter, kQuickDrawEditorHotkeyRadius);
-        const bool gateHovered = IsSettingsCircleHovered(g_settingsMousePos,
+        const bool gateHovered = hotkeyAuxiliaryInteractive &&
+            IsSettingsCircleHovered(g_settingsMousePos,
             g_quickDrawEditorHotkeyGateCenter, kQuickDrawEditorHotkeyGateRadius);
-        const bool clearHotkeyHovered = (hotkey != 0 || g_quickDrawEditorWaitingHotkey) &&
+        const bool keyboardHovered = hotkeyAuxiliaryInteractive &&
+            IsSettingsCircleHovered(g_settingsMousePos,
+            g_quickDrawEditorHotkeyKeyboardCenter, kQuickDrawEditorHotkeyGateRadius);
+        const bool clearHotkeyHovered = hotkeyAuxiliaryInteractive &&
+            (hotkey != 0 || g_quickDrawEditorWaitingHotkey) &&
             IsSettingsCircleHovered(
             g_settingsMousePos, g_quickDrawEditorHotkeyClearCenter,
             kQuickDrawEditorHotkeyClearRadius);
@@ -16737,18 +17352,19 @@ namespace Menu
                 draw->AddCircleFilled(g_quickDrawEditorHotkeyCenter,
                     kQuickDrawEditorHotkeyRadius + shadowReach * t,
                     FadeColor(IM_COL32(35, 36, 42,
-                        static_cast<int>(shadowAlpha)), alpha), 40);
+                        static_cast<int>(shadowAlpha)), alpha * hotkeyEntryAlpha), 40);
             }
         }
         draw->AddCircleFilled(g_quickDrawEditorHotkeyCenter,
             kQuickDrawEditorHotkeyRadius + (hotkeyHovered ? 2.0f : 0.0f),
             FadeColor(g_quickDrawEditorWaitingHotkey
                     ? IM_COL32(235, 235, 235, 155)
-                    : IM_COL32(35, 36, 42, 220), alpha), 40);
+                    : IM_COL32(35, 36, 42, 220), alpha * hotkeyEntryAlpha), 40);
         draw->AddCircle(g_quickDrawEditorHotkeyCenter,
             kQuickDrawEditorHotkeyRadius + (hotkeyHovered ? 2.0f : 0.0f),
             FadeColor(IM_COL32(245, 242, 232,
-                g_quickDrawEditorWaitingHotkey ? 220 : hotkeyHovered ? 170 : 75), alpha),
+                g_quickDrawEditorWaitingHotkey ? 220 : hotkeyHovered ? 170 : 75),
+                alpha * hotkeyEntryAlpha),
             40, 1.15f);
         const std::string hotkeyText = !g_quickDrawEditorWaitingHotkey && hotkey != 0
             ? Config::KeyToString(hotkey) : "";
@@ -16766,7 +17382,7 @@ namespace Menu
             draw->AddText(ImGui::GetFont(), hotkeyFontSize,
                 ImVec2(g_quickDrawEditorHotkeyCenter.x - textSize.x * 0.5f,
                     g_quickDrawEditorHotkeyCenter.y - textSize.y * 0.5f + 1.0f),
-                FadeColor(IM_COL32(235, 230, 215, 255), alpha), hotkeyText.c_str());
+                FadeColor(IM_COL32(235, 230, 215, 255), alpha * hotkeyEntryAlpha), hotkeyText.c_str());
         }
         else if (hotkeyHovered || g_quickDrawEditorWaitingHotkey)
         {
@@ -16780,12 +17396,14 @@ namespace Menu
             draw->AddText(ImVec2(g_quickDrawEditorHotkeyCenter.x - hintSize.x * 0.5f,
                     g_quickDrawEditorHotkeyCenter.y - kQuickDrawEditorHotkeyRadius -
                         hintSize.y - 12.0f),
-                FadeColor(IM_COL32(235, 230, 215, 255), alpha), hint.c_str());
+                FadeColor(IM_COL32(235, 230, 215, 255), alpha * hotkeyEntryAlpha), hint.c_str());
         }
         // Durante a captura o X permanece disponível mesmo que o item ainda
         // não possua uma tecla; nesse caso ele encerra somente a espera.
-        if (hotkey != 0 || g_quickDrawEditorWaitingHotkey ||
+        if (g_quickDrawEditorHotkeyAuxiliaryT > 0.001f &&
+            (hotkey != 0 || g_quickDrawEditorWaitingHotkey ||
             g_quickDrawEditorHotkeyClearClickFlash > 0.001f)
+        )
         {
             const float clearLight = clearHotkeyHovered ? 0.35f : 0.0f;
             const float clearFlash = std::max(clearLight,
@@ -16794,26 +17412,30 @@ namespace Menu
                 kQuickDrawEditorHotkeyClearRadius + (clearHotkeyHovered ? 1.0f : 0.0f),
                 FadeColor(clearFlash > 0.0f
                         ? IM_COL32(245, 242, 232, static_cast<int>(220.0f * clearFlash))
-                        : IM_COL32(35, 36, 42, 220), alpha), 20);
+                        : IM_COL32(35, 36, 42, 220), hotkeyAuxiliaryAlpha), 20);
             draw->AddCircle(g_quickDrawEditorHotkeyClearCenter,
                 kQuickDrawEditorHotkeyClearRadius + (clearHotkeyHovered ? 1.0f : 0.0f),
-                FadeColor(IM_COL32(245, 242, 232, clearHotkeyHovered ? 185 : 85), alpha),
+                FadeColor(IM_COL32(245, 242, 232, clearHotkeyHovered ? 185 : 85),
+                    hotkeyAuxiliaryAlpha),
                 20, 1.0f);
             const float markHalf = 3.5f;
             draw->AddLine(g_quickDrawEditorHotkeyClearCenter - ImVec2(markHalf, markHalf),
                 g_quickDrawEditorHotkeyClearCenter + ImVec2(markHalf, markHalf),
-                FadeColor(IM_COL32(245, 242, 232, 210), alpha), 1.1f);
+                FadeColor(IM_COL32(245, 242, 232, 210), hotkeyAuxiliaryAlpha), 1.1f);
             draw->AddLine(g_quickDrawEditorHotkeyClearCenter + ImVec2(markHalf, -markHalf),
                 g_quickDrawEditorHotkeyClearCenter + ImVec2(-markHalf, markHalf),
-                FadeColor(IM_COL32(245, 242, 232, 210), alpha), 1.1f);
+                FadeColor(IM_COL32(245, 242, 232, 210), hotkeyAuxiliaryAlpha), 1.1f);
         }
+        if (g_quickDrawEditorHotkeyAuxiliaryT > 0.001f)
+        {
         draw->AddCircleFilled(g_quickDrawEditorHotkeyGateCenter,
             kQuickDrawEditorHotkeyGateRadius + (gateHovered ? 1.5f : 0.0f),
             FadeColor(requiresActivation ? IM_COL32(235, 235, 235, 155) :
-                IM_COL32(35, 36, 42, 220), alpha), 24);
+                IM_COL32(35, 36, 42, 220), hotkeyAuxiliaryAlpha), 24);
         draw->AddCircle(g_quickDrawEditorHotkeyGateCenter,
             kQuickDrawEditorHotkeyGateRadius + (gateHovered ? 1.5f : 0.0f),
-            FadeColor(IM_COL32(245, 242, 232, gateHovered ? 210 : 100), alpha), 24, 1.1f);
+            FadeColor(IM_COL32(245, 242, 232, gateHovered ? 210 : 100),
+                hotkeyAuxiliaryAlpha), 24, 1.1f);
         if (gateHovered)
         {
             const std::string& gateHint = Language::Get("require_wheel_key");
@@ -16821,7 +17443,25 @@ namespace Menu
             draw->AddText(ImVec2(g_quickDrawEditorHotkeyGateCenter.x -
                     kQuickDrawEditorHotkeyGateRadius - hintSize.x - 12.0f,
                     g_quickDrawEditorHotkeyGateCenter.y - hintSize.y * 0.5f),
-                FadeColor(IM_COL32(235, 230, 215, 255), alpha), gateHint.c_str());
+                FadeColor(IM_COL32(235, 230, 215, 255), hotkeyAuxiliaryAlpha), gateHint.c_str());
+        }
+
+        draw->AddCircleFilled(g_quickDrawEditorHotkeyKeyboardCenter,
+            kQuickDrawEditorHotkeyGateRadius + (keyboardHovered ? 1.5f : 0.0f),
+            FadeColor(IM_COL32(35, 36, 42, 220), hotkeyAuxiliaryAlpha), 24);
+        draw->AddCircle(g_quickDrawEditorHotkeyKeyboardCenter,
+            kQuickDrawEditorHotkeyGateRadius + (keyboardHovered ? 1.5f : 0.0f),
+            FadeColor(IM_COL32(245, 242, 232, keyboardHovered ? 210 : 100),
+                hotkeyAuxiliaryAlpha), 24, 1.1f);
+        if (keyboardHovered)
+        {
+            const std::string& keyboardHint = Language::Get("keyboard");
+            const ImVec2 hintSize = ImGui::CalcTextSize(keyboardHint.c_str());
+            draw->AddText(ImVec2(g_quickDrawEditorHotkeyKeyboardCenter.x - hintSize.x * 0.5f,
+                    g_quickDrawEditorHotkeyKeyboardCenter.y +
+                        kQuickDrawEditorHotkeyGateRadius + 11.0f),
+                FadeColor(IM_COL32(235, 230, 215, 255), hotkeyAuxiliaryAlpha), keyboardHint.c_str());
+        }
         }
 
         // Mantemos os retângulos atualizados apenas como envelope de
@@ -16876,8 +17516,52 @@ namespace Menu
 
     bool HandleQuickDrawEditorMouseButton(int button, bool pressed)
     {
-        if (!g_quickDrawEditorOpen)
+        if (!g_quickDrawEditorOpen && !g_quickDrawKeyboardOpen)
             return false;
+
+        if (g_quickDrawKeyboardOpen)
+        {
+            if (!pressed)
+                return true;
+
+            // Qualquer clique fora da lista — esquerdo ou direito — volta ao
+            // editor. Dentro de um cartão só o X remove o bind.
+            if (button != 0 && button != 1)
+                return true;
+            if (button == 0)
+            {
+                for (auto& card : g_quickDrawKeyboardCards)
+                {
+                    if (card.removeT >= 0.0f)
+                        continue;
+                    if (IsSettingsCircleHovered(g_settingsMousePos,
+                            card.clearCenter, 13.0f))
+                    {
+                        for (auto& gesture : g_quickDrawGestures)
+                        {
+                            if (SameQuickDrawKey(gesture.key, card.key))
+                            {
+                                gesture.hotkey = 0;
+                                break;
+                            }
+                        }
+                        card.removeT = 0.0f;
+                        return true;
+                    }
+                    if (PointInQuickDrawRect(g_settingsMousePos, card.min, card.max))
+                        return true;
+                }
+                if (IsSettingsCircleHovered(g_settingsMousePos,
+                        g_quickDrawKeyboardCloseCenter,
+                        g_quickDrawKeyboardCloseRadius + 3.0f))
+                {
+                    CloseQuickDrawKeyboardBrowser();
+                    return true;
+                }
+            }
+            CloseQuickDrawKeyboardBrowser();
+            return true;
+        }
 
         // Enquanto aguarda uma hotkey, qualquer clique fora do próprio botão
         // cancela a captura — inclusive o botão direito.
@@ -16971,7 +17655,8 @@ namespace Menu
             return true;
         }
 
-        if (FindQuickDrawGesture(g_quickDrawEditorItem) &&
+        if (g_quickDrawEditorHotkeyAuxiliaryT >= 0.95f &&
+            FindQuickDrawGesture(g_quickDrawEditorItem) &&
             FindQuickDrawGesture(g_quickDrawEditorItem)->hotkey != 0 &&
             IsSettingsCircleHovered(g_settingsMousePos,
                 g_quickDrawEditorHotkeyClearCenter, kQuickDrawEditorHotkeyClearRadius))
@@ -16993,7 +17678,16 @@ namespace Menu
             g_quickDrawEditorWaitingHotkey = !g_quickDrawEditorWaitingHotkey;
             return true;
         }
-        if (IsSettingsCircleHovered(g_settingsMousePos,
+        if (g_quickDrawEditorHotkeyAuxiliaryT >= 0.95f &&
+            IsSettingsCircleHovered(g_settingsMousePos,
+                g_quickDrawEditorHotkeyKeyboardCenter,
+                kQuickDrawEditorHotkeyGateRadius))
+        {
+            OpenQuickDrawKeyboardBrowser(QuickDrawKeyboardReturnTarget::QuickDrawEditor);
+            return true;
+        }
+        if (g_quickDrawEditorHotkeyAuxiliaryT >= 0.95f &&
+            IsSettingsCircleHovered(g_settingsMousePos,
                 g_quickDrawEditorHotkeyGateCenter, kQuickDrawEditorHotkeyGateRadius))
         {
             QuickDrawGesture* gesture = FindQuickDrawGesture(g_quickDrawEditorItem);
@@ -17001,7 +17695,7 @@ namespace Menu
             {
                 QuickDrawGesture created{};
                 created.key = MakeQuickDrawKey(g_quickDrawEditorItem);
-                created.autoUse = IsQuickDrawAutoUseEligible(g_quickDrawEditorItem.form);
+                created.autoUse = false;
                 g_quickDrawGestures.push_back(std::move(created));
                 gesture = &g_quickDrawGestures.back();
             }
@@ -17241,6 +17935,8 @@ namespace Menu
         g_quickDrawHotkeyQuantityPreviewItem = {};
         g_quickDrawHotkeyPendingKey = 0;
         g_quickDrawEditorWaitingHotkey = false;
+        g_quickDrawKeyboardOpen = false;
+        g_quickDrawKeyboardCards.clear();
     }
 
     float GetRadialEdgeMargin()
@@ -18210,7 +18906,7 @@ namespace Menu
         // crescem juntas sem qualquer influência do movimento de drag.
         const float fixedTailVariation = 0.50f +
             static_cast<float>((orbitSeed >> 1) & 0xFFFFu) / 65535.0f;
-        const float fixedTailLength = 100.0f * fixedTailVariation * floatScale;
+        const float fixedTailLength = 200.0f * fixedTailVariation * floatScale;
         const float fixedOrbitRadius = std::max(
             1.0f, std::sqrt(baseX * baseX + baseY * baseY));
         const int fixedTailSegments = std::max(
@@ -18241,24 +18937,8 @@ namespace Menu
             fixedTailPrevious = fixedTailPoint;
         }
         
-        draw->AddCircleFilled(
-            ImVec2(markerPos.x + 1.35f, markerPos.y + 1.35f),
-            4.5f * floatScale,
-            FadeColor(IM_COL32(0, 0, 0, 160), indicatorAlpha),
-            16);
-        
-        draw->AddCircleFilled(
-            markerPos,
-            pointRadius,
-            FadeColor(IM_COL32(255, 255, 255, 255), indicatorAlpha),
-            16);
-        
-        draw->AddCircle(
-            markerPos,
-            5.4f * floatScale,
-            FadeColor(IM_COL32(255, 255, 255, 100), indicatorAlpha),
-            24,
-            1.0f);
+        // Sem ponto terminal: o marcador agora é somente sua linha orbital
+        // circular, sem a bolinha branca nem a sombra que a acompanhava.
     }
 
     static void DrawSettingsDragQuickDrawIndicator(
@@ -28355,6 +29035,16 @@ namespace Menu
             return;
         }
 
+        // A biblioteca pode ser aberta pelo botão do WheelSettings sem passar
+        // pelo editor. Nesse caso ela continua modal, mas ao fechar retorna
+        // diretamente ao Hub que permaneceu aberto por trás.
+        if (g_quickDrawKeyboardOpen)
+        {
+            fg->PopClipRect();
+            DrawQuickDrawKeyboardBrowser(fg, alpha);
+            return;
+        }
+
         // Quick Draw é modal, porém o backdrop continua sendo desenhado
         // acima para que suas transições não desapareçam instantaneamente.
         if (g_quickDrawEditorOpen)
@@ -28593,6 +29283,36 @@ namespace Menu
             alpha,
             true
         );
+
+        // Biblioteca de hotkeys: fica no espaço entre a borda superior e a
+        // trava do radial Top. Reutiliza exatamente o círculo expansível do
+        // OK do Quick Draw, sem abrir o editor de gesto.
+        g_settingsHotkeyButtonCenter = ImVec2(topLockCenter.x,
+            wheelLayout.min.y + visibleHeight * 0.075f);
+        const float hotkeyButtonDx = g_settingsMousePos.x -
+            g_settingsHotkeyButtonCenter.x;
+        const float hotkeyButtonDy = g_settingsMousePos.y -
+            g_settingsHotkeyButtonCenter.y;
+        const bool hotkeyButtonHovered = hotkeyButtonDx * hotkeyButtonDx +
+            hotkeyButtonDy * hotkeyButtonDy <=
+            kSettingsHotkeyButtonExpandedRadius * kSettingsHotkeyButtonExpandedRadius;
+        g_settingsHotkeyButtonHoverT = AnimateSettingsValue(
+            g_settingsHotkeyButtonHoverT, hotkeyButtonHovered ? 1.0f : 0.0f,
+            13.0f, dt);
+        const float hotkeyButtonRadius = kSettingsHotkeyButtonBaseRadius +
+            (kSettingsHotkeyButtonExpandedRadius - kSettingsHotkeyButtonBaseRadius) *
+                g_settingsHotkeyButtonHoverT;
+        fg->AddCircleFilled(g_settingsHotkeyButtonCenter, hotkeyButtonRadius,
+            FadeColor(IM_COL32(35, 36, 42, 220), alpha), 40);
+        if (g_settingsHotkeyButtonHoverT > 0.01f)
+        {
+            const std::string& keysLabel = Language::Get("keys");
+            const ImVec2 keysLabelSize = ImGui::CalcTextSize(keysLabel.c_str());
+            fg->AddText(ImVec2(g_settingsHotkeyButtonCenter.x - keysLabelSize.x * 0.5f,
+                    g_settingsHotkeyButtonCenter.y - keysLabelSize.y * 0.5f),
+                FadeColor(IM_COL32(245, 242, 232, 255),
+                    alpha * g_settingsHotkeyButtonHoverT), keysLabel.c_str());
+        }
 
         // SIDE
         // Lock Cam | Lock Radial | Lock Scroll. A trava de câmera fica à

@@ -36,6 +36,8 @@ namespace Language
             { "radial_system", "Radial System" },
             { "waiting_key", "Waiting key..." },
             { "hotkey", "HOTKEY" },
+            { "keys", "KEYS" },
+            { "keyboard", "Keyboard" },
             { "require_wheel_key", "REQUIRE WHEEL KEY" },
             { "show_item_information", "Show item information during Gameplay" },
             { "menu_section", "MENU" },
