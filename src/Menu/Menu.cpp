@@ -16407,7 +16407,7 @@ namespace Menu
         const float hotkeyDt = std::clamp(ImGui::GetIO().DeltaTime, 0.0f, 0.05f);
         constexpr float hotkeyTraceRadius = QUICK_DRAW_EDITOR_RADIUS + 21.0f;
         constexpr float hotkeyButtonOffset = 76.0f;
-        constexpr float hotkeyButtonShiftX = -150.0f;
+        constexpr float hotkeyButtonShiftX = -120.0f;
         constexpr float hotkeyButtonRadius = kQuickDrawEditorHotkeyRadius;
         const ImVec2 hotkeyCenterForTrace(center.x - QUICK_DRAW_EDITOR_RADIUS -
                 hotkeyButtonOffset + hotkeyButtonShiftX, center.y);
@@ -16535,7 +16535,7 @@ namespace Menu
             g_quickDrawEditorOkCenter.y - 100.0f); //aumentar sobe
         // Atalho do item: à esquerda do círculo, centralizado verticalmente.
         g_quickDrawEditorHotkeyCenter = ImVec2(
-            center.x - r - 76.0f - 150.0f, center.y);
+            center.x - r - 76.0f - 120.0f, center.y);
         g_quickDrawEditorHotkeyGateCenter = ImVec2(
             g_quickDrawEditorHotkeyCenter.x -
                 kQuickDrawEditorHotkeyRadius - 19.0f, center.y);
@@ -17918,9 +17918,12 @@ namespace Menu
             alpha <= 0.001f)
             return;
 
-        const auto* stroke = FindQuickDrawStroke(item);
-        
-        if (!stroke || stroke->empty())
+        const auto* quickDraw = FindQuickDrawGesture(item);
+        const bool hasStroke = quickDraw && !quickDraw->points.empty();
+        const bool hasHotkey = quickDraw && quickDraw->hotkey != 0;
+        // O marcador é único por item: gesto e hotkey compartilham o mesmo
+        // ponto orbital quando ambos estiverem registrados.
+        if (!hasStroke && !hasHotkey)
             return;
 
         // A órbita é local ao próprio item. O radial de origem/destino não
@@ -23393,26 +23396,79 @@ namespace Menu
         // ========================================================
         if (radialItem)
         {
-            if (const auto* gesture = FindQuickDrawStroke(*radialItem);
-                gesture && !gesture->empty())
+            // Os três indicadores compartilham o mesmo bloco, mas são
+            // independentes: gesto, hotkey e Auto-Use podem existir em
+            // qualquer combinação útil para o item.
+            if (const auto* quickDraw = FindQuickDrawGesture(*radialItem))
             {
-            
-                const float gestureRadius = 44.0f * descriptorScale;
-            
-                const ImVec2 gestureCenter(position.x + panelWidth * 0.5f,
-                    y + gestureRadius + 1.0f);
-            
-                draw->AddCircle(gestureCenter, gestureRadius,
-                    FadeColor(IM_COL32(190, 190, 190, 115), alpha), 40, 1.0f);
+                const bool hasStroke = !quickDraw->points.empty();
+                const bool hasHotkey = quickDraw->hotkey != 0;
+                const bool hasAutoUse = quickDraw->autoUse &&
+                    (hasStroke || hasHotkey);
+                if (hasStroke || hasHotkey)
+                {
+                    const float gestureRadius = 44.0f * descriptorScale;
+                    const float hotkeyRadius = 19.0f * descriptorScale;
+                    const float autoUseRadius = 7.0f * descriptorScale;
+                    const float indicatorGap = 9.0f * descriptorScale;
+                    const float visualRadius = hasStroke ? gestureRadius : hotkeyRadius;
+                    const ImVec2 visualCenter(position.x + panelWidth * 0.5f,
+                        y + visualRadius + 1.0f);
 
-                QuickDrawMagicEffects::DrawStoredStrokeGlow(draw, *gesture,
-                    gestureCenter, gestureRadius, alpha);
-            
-                DrawQuickDrawStroke(draw, *gesture, gestureCenter,
-                    gestureRadius, FadeColor(IM_COL32(245, 245, 245, 235), alpha),
-                    1.6f * descriptorScale);
-            
-                y += (gestureRadius * 2.0f + 13.0f * descriptorScale);
+                    ImVec2 primaryCenter = visualCenter;
+                    if (hasStroke)
+                    {
+                        draw->AddCircle(visualCenter, gestureRadius,
+                            FadeColor(IM_COL32(190, 190, 190, 115), alpha), 40, 1.0f);
+                        QuickDrawMagicEffects::DrawStoredStrokeGlow(draw,
+                            quickDraw->points, visualCenter, gestureRadius, alpha);
+                        DrawQuickDrawStroke(draw, quickDraw->points, visualCenter,
+                            gestureRadius,
+                            FadeColor(IM_COL32(245, 245, 245, 235), alpha),
+                            1.6f * descriptorScale);
+                    }
+
+                    if (hasHotkey)
+                    {
+                        const ImVec2 hotkeyCenter = hasStroke
+                            ? ImVec2(visualCenter.x - gestureRadius - indicatorGap -
+                                hotkeyRadius, visualCenter.y)
+                            : visualCenter;
+                        primaryCenter = hasStroke ? visualCenter : hotkeyCenter;
+                        draw->AddCircleFilled(hotkeyCenter, hotkeyRadius,
+                            FadeColor(IM_COL32(35, 36, 42, 220), alpha), 24);
+                        draw->AddCircle(hotkeyCenter, hotkeyRadius,
+                            FadeColor(IM_COL32(245, 242, 232, 135), alpha), 24, 1.0f);
+                        const std::string hotkeyText =
+                            Config::KeyToString(quickDraw->hotkey);
+                        float hotkeyFontSize = ImGui::GetFontSize() * 0.86f;
+                        ImVec2 textSize = ImGui::GetFont()->CalcTextSizeA(
+                            hotkeyFontSize, FLT_MAX, 0.0f, hotkeyText.c_str());
+                        const float maxTextWidth = hotkeyRadius * 1.55f;
+                        if (textSize.x > maxTextWidth)
+                        {
+                            hotkeyFontSize *= maxTextWidth / textSize.x;
+                            textSize = ImGui::GetFont()->CalcTextSizeA(
+                                hotkeyFontSize, FLT_MAX, 0.0f, hotkeyText.c_str());
+                        }
+                        draw->AddText(ImGui::GetFont(), hotkeyFontSize,
+                            ImVec2(hotkeyCenter.x - textSize.x * 0.5f,
+                                hotkeyCenter.y - textSize.y * 0.5f + 0.5f),
+                            FadeColor(IM_COL32(235, 230, 215, 255), alpha),
+                            hotkeyText.c_str());
+                    }
+
+                    if (hasAutoUse)
+                    {
+                        const float primaryRadius = hasStroke ? gestureRadius : hotkeyRadius;
+                        const ImVec2 autoUseCenter(primaryCenter.x + primaryRadius +
+                            indicatorGap + autoUseRadius, primaryCenter.y);
+                        draw->AddCircleFilled(autoUseCenter, autoUseRadius,
+                            FadeColor(IM_COL32(245, 245, 245, 225), alpha), 20);
+                    }
+
+                    y += (visualRadius * 2.0f + 13.0f * descriptorScale);
+                }
             }
         }
 
