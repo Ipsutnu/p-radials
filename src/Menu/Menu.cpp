@@ -15407,6 +15407,25 @@ namespace Menu
         g_quickDrawGestures.push_back(std::move(gesture));
     }
 
+    static bool IsQuickDrawStrokeLongEnough(const std::vector<ImVec2>& points)
+    {
+        // Os pontos são normalizados pelo raio do editor. Um gesto precisa
+        // percorrer pelo menos 10 px reais para não transformar um simples
+        // clique em uma marca invisível salva.
+        if (points.size() < 2)
+            return false;
+
+        float normalizedLength = 0.0f;
+        for (std::size_t i = 1; i < points.size(); ++i)
+        {
+            const float dx = points[i].x - points[i - 1].x;
+            const float dy = points[i].y - points[i - 1].y;
+            normalizedLength += std::sqrt(dx * dx + dy * dy);
+        }
+
+        return normalizedLength * QUICK_DRAW_EDITOR_RADIUS >= 10.0f;
+    }
+
     static void StoreQuickDrawStroke(const RadialItem& item,
         const std::vector<ImVec2>& points)
     {
@@ -15419,8 +15438,10 @@ namespace Menu
                 return SameQuickDrawKey(gesture.key, key);
             });
 
-        // Uma linha vazia significa que o usuário removeu o desenho.
-        if (points.empty())
+        // Uma linha vazia — ou menor que 10 px — não é um desenho válido.
+        // Neste caso remove somente a marca, preservando Auto-Use/hotkey que
+        // já possam estar configurados para o item.
+        if (!IsQuickDrawStrokeLongEnough(points))
         {
             if (it != g_quickDrawGestures.end())
             {
