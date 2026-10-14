@@ -160,6 +160,10 @@ namespace ItemInfo
 
     // Permite invalidar o cache manualmente.
     static bool g_quantityCacheDirty = true;
+    // Cada reconstrução do inventário recebe uma revisão nova. O preview usa
+    // esse valor para não reaproveitar dados de quantidade de uma versão
+    // anterior do inventário.
+    static std::uint64_t g_quantityCacheRevision = 0;
 
     class QuantityCacheEventSink final :
         public RE::BSTEventSink<RE::TESContainerChangedEvent>
@@ -810,6 +814,7 @@ namespace ItemInfo
 
         g_quantityCacheFrame = currentFrame;
         g_quantityCacheDirty = false;
+        ++g_quantityCacheRevision;
 
         g_quantityCache.clear();
 
@@ -944,6 +949,8 @@ namespace ItemInfo
 
         Data info{};
 
+        std::uint64_t quantityCacheRevision = 0;
+
         bool valid = false;
     };
 
@@ -968,8 +975,13 @@ namespace ItemInfo
         bool hasUniqueID,
         const std::string& displayName)
     {
+        // Garante que uma invalidação de inventário acontecida entre dois
+        // frames também seja observada quando o preview continua no mesmo
+        // item (por exemplo, ao beber várias poções pela hotkey).
+        UpdateQuantityCache();
+
         // ========================================================
-        // VERIFICA SE O ITEM MUDOU
+        // VERIFICA SE O ITEM OU A REVISÃO DE QUANTIDADE MUDOU
         // ========================================================
 
         const bool sameItem =
@@ -977,7 +989,8 @@ namespace ItemInfo
             g_previewCache.form == form &&
             g_previewCache.uniqueID == uniqueID &&
             g_previewCache.hasUniqueID == hasUniqueID &&
-            g_previewCache.displayName == displayName;
+            g_previewCache.displayName == displayName &&
+            g_previewCache.quantityCacheRevision == g_quantityCacheRevision;
 
         if (sameItem)
         {
@@ -999,6 +1012,9 @@ namespace ItemInfo
 
         g_previewCache.displayName =
             displayName;
+
+        g_previewCache.quantityCacheRevision =
+            g_quantityCacheRevision;
 
         g_previewCache.info =
             Get(

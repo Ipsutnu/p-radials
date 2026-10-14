@@ -951,6 +951,9 @@ namespace Menu
     static bool g_quickDrawHotkeyPreviewExitActive = false;
     static float g_quickDrawHotkeyPreviewExitT = 0.0f;
     static bool g_quickDrawHotkeyPreviewExitLeft = false;
+    // Mantém o badge de quantidade visível durante o fade final do preview
+    // disparado por hotkey, mesmo depois que o item pendente é consumido.
+    static RadialItem g_quickDrawHotkeyQuantityPreviewItem{};
     static constexpr float QUICK_DRAW_EDITOR_RADIUS = RADIAL_DEADZONE * 5.0f;
     static constexpr float QUICK_DRAW_MATCH_THRESHOLD = 0.50f;
 
@@ -10039,6 +10042,7 @@ namespace Menu
                 false,
                 false);
 
+            ItemInfo::InvalidateQuantityCache();
             return true;
         }
 
@@ -10054,6 +10058,10 @@ namespace Menu
             true,
             true);
 
+        // O consumo é executado pelo motor logo após EquipObject. Marcamos o
+        // snapshot como desatualizado para que o preview da hotkey não fique
+        // preso na quantidade anterior enquanto o evento do container chega.
+        ItemInfo::InvalidateQuantityCache();
         return true;
     }
 
@@ -15543,6 +15551,30 @@ namespace Menu
         return find(g_bottomItems);
     }
 
+    static bool BuildQuickDrawHotkeyPreviewItem(
+        const QuickDrawKey& key,
+        RadialItem& previewItem)
+    {
+        if (!key.formID)
+            return false;
+
+        // A hotkey continua serializada mesmo quando uma poção some do
+        // inventário e é removida do radial. Para o aviso de conflito ainda
+        // temos o FormID salvo, suficiente para reconstruir somente o
+        // preview visual sem restaurar o item nem torná-lo utilizável.
+        RE::TESForm* form = RE::TESForm::LookupByID(key.formID);
+        if (!form)
+            return false;
+
+        previewItem = {};
+        previewItem.form = form;
+        previewItem.uniqueID = key.uniqueID;
+        previewItem.hasUniqueID = key.hasUniqueID;
+        previewItem.name = form->GetName() ? form->GetName() : "";
+        previewItem.valid = true;
+        return true;
+    }
+
     static void ExecuteQuickDrawHotkeyItem(const RadialItem& item, bool left)
     {
         g_quickDrawHotkeyPendingItem = item;
@@ -15594,8 +15626,16 @@ namespace Menu
                 if (auto* item = FindQuickDrawHotkeyItem(owner->key))
                 {
                     g_quickDrawEditorHotkeyConflictItem = *item;
-                    g_quickDrawEditorHotkeyConflictPreviewT = 0.0f;
                 }
+                else
+                {
+                    BuildQuickDrawHotkeyPreviewItem(
+                        owner->key,
+                        g_quickDrawEditorHotkeyConflictItem);
+                }
+
+                if (g_quickDrawEditorHotkeyConflictItem.form)
+                    g_quickDrawEditorHotkeyConflictPreviewT = 0.0f;
             }
             return true;
         }
@@ -15648,6 +15688,7 @@ namespace Menu
             if (!item || !item->valid || !item->form)
                 return true;
             g_quickDrawHotkeyPendingItem = *item;
+            g_quickDrawHotkeyQuantityPreviewItem = *item;
             g_quickDrawHotkeyPendingKey = virtualKey;
             if (!QuickDrawHotkeyNeedsHand(item->form))
             {
@@ -17197,6 +17238,7 @@ namespace Menu
         g_quickDrawHotkeyPreviewExitActive = false;
         g_quickDrawHotkeyPreviewExitT = 0.0f;
         g_quickDrawHotkeyPendingItem = {};
+        g_quickDrawHotkeyQuantityPreviewItem = {};
         g_quickDrawHotkeyPendingKey = 0;
         g_quickDrawEditorWaitingHotkey = false;
     }
@@ -18388,7 +18430,9 @@ namespace Menu
     static void DrawSettingsPreviewQuantity(
         const RadialItem& item,
         float alpha,
-        Config::ItemPreviewProfile profile = Config::ItemPreviewProfile::Menu)
+        Config::ItemPreviewProfile profile = Config::ItemPreviewProfile::Menu,
+        const ImVec2* previewCenterOverride = nullptr,
+        bool showPotionQuantityAtAnyAmount = false)
     {
         if (!item.form)
             return;
@@ -18408,8 +18452,11 @@ namespace Menu
         const int quantity =
             info.instanceQuantity;
 
-        // Só aparece quando existe mais de uma unidade.
-        if (quantity <= 1)
+        // O indicador normal só aparece a partir de duas unidades. Poções
+        // bindadas por hotkey são a exceção: continuam mostrando inclusive 0,
+        // para que seja claro quando a última unidade foi consumida.
+        const bool isPotion = item.form->As<RE::AlchemyItem>() != nullptr;
+        if (quantity <= 1 && !(showPotionQuantityAtAnyAmount && isPotion))
             return;
 
         ImDrawList* draw =
@@ -18422,10 +18469,12 @@ namespace Menu
         // POSIÇÃO DO PREVIEW
         // ========================================================
 
-        const ImVec2 previewCenter(
-            LayoutLerp(wheelLayout.min.x, wheelLayout.max.x, preview.itemPositionX),
-            LayoutLerp(wheelLayout.min.y, wheelLayout.max.y, preview.itemPositionY)
-        );
+        const ImVec2 previewCenter = previewCenterOverride ?
+            *previewCenterOverride :
+            ImVec2(
+                LayoutLerp(wheelLayout.min.x, wheelLayout.max.x, preview.itemPositionX),
+                LayoutLerp(wheelLayout.min.y, wheelLayout.max.y, preview.itemPositionY)
+            );
 
         // ========================================================
         // POSIÇÃO FIXA DA QUANTIDADE
@@ -18436,9 +18485,9 @@ namespace Menu
 
         const ImVec2 originalPosition(
             previewCenter.x + (wheelLayout.max.x - wheelLayout.min.x) * 0.060f *
-                (preview.itemSize * 0.01f),
+                ((previewCenterOverride ? 100.0f : preview.itemSize) * 0.01f),
             previewCenter.y + (wheelLayout.max.y - wheelLayout.min.y) * 0.11f *
-                (preview.itemSize * 0.01f)
+                ((previewCenterOverride ? 100.0f : preview.itemSize) * 0.01f)
         );
 
         // ========================================================
@@ -18589,6 +18638,25 @@ namespace Menu
                 alpha
             ),
             quantityText.c_str()
+        );
+    }
+
+    static void DrawQuickDrawHotkeyPreviewQuantity(
+        const RadialItem& item,
+        float alpha,
+        const ImVec2& previewCenter)
+    {
+        if (!Config::g_showItemQuantity || !item.form || alpha <= 0.0f)
+            return;
+
+        // Reutiliza exatamente a bolinha do preview central, mas ancorada no
+        // preview temporário do hotkey em vez do layout persistido do radial.
+        DrawSettingsPreviewQuantity(
+            item,
+            alpha,
+            Config::ItemPreviewProfile::Menu,
+            &previewCenter,
+            true
         );
     }
 
@@ -29346,6 +29414,8 @@ namespace Menu
             ItemPreview::Show(g_quickDrawHotkeyPendingItem.form,
                 g_quickDrawHotkeyPendingItem.uniqueID,
                 g_quickDrawHotkeyPendingItem.hasUniqueID);
+            DrawQuickDrawHotkeyPreviewQuantity(
+                g_quickDrawHotkeyPendingItem, 1.0f, center);
             return;
         }
         if (g_quickDrawHotkeyDirectPreviewActive &&
@@ -29362,6 +29432,10 @@ namespace Menu
                 g_quickDrawHotkeyPendingItem.uniqueID,
                 g_quickDrawHotkeyPendingItem.hasUniqueID);
             ItemPreview::SetOpacity(g_quickDrawHotkeyDirectPreviewAlpha);
+            DrawQuickDrawHotkeyPreviewQuantity(
+                g_quickDrawHotkeyPendingItem,
+                g_quickDrawHotkeyDirectPreviewAlpha,
+                center);
             return;
         }
         if (g_quickDrawHotkeyPreviewExitActive &&
@@ -29379,6 +29453,12 @@ namespace Menu
             ItemPreview::Show(g_quickDrawHotkeyPendingItem.form,
                 g_quickDrawHotkeyPendingItem.uniqueID,
                 g_quickDrawHotkeyPendingItem.hasUniqueID);
+            DrawQuickDrawHotkeyPreviewQuantity(
+                g_quickDrawHotkeyPendingItem,
+                1.0f,
+                ImVec2(center.x +
+                    (g_quickDrawHotkeyPreviewExitLeft ? -72.0f : 72.0f) * eased,
+                    center.y));
             if (g_quickDrawHotkeyPreviewExitT >= 1.0f)
             {
                 g_quickDrawHotkeyPreviewExitActive = false;
@@ -29388,6 +29468,24 @@ namespace Menu
             return;
         }
         UpdateGameplayPreviewFadeOut(deltaTime);
+
+        // Após usar/cancelar um hotkey, o preview 3D continua alguns frames
+        // para desaparecer suavemente. Mantemos o badge no mesmo alpha até o
+        // fim desse fade, sem depender de o radial estar aberto.
+        if (g_gameplayPreviewFadeOut &&
+            g_quickDrawHotkeyQuantityPreviewItem.form)
+        {
+            DrawQuickDrawHotkeyPreviewQuantity(
+                g_quickDrawHotkeyQuantityPreviewItem,
+                g_gameplayPreviewFadeAlpha,
+                Resolution::GetVirtualCenter());
+        }
+        else if (!g_quickDrawHotkeyHandSelectionActive &&
+            !g_quickDrawHotkeyDirectPreviewActive &&
+            !g_quickDrawHotkeyPreviewExitActive)
+        {
+            g_quickDrawHotkeyQuantityPreviewItem = {};
+        }
 
         // RESET LIMPO: Só limpa o estado quando o menu sumir da tela por completo
         if (g_globalAlpha <= 0.0f)
