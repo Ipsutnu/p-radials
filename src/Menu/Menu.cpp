@@ -585,6 +585,7 @@ namespace Menu
     {
         QuickDrawKey key{};
         std::vector<ImVec2> points;
+        bool autoUse = false;
     };
 
     static std::vector<QuickDrawGesture> g_quickDrawGestures;
@@ -598,8 +599,12 @@ namespace Menu
     static ImVec2 g_quickDrawEditorOkMax{};
     static ImVec2 g_quickDrawEditorResetCenter{};
     static ImVec2 g_quickDrawEditorOkCenter{};
+    static ImVec2 g_quickDrawEditorAutoUseCenter{};
     static float g_quickDrawEditorResetRadius = 25.0f;
     static float g_quickDrawEditorOkRadius = 25.0f;
+    static constexpr float kQuickDrawEditorAutoUseRadius = 45.0f;
+    static float g_quickDrawEditorAutoUseClickFlash = 0.0f;
+    static float g_quickDrawEditorAutoUseShadowT = 0.0f;
     static float g_quickDrawEditorResetHoverT = 0.0f;
     static float g_quickDrawEditorOkHoverT = 0.0f;
     static bool g_quickDrawSettingsExpanded = false;
@@ -918,6 +923,7 @@ namespace Menu
     static std::vector<ImVec2> g_quickDrawGameplayStroke;
     static RadialItem* g_quickDrawSelectionOverride = nullptr;
     static RadialSide g_quickDrawSelectionSide = RadialSide::None;
+    static bool g_quickDrawSelectionAutoUse = false;
     static constexpr float QUICK_DRAW_EDITOR_RADIUS = RADIAL_DEADZONE * 5.0f;
     static constexpr float QUICK_DRAW_MATCH_THRESHOLD = 0.50f;
 
@@ -954,6 +960,8 @@ namespace Menu
     static bool g_settingsRightPressed = false;
     static bool FinishQuickDrawGameplay();
     static void CancelQuickDrawGameplay();
+    static bool IsQuickDrawAutoUseEligible(const RE::TESForm* form);
+    static void ConfirmQuickDrawEditor();
     void UseSelectedRadialItem();
     void DrawSettingsCursor();
 
@@ -9540,10 +9548,13 @@ namespace Menu
             if (!g_quickDrawEditorOpen && BeginQuickDrawEditor())
                 return;
 
-            // Enquanto o editor está aberto, a mesma tecla não fecha o
-            // Settings nem descarta o desenho em andamento.
+            // A primeira/segunda tecla confirma o editor exatamente como o
+            // botão OK, sem fechar o WheelSettings inteiro.
             if (g_quickDrawEditorOpen)
+            {
+                ConfirmQuickDrawEditor();
                 return;
+            }
 
             if (TrackEditor::IsOpen())
             {
@@ -9634,6 +9645,7 @@ namespace Menu
                     UseSelectedRadialItem();
                 g_quickDrawSelectionOverride = nullptr;
                 g_quickDrawSelectionSide = RadialSide::None;
+                g_quickDrawSelectionAutoUse = false;
                 CloseRadialMenu();
                 return;
             }
@@ -13347,6 +13359,72 @@ namespace Menu
         return nullptr;
     }
 
+    static bool QueueVoicePowerInput()
+    {
+        auto* queue = RE::BSInputEventQueue::GetSingleton();
+        auto* controls = RE::ControlMap::GetSingleton();
+        if (!queue || !controls)
+            return false;
+
+        // Respeita a tecla/botão que o jogador configurou para Grito/Poder.
+        // Não usamos uma tecla fixa, portanto teclado, mouse e gamepad têm o
+        // mesmo comportamento do comando nativo.
+        constexpr std::array devices{
+            RE::INPUT_DEVICE::kKeyboard,
+            RE::INPUT_DEVICE::kMouse,
+            RE::INPUT_DEVICE::kGamepad
+        };
+        for (const auto device : devices)
+        {
+            const auto key = controls->GetMappedKey("Shout", device);
+            if (key == RE::ControlMap::kInvalid)
+                continue;
+
+            const RE::BSFixedString userEvent("Shout");
+            queue->AddButtonEvent(device, static_cast<std::int32_t>(key),
+                1.0f, 0.0f, userEvent);
+            queue->AddButtonEvent(device, static_cast<std::int32_t>(key),
+                0.0f, 0.01f, userEvent);
+            return true;
+        }
+
+        return false;
+    }
+
+    static void ScheduleQuickDrawVoiceAutoUse(RE::FormID expectedFormID,
+        bool isShout)
+    {
+        auto activate = [expectedFormID, isShout]()
+        {
+            auto* player = RE::PlayerCharacter::GetSingleton();
+            if (!player)
+                return;
+
+            const bool ready = isShout
+                ? player->GetCurrentShout() &&
+                    player->GetCurrentShout()->GetFormID() == expectedFormID
+                : player->GetActorRuntimeData().selectedPower &&
+                    player->GetActorRuntimeData().selectedPower->GetFormID() == expectedFormID;
+            if (!ready)
+            {
+                spdlog::warn("QUICK DRAW AUTO-USE | voice selection not ready {:08X}",
+                    expectedFormID);
+                return;
+            }
+
+            if (!QueueVoicePowerInput())
+                spdlog::warn("QUICK DRAW AUTO-USE | no mapped Shout input");
+        };
+
+        // EquipShout/EquipSpell termina dentro de uma tarefa da thread do
+        // jogo. A segunda tarefa garante que a seleção de voz/poder já foi
+        // aplicada antes de entregar o comando de uso ao Skyrim.
+        if (auto* tasks = SKSE::GetTaskInterface())
+            tasks->AddTask(std::move(activate));
+        else
+            activate();
+    }
+
     void UseSelectedRadialItem()
     {
         if (g_radialSide == RadialSide::None && !g_quickDrawSelectionOverride)
@@ -13552,6 +13630,28 @@ namespace Menu
 
         if (auto* spell = form->As<RE::SpellItem>())
         {
+            if (quickDrawSelection && g_quickDrawSelectionAutoUse &&
+                IsQuickDrawAutoUseEligible(spell))
+            {
+                // Powers ocupam o slot de voz, não uma mão. Equipá-los sem
+                // BGSEquipSlot preserva o fluxo nativo de poder selecionado;
+                // a ativação é entregue no frame seguinte.
+                auto equipAndUsePower = [actor, spell]()
+                {
+                    auto* manager = RE::ActorEquipManager::GetSingleton();
+                    if (!manager)
+                        return;
+                    manager->EquipSpell(actor, spell);
+                    ScheduleQuickDrawVoiceAutoUse(spell->GetFormID(), false);
+                };
+
+                if (auto* taskInterface = SKSE::GetTaskInterface())
+                    taskInterface->AddTask(equipAndUsePower);
+                else
+                    equipAndUsePower();
+                return;
+            }
+
             // Usa o MESMO mapeamento dos radiais laterais usado por
             // UseNormalWeapon(): esquerdo -> 0x13F43, direito -> 0x13F42.
             // Isso evita equipar a magia na mão oposta à indicada pelo radial.
@@ -13610,12 +13710,16 @@ namespace Menu
 
         if (auto* shout = form->As<RE::TESShout>())
         {
-            auto equipShout = [actor, shout]()
+            const bool autoUse = quickDrawSelection &&
+                g_quickDrawSelectionAutoUse;
+            auto equipShout = [actor, shout, autoUse]()
             {
                 auto* manager = RE::ActorEquipManager::GetSingleton();
                 if (manager)
                 {
                     manager->EquipShout(actor, shout);
+                    if (autoUse)
+                        ScheduleQuickDrawVoiceAutoUse(shout->GetFormID(), true);
                 }
             };
 
@@ -15227,7 +15331,7 @@ namespace Menu
             (!a.hasUniqueID || a.uniqueID == b.uniqueID);
     }
 
-    static std::vector<ImVec2>* FindQuickDrawStroke(const RadialItem& item)
+    static QuickDrawGesture* FindQuickDrawGesture(const RadialItem& item)
     {
         const QuickDrawKey key = MakeQuickDrawKey(item);
         if (!key.formID)
@@ -15235,9 +15339,40 @@ namespace Menu
         for (auto& gesture : g_quickDrawGestures)
         {
             if (SameQuickDrawKey(gesture.key, key))
-                return &gesture.points;
+                return &gesture;
         }
         return nullptr;
+    }
+
+    static std::vector<ImVec2>* FindQuickDrawStroke(const RadialItem& item)
+    {
+        if (auto* gesture = FindQuickDrawGesture(item))
+            return &gesture->points;
+        return nullptr;
+    }
+
+    static bool IsQuickDrawAutoUseEnabled(const RadialItem& item)
+    {
+        if (const auto* gesture = FindQuickDrawGesture(item))
+            return gesture->autoUse;
+        // Novos desenhos de Shout/Power já nascem ativados. Um registro só
+        // é necessário quando o usuário decide desligar o recurso.
+        return IsQuickDrawAutoUseEligible(item.form);
+    }
+
+    static void SetQuickDrawAutoUse(const RadialItem& item, bool enabled)
+    {
+        const QuickDrawKey key = MakeQuickDrawKey(item);
+        if (!key.formID)
+            return;
+
+        if (auto* gesture = FindQuickDrawGesture(item))
+        {
+            gesture->autoUse = enabled;
+            return;
+        }
+
+        g_quickDrawGestures.push_back({ key, {}, enabled });
     }
 
     static void StoreQuickDrawStroke(const RadialItem& item,
@@ -15256,18 +15391,43 @@ namespace Menu
         if (points.empty())
         {
             if (it != g_quickDrawGestures.end())
-                g_quickDrawGestures.erase(it);
+            {
+                // Limpar o traço não desliga uma preferência Auto-Use já
+                // escolhida para esse item; ela volta a valer ao registrar
+                // o próximo gesto.
+                if (it->autoUse)
+                    it->points.clear();
+                else
+                    g_quickDrawGestures.erase(it);
+            }
             return;
         }
 
         if (it == g_quickDrawGestures.end())
         {
-            g_quickDrawGestures.push_back({ key, points });
+            g_quickDrawGestures.push_back({ key, points,
+                IsQuickDrawAutoUseEligible(item.form) });
         }
         else
         {
             it->points = points;
         }
+    }
+
+    static void ConfirmQuickDrawEditor()
+    {
+        if (!g_quickDrawEditorOpen)
+            return;
+
+        // Mesmo fluxo do botão OK: conserva o gesto atual e restaura o
+        // backdrop do WheelSettings sem fechar o Hub inteiro.
+        StoreQuickDrawStroke(g_quickDrawEditorItem, g_quickDrawEditorStroke);
+        TransitionSettingsBackdrop(1.0f, 0.5f);
+        g_quickDrawEditorOpen = false;
+        g_quickDrawEditorDrawing = false;
+        g_quickDrawSettingsExpanded = false;
+        g_quickDrawSettingsActiveSlider = QuickDrawSettingsSlider::None;
+        g_quickDrawEffectPreviewUntil = 0.0f;
     }
 
     static void AddQuickDrawPoint(std::vector<ImVec2>& points,
@@ -15395,6 +15555,24 @@ namespace Menu
         return std::max(score(false), score(true));
     }
 
+    static bool IsQuickDrawAutoUseEligible(const RE::TESForm* form)
+    {
+        if (!form)
+            return false;
+
+        if (form->As<RE::TESShout>())
+            return true;
+
+        const auto* spell = form->As<RE::SpellItem>();
+        if (!spell)
+            return false;
+
+        const auto type = spell->GetSpellType();
+        return type == RE::MagicSystem::SpellType::kPower ||
+            type == RE::MagicSystem::SpellType::kLesserPower ||
+            type == RE::MagicSystem::SpellType::kVoicePower;
+    }
+
     static void DrawQuickDrawStroke(ImDrawList* draw,
         const std::vector<ImVec2>& points, const ImVec2& center,
         float radius, ImU32 color, float thickness)
@@ -15460,6 +15638,9 @@ namespace Menu
 
         g_quickDrawSelectionOverride = bestItem;
         g_quickDrawSelectionSide = bestSide;
+        g_quickDrawSelectionAutoUse =
+            IsQuickDrawAutoUseEligible(bestItem->form) &&
+            IsQuickDrawAutoUseEnabled(*bestItem);
         spdlog::info("QUICK DRAW | matched {:08X} score={:.2f}",
             bestItem->form->GetFormID(), bestScore);
         return true;
@@ -15478,6 +15659,7 @@ namespace Menu
         g_quickDrawGameplayStroke.clear();
         g_quickDrawSelectionOverride = nullptr;
         g_quickDrawSelectionSide = RadialSide::None;
+        g_quickDrawSelectionAutoUse = false;
         g_quickDrawGameplayEquipLeft = false;
         CloseRadialMenu();
     }
@@ -15508,6 +15690,8 @@ namespace Menu
         g_quickDrawSettingsScrollbarDragging = false;
         g_quickDrawEditorResetHoverT = 0.0f;
         g_quickDrawEditorOkHoverT = 0.0f;
+        g_quickDrawEditorAutoUseClickFlash = 0.0f;
+        g_quickDrawEditorAutoUseShadowT = 0.0f;
         // O fundo do WheelSettings desaparece devagar ao entrar no editor,
         // preservando apenas o Quick Draw sobre o jogo.
         TransitionSettingsBackdrop(0.0f, 0.8f);
@@ -15617,8 +15801,8 @@ namespace Menu
         // para a borda no próprio mesh. Assim não há anéis concêntricos
         // visíveis tentando imitar o degradê.
         constexpr int fadeSegments = 96;
-        const ImU32 fadeCenter = FadeColor(IM_COL32(4, 5, 8, 0), alpha * contentT);
-        const ImU32 fadeEdge = FadeColor(IM_COL32(4, 5, 8, 150), alpha * contentT);
+        const ImU32 fadeCenter = FadeColor(IM_COL32(35, 36, 42, 0), alpha * contentT);
+        const ImU32 fadeEdge = FadeColor(IM_COL32(35, 36, 42, 150), alpha * contentT);
         const ImVec2 fadeUv = draw->_Data->TexUvWhitePixel;
         draw->PrimReserve(fadeSegments * 3, fadeSegments * 3);
         for (int segment = 0; segment < fadeSegments; ++segment)
@@ -15885,6 +16069,11 @@ namespace Menu
         const float commandsY = center.y + r + 66.0f;
         g_quickDrawEditorResetCenter = ImVec2(center.x - commandSpacing, commandsY);
         g_quickDrawEditorOkCenter = ImVec2(center.x + commandSpacing, commandsY);
+        // Acompanha a curvatura inferior direita, mas mantém o mesmo raio
+        // máximo do OK mesmo fora do hover.
+        g_quickDrawEditorAutoUseCenter = ImVec2(
+            g_quickDrawEditorOkCenter.x + 180.0f,  //aumentar manda p direita
+            g_quickDrawEditorOkCenter.y - 100.0f); //aumentar sobe
 
         const auto circleHovered = [&](const ImVec2& buttonCenter, float radius) {
             return IsSettingsCircleHovered(g_settingsMousePos, buttonCenter, radius);
@@ -15924,6 +16113,64 @@ namespace Menu
         drawCommandCircle(g_quickDrawEditorOkCenter,
             g_quickDrawEditorOkHoverT, g_quickDrawEditorOkRadius,
             Language::Get("ok").c_str());
+
+        if (IsQuickDrawAutoUseEligible(g_quickDrawEditorItem.form))
+        {
+            const bool autoUse = IsQuickDrawAutoUseEnabled(g_quickDrawEditorItem);
+            const bool hovered = IsSettingsCircleHovered(
+                g_settingsMousePos, g_quickDrawEditorAutoUseCenter,
+                kQuickDrawEditorAutoUseRadius);
+            g_quickDrawEditorAutoUseClickFlash = std::max(0.0f,
+                g_quickDrawEditorAutoUseClickFlash - dt * 5.5f);
+            g_quickDrawEditorAutoUseShadowT = AnimateSettingsValue(
+                g_quickDrawEditorAutoUseShadowT, hovered ? 1.0f : 0.0f,
+                hovered ? 8.0f : 6.0f, dt);
+
+            // Sombra radial curta: usa o mesmo cinza do fundo do botão,
+            // aparece/desaparece em fade e dissolve até zero no exterior.
+            if (g_quickDrawEditorAutoUseShadowT > 0.001f)
+            {
+                constexpr int shadowSteps = 10;
+                constexpr float shadowReach = 60.0f;
+                for (int step = shadowSteps; step >= 0; --step)
+                {
+                    const float t = static_cast<float>(step) / shadowSteps;
+                    const float shadowAlpha = 58.0f * (1.0f - t) * (1.0f - t) *
+                        g_quickDrawEditorAutoUseShadowT;
+                    draw->AddCircleFilled(g_quickDrawEditorAutoUseCenter,
+                        kQuickDrawEditorAutoUseRadius + shadowReach * t,
+                        FadeColor(IM_COL32(35, 36, 42,
+                            static_cast<int>(shadowAlpha)), alpha), 40);
+                }
+            }
+
+            // Ativo = branco persistente. Hover não altera a cor do botão;
+            // somente o clique mantém o flash branco momentâneo.
+            const float light = autoUse ? 1.0f : g_quickDrawEditorAutoUseClickFlash;
+            const ImU32 fill = light > 0.0f
+                ? IM_COL32(245, 242, 232, static_cast<int>(210.0f * light))
+                : IM_COL32(35, 36, 42, 220);
+            draw->AddCircleFilled(g_quickDrawEditorAutoUseCenter,
+                kQuickDrawEditorAutoUseRadius, FadeColor(fill, alpha), 40);
+            draw->AddCircle(g_quickDrawEditorAutoUseCenter,
+                kQuickDrawEditorAutoUseRadius,
+                FadeColor(IM_COL32(245, 242, 232,
+                    autoUse ? 180 : 75), alpha),
+                40, 1.15f);
+
+            // Mesmo tooltip direto e sem caixa usado pelos controles de lock
+            // do WheelSettings.
+            if (hovered)
+            {
+                constexpr const char* label = "AUTO-USE";
+                const ImVec2 textSize = ImGui::CalcTextSize(label);
+                draw->AddText(ImVec2(
+                    g_quickDrawEditorAutoUseCenter.x - textSize.x * 0.5f,
+                    g_quickDrawEditorAutoUseCenter.y -
+                        kQuickDrawEditorAutoUseRadius - textSize.y - 12.0f),
+                    FadeColor(IM_COL32(235, 230, 215, 255), alpha), label);
+            }
+        }
 
         // Mantemos os retângulos atualizados apenas como envelope de
         // compatibilidade; o clique efetivo abaixo é circular.
@@ -16043,6 +16290,16 @@ namespace Menu
             return true;
         }
 
+        if (IsQuickDrawAutoUseEligible(g_quickDrawEditorItem.form) &&
+            IsSettingsCircleHovered(g_settingsMousePos,
+                g_quickDrawEditorAutoUseCenter, kQuickDrawEditorAutoUseRadius))
+        {
+            SetQuickDrawAutoUse(g_quickDrawEditorItem,
+                !IsQuickDrawAutoUseEnabled(g_quickDrawEditorItem));
+            g_quickDrawEditorAutoUseClickFlash = 1.0f;
+            return true;
+        }
+
         if (IsSettingsCircleHovered(g_settingsMousePos,
                 g_quickDrawEditorResetCenter, g_quickDrawEditorResetRadius))
         {
@@ -16061,12 +16318,7 @@ namespace Menu
         if (IsSettingsCircleHovered(g_settingsMousePos,
                 g_quickDrawEditorOkCenter, g_quickDrawEditorOkRadius))
         {
-            StoreQuickDrawStroke(g_quickDrawEditorItem, g_quickDrawEditorStroke);
-            // Restaura o fundo do Settings depois de aceitar o gesto, sem o
-            // salto visual que havia ao sair do editor.
-            TransitionSettingsBackdrop(1.0f, 0.5f);
-            g_quickDrawEditorOpen = false;
-            g_quickDrawEditorDrawing = false;
+            ConfirmQuickDrawEditor();
             return true;
         }
 
@@ -16167,11 +16419,13 @@ namespace Menu
         {
             const auto& gesture = g_quickDrawGestures[i];
             const std::uint8_t hasUnique = gesture.key.hasUniqueID ? 1 : 0;
+            const std::uint8_t autoUse = gesture.autoUse ? 1 : 0;
             const std::uint16_t pointCount = static_cast<std::uint16_t>(
                 std::min<std::size_t>(gesture.points.size(), 2048));
             if (!serialization->WriteRecordData(&gesture.key.formID, sizeof(RE::FormID)) ||
                 !serialization->WriteRecordData(&gesture.key.uniqueID, sizeof(std::uint16_t)) ||
                 !serialization->WriteRecordData(&hasUnique, sizeof(hasUnique)) ||
+                !serialization->WriteRecordData(&autoUse, sizeof(autoUse)) ||
                 !serialization->WriteRecordData(&pointCount, sizeof(pointCount)))
                 return;
             for (std::uint16_t point = 0; point < pointCount; ++point)
@@ -16186,7 +16440,7 @@ namespace Menu
         std::uint32_t version, std::uint32_t)
     {
         g_quickDrawGestures.clear();
-        if (!serialization || version != 1)
+        if (!serialization || (version != 1 && version != 2))
             return false;
 
         std::uint32_t count = 0;
@@ -16200,10 +16454,12 @@ namespace Menu
             RE::FormID oldFormID = 0;
             std::uint16_t uniqueID = 0;
             std::uint8_t hasUnique = 0;
+            std::uint8_t autoUse = 0;
             std::uint16_t pointCount = 0;
             if (serialization->ReadRecordData(&oldFormID, sizeof(oldFormID)) != sizeof(oldFormID) ||
                 serialization->ReadRecordData(&uniqueID, sizeof(uniqueID)) != sizeof(uniqueID) ||
                 serialization->ReadRecordData(&hasUnique, sizeof(hasUnique)) != sizeof(hasUnique) ||
+                (version >= 2 && serialization->ReadRecordData(&autoUse, sizeof(autoUse)) != sizeof(autoUse)) ||
                 serialization->ReadRecordData(&pointCount, sizeof(pointCount)) != sizeof(pointCount) ||
                 pointCount > 2048)
                 return false;
@@ -16221,13 +16477,14 @@ namespace Menu
 
             QuickDrawGesture gesture{};
             gesture.key = { formID, uniqueID, hasUnique != 0 };
+            gesture.autoUse = autoUse != 0;
             gesture.points.resize(pointCount);
             for (auto& point : gesture.points)
             {
                 if (serialization->ReadRecordData(&point, sizeof(point)) != sizeof(point))
                     return false;
             }
-            if (!gesture.points.empty())
+            if (!gesture.points.empty() || gesture.autoUse)
                 g_quickDrawGestures.push_back(std::move(gesture));
         }
 
@@ -16246,6 +16503,7 @@ namespace Menu
         g_quickDrawGameplayEquipLeft = false;
         g_quickDrawSelectionOverride = nullptr;
         g_quickDrawSelectionSide = RadialSide::None;
+        g_quickDrawSelectionAutoUse = false;
     }
 
     float GetRadialEdgeMargin()
