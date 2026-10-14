@@ -21,7 +21,7 @@ namespace Serialization
     constexpr std::uint32_t kSerializationID = 'WHLW';
     constexpr std::uint32_t kRecordRadials    = 'RADS';
     constexpr std::uint32_t kRecordQuickDraw  = 'QDRW';
-    constexpr std::uint32_t kQuickDrawVersion = 2;
+    constexpr std::uint32_t kQuickDrawVersion = 3;
 
     // Versão antiga: apenas FormID.
     constexpr std::uint32_t kVersionLegacy = 1;

@@ -238,12 +238,37 @@ RE::BSEventNotifyControl InputHandler::ProcessEvent(
                     continue;
                 }   
 
+                if (button && Menu::CaptureQuickDrawHotkey(button))
+                {
+                    button->GetRuntimeData().value = 0.0f;
+                    button->GetRuntimeData().heldDownSecs = 0.0f;
+                    button->SetUserEvent("");
+                    button->SetIDCode(0xFF);
+                    continue;
+                }
+
                 // ============================================================
                 // ATUALIZA SCAN CODE DA TECLA CONFIGURADA IMEDIATAMENTE
                 // ============================================================
 
                 if (button->GetDevice() == RE::INPUT_DEVICE::kKeyboard)
                 {
+                    const int virtualKey = static_cast<int>(MapVirtualKeyW(
+                        static_cast<UINT>(button->GetIDCode()), MAPVK_VSC_TO_VK_EX));
+                    const bool firstPress = button->IsDown() &&
+                        button->GetRuntimeData().heldDownSecs <= 0.0f;
+                    const bool released = !button->IsPressed();
+                    if ((released && Menu::HandleQuickDrawHotkeyRelease(virtualKey)) ||
+                        Menu::HandleQuickDrawHotkeyHandKey(virtualKey, firstPress) ||
+                        (firstPress && Menu::HandleQuickDrawHotkey(virtualKey,
+                            g_primaryActivationHeld || g_secondaryActivationHeld)))
+                    {
+                        button->GetRuntimeData().value = 0.0f;
+                        button->GetRuntimeData().heldDownSecs = 0.0f;
+                        button->SetUserEvent("");
+                        button->SetIDCode(0xFF);
+                        continue;
+                    }
                     const bool previousDeviceState = AnyActivationHeld();
                     if (Gamepad::IsBinding(Config::g_toggleKey))
                         g_primaryActivationHeld = false;
@@ -632,6 +657,33 @@ RE::BSEventNotifyControl InputHandler::ProcessEvent(
     {
         g_settingsOwnsLeftClick = false;
         g_settingsOwnsRightClick = false;
+    }
+
+    // A escolha de mão iniciada por um atalho é modal mesmo sem radial
+    // aberto: o primeiro movimento horizontal ou clique pertence ao Wheel.
+    if (Menu::IsQuickDrawHotkeyHandSelectionActive())
+    {
+        for (auto* event = *a_event; event; event = event->next)
+        {
+            if (event && event->GetEventType() == RE::INPUT_EVENT_TYPE::kMouseMove)
+            {
+                auto* move = static_cast<RE::MouseMoveEvent*>(event);
+                if (Menu::HandleQuickDrawHotkeyHandMouseMove(move->mouseInputX))
+                {
+                    move->mouseInputX = 0;
+                    move->mouseInputY = 0;
+                }
+                continue;
+            }
+            auto* button = event ? event->AsButtonEvent() : nullptr;
+            if (!button || button->GetDevice() != RE::INPUT_DEVICE::kMouse)
+                continue;
+            const bool firstPress = button->IsDown() &&
+                button->GetRuntimeData().heldDownSecs <= 0.0f;
+            if (Menu::HandleQuickDrawHotkeyHandMouseButton(
+                    static_cast<int>(button->GetIDCode()), firstPress))
+                consumeButton(button);
+        }
     }
 
     if (!g_showWindow && !settingsOpen)

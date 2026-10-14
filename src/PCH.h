@@ -185,6 +185,13 @@ namespace Menu {
     bool BeginQuickDrawGameplayStroke(int button, bool pressed);
     bool HandleTopBottomGameplayMouseButton(int button, bool pressed);
     bool IsQuickDrawGameplayActive();
+    bool CaptureQuickDrawHotkey(RE::ButtonEvent* buttonEvent);
+    bool HandleQuickDrawHotkey(int virtualKey, bool activationHeld);
+    bool HandleQuickDrawHotkeyRelease(int virtualKey);
+    bool HandleQuickDrawHotkeyHandKey(int virtualKey, bool firstPress);
+    bool HandleQuickDrawHotkeyHandMouseButton(int button, bool firstPress);
+    bool HandleQuickDrawHotkeyHandMouseMove(float deltaX);
+    bool IsQuickDrawHotkeyHandSelectionActive();
     void SaveQuickDraw(SKSE::SerializationInterface* serialization);
     bool LoadQuickDraw(SKSE::SerializationInterface* serialization,
         std::uint32_t version, std::uint32_t length);

@@ -586,6 +586,8 @@ namespace Menu
         QuickDrawKey key{};
         std::vector<ImVec2> points;
         bool autoUse = false;
+        int hotkey = 0;
+        bool hotkeyRequiresActivation = false;
     };
 
     static std::vector<QuickDrawGesture> g_quickDrawGestures;
@@ -600,11 +602,23 @@ namespace Menu
     static ImVec2 g_quickDrawEditorResetCenter{};
     static ImVec2 g_quickDrawEditorOkCenter{};
     static ImVec2 g_quickDrawEditorAutoUseCenter{};
+    static ImVec2 g_quickDrawEditorHotkeyCenter{};
+    static ImVec2 g_quickDrawEditorHotkeyGateCenter{};
     static float g_quickDrawEditorResetRadius = 25.0f;
     static float g_quickDrawEditorOkRadius = 25.0f;
     static constexpr float kQuickDrawEditorAutoUseRadius = 45.0f;
     static float g_quickDrawEditorAutoUseClickFlash = 0.0f;
     static float g_quickDrawEditorAutoUseShadowT = 0.0f;
+    static constexpr float kQuickDrawEditorHotkeyRadius = 34.0f;
+    static constexpr float kQuickDrawEditorHotkeyGateRadius = 12.0f;
+    static bool g_quickDrawEditorWaitingHotkey = false;
+    static float g_quickDrawEditorHotkeyClickFlash = 0.0f;
+    static RadialItem g_quickDrawEditorHotkeyConflictItem{};
+    static float g_quickDrawEditorHotkeyConflictPreviewT = -1.0f;
+    static std::string g_quickDrawEditorHotkeyConflictLabel;
+    static float g_quickDrawEditorHotkeyConflictLabelUntil = 0.0f;
+    static float g_quickDrawEditorHotkeyTraceT = -1.0f;
+    static float g_quickDrawEditorHotkeyPulseT = -1.0f;
     static float g_quickDrawEditorResetHoverT = 0.0f;
     static float g_quickDrawEditorOkHoverT = 0.0f;
     static bool g_quickDrawSettingsExpanded = false;
@@ -730,13 +744,13 @@ namespace Menu
         g_settingsPreviewFadeFrame = -1;
     }
 
-    static void BeginGameplayPreviewFadeOut()
+    static void BeginGameplayPreviewFadeOut(float initialAlpha = 1.0f)
     {
         if (!ItemPreview::IsVisible() || g_gameplayPreviewFadeOut)
             return;
 
         g_gameplayPreviewFadeOut = true;
-        g_gameplayPreviewFadeAlpha = 1.0f;
+        g_gameplayPreviewFadeAlpha = std::clamp(initialAlpha, 0.0f, 1.0f);
         g_gameplayPreviewFadeFrame = -1;
     }
 
@@ -924,6 +938,14 @@ namespace Menu
     static RadialItem* g_quickDrawSelectionOverride = nullptr;
     static RadialSide g_quickDrawSelectionSide = RadialSide::None;
     static bool g_quickDrawSelectionAutoUse = false;
+    static bool g_quickDrawHotkeyHandSelectionActive = false;
+    static bool g_quickDrawHotkeyDirectPreviewActive = false;
+    static float g_quickDrawHotkeyDirectPreviewAlpha = 0.0f;
+    static RadialItem g_quickDrawHotkeyPendingItem{};
+    static int g_quickDrawHotkeyPendingKey = 0;
+    static bool g_quickDrawHotkeyPreviewExitActive = false;
+    static float g_quickDrawHotkeyPreviewExitT = 0.0f;
+    static bool g_quickDrawHotkeyPreviewExitLeft = false;
     static constexpr float QUICK_DRAW_EDITOR_RADIUS = RADIAL_DEADZONE * 5.0f;
     static constexpr float QUICK_DRAW_MATCH_THRESHOLD = 0.50f;
 
@@ -15372,7 +15394,10 @@ namespace Menu
             return;
         }
 
-        g_quickDrawGestures.push_back({ key, {}, enabled });
+        QuickDrawGesture gesture{};
+        gesture.key = key;
+        gesture.autoUse = enabled;
+        g_quickDrawGestures.push_back(std::move(gesture));
     }
 
     static void StoreQuickDrawStroke(const RadialItem& item,
@@ -15395,7 +15420,7 @@ namespace Menu
                 // Limpar o traço não desliga uma preferência Auto-Use já
                 // escolhida para esse item; ela volta a valer ao registrar
                 // o próximo gesto.
-                if (it->autoUse)
+                if (it->autoUse || it->hotkey != 0)
                     it->points.clear();
                 else
                     g_quickDrawGestures.erase(it);
@@ -15405,13 +15430,282 @@ namespace Menu
 
         if (it == g_quickDrawGestures.end())
         {
-            g_quickDrawGestures.push_back({ key, points,
-                IsQuickDrawAutoUseEligible(item.form) });
+            QuickDrawGesture gesture{};
+            gesture.key = key;
+            gesture.points = points;
+            gesture.autoUse = IsQuickDrawAutoUseEligible(item.form);
+            g_quickDrawGestures.push_back(std::move(gesture));
         }
         else
         {
             it->points = points;
         }
+    }
+
+    static bool IsQuickDrawHotkeyReserved(int key)
+    {
+        return key == 0 || key == Config::g_toggleKey ||
+            key == Config::g_secondaryKey || key == Config::g_altConfigKey;
+    }
+
+    static bool IsQuickDrawHotkeyDuplicate(const RadialItem& item, int key)
+    {
+        for (const auto& gesture : g_quickDrawGestures)
+        {
+            if (gesture.hotkey == key && !SameQuickDrawKey(gesture.key, MakeQuickDrawKey(item)))
+                return true;
+        }
+        return false;
+    }
+
+    static const QuickDrawGesture* FindQuickDrawHotkeyOwner(int key)
+    {
+        for (const auto& gesture : g_quickDrawGestures)
+            if (gesture.hotkey == key)
+                return &gesture;
+        return nullptr;
+    }
+
+    static void SetQuickDrawHotkey(const RadialItem& item, int key)
+    {
+        const QuickDrawKey itemKey = MakeQuickDrawKey(item);
+        if (!itemKey.formID)
+            return;
+        if (auto* gesture = FindQuickDrawGesture(item))
+        {
+            gesture->hotkey = key;
+            return;
+        }
+        QuickDrawGesture gesture{};
+        gesture.key = itemKey;
+        gesture.hotkey = key;
+        gesture.autoUse = IsQuickDrawAutoUseEligible(item.form);
+        g_quickDrawGestures.push_back(std::move(gesture));
+    }
+
+    static bool QuickDrawHotkeyNeedsHand(const RE::TESForm* form)
+    {
+        if (!form)
+            return false;
+        if (const auto* weapon = form->As<RE::TESObjectWEAP>())
+            return !IsTwoHandedWeapon(const_cast<RE::TESObjectWEAP*>(weapon));
+        if (const auto* spell = form->As<RE::SpellItem>())
+        {
+            const auto type = spell->GetSpellType();
+            return type != RE::MagicSystem::SpellType::kPower &&
+                type != RE::MagicSystem::SpellType::kLesserPower &&
+                type != RE::MagicSystem::SpellType::kVoicePower;
+        }
+        if (form->As<RE::ScrollItem>() || form->As<RE::TESObjectLIGH>())
+            return true;
+        auto* armor = const_cast<RE::TESObjectARMO*>(form->As<RE::TESObjectARMO>());
+        return armor && IsShield(armor);
+    }
+
+    static RadialItem* FindQuickDrawHotkeyItem(const QuickDrawKey& key)
+    {
+        const auto find = [&](std::vector<RadialItem>& items) -> RadialItem* {
+            for (auto& item : items)
+                if (SameQuickDrawKey(MakeQuickDrawKey(item), key))
+                    return &item;
+            return nullptr;
+        };
+        if (auto* item = find(g_sideItems)) return item;
+        if (auto* item = find(g_topItems)) return item;
+        return find(g_bottomItems);
+    }
+
+    static void ExecuteQuickDrawHotkeyItem(const RadialItem& item, bool left)
+    {
+        g_quickDrawHotkeyPendingItem = item;
+        g_quickDrawSelectionOverride = &g_quickDrawHotkeyPendingItem;
+        g_quickDrawSelectionSide = RadialSide::None;
+        g_quickDrawGameplayEquipLeft = left;
+        g_quickDrawSelectionAutoUse = IsQuickDrawAutoUseEnabled(item);
+        UseSelectedRadialItem();
+        g_quickDrawSelectionOverride = nullptr;
+        g_quickDrawSelectionSide = RadialSide::None;
+        g_quickDrawSelectionAutoUse = false;
+    }
+
+    bool CaptureQuickDrawHotkey(RE::ButtonEvent* buttonEvent)
+    {
+        if (!g_quickDrawEditorWaitingHotkey || !buttonEvent)
+            return false;
+        if (!buttonEvent->IsDown() || buttonEvent->GetRuntimeData().heldDownSecs > 0.0f)
+            return true;
+        if (buttonEvent->GetDevice() != RE::INPUT_DEVICE::kKeyboard)
+            return true;
+        const int key = static_cast<int>(MapVirtualKeyW(static_cast<UINT>(buttonEvent->GetIDCode()),
+            MAPVK_VSC_TO_VK_EX));
+        if (key == VK_ESCAPE)
+        {
+            g_quickDrawEditorWaitingHotkey = false;
+            return true;
+        }
+        if (!IsSupportedWheelKey(key))
+            return true;
+        if (IsQuickDrawHotkeyReserved(key))
+        {
+            if (key == Config::g_toggleKey)
+                g_quickDrawEditorHotkeyConflictLabel = Language::Get("first_key");
+            else if (key == Config::g_secondaryKey)
+                g_quickDrawEditorHotkeyConflictLabel = Language::Get("second_key");
+            else
+                g_quickDrawEditorHotkeyConflictLabel = Language::Get("alt_config_key");
+            g_quickDrawEditorHotkeyConflictLabelUntil =
+                static_cast<float>(ImGui::GetTime()) + 2.0f;
+            return true;
+        }
+        if (IsQuickDrawHotkeyDuplicate(g_quickDrawEditorItem, key))
+        {
+            if (const auto* owner = FindQuickDrawHotkeyOwner(key))
+            {
+                if (auto* item = FindQuickDrawHotkeyItem(owner->key))
+                {
+                    g_quickDrawEditorHotkeyConflictItem = *item;
+                    g_quickDrawEditorHotkeyConflictPreviewT = 0.0f;
+                }
+            }
+            return true;
+        }
+        SetQuickDrawHotkey(g_quickDrawEditorItem, key);
+        g_quickDrawEditorWaitingHotkey = false;
+        g_quickDrawEditorHotkeyClickFlash = 1.0f;
+        g_quickDrawEditorHotkeyTraceT = 0.0f;
+        g_quickDrawEditorHotkeyPulseT = -1.0f;
+        return true;
+    }
+
+    bool HandleQuickDrawHotkey(int virtualKey, bool activationHeld)
+    {
+        if (g_quickDrawEditorOpen || g_quickDrawHotkeyHandSelectionActive ||
+            g_showWindow || SettingsMenu::WheelSettingsMenu::IsOpen())
+            return false;
+        for (const auto& gesture : g_quickDrawGestures)
+        {
+            if (gesture.hotkey != virtualKey ||
+                (gesture.hotkeyRequiresActivation && !activationHeld))
+                continue;
+            RadialItem* item = FindQuickDrawHotkeyItem(gesture.key);
+            if (!item || !item->valid || !item->form)
+                return true;
+            g_quickDrawHotkeyPendingItem = *item;
+            g_quickDrawHotkeyPendingKey = virtualKey;
+            if (!QuickDrawHotkeyNeedsHand(item->form))
+            {
+                // A ação só é entregue ao jogo na soltura: mover/clicar antes
+                // dela pode cancelar com segurança, sem desfazer equipamento.
+                g_quickDrawHotkeyDirectPreviewActive = true;
+                g_quickDrawHotkeyDirectPreviewAlpha = 0.0f;
+                const ImVec2 center = Resolution::GetVirtualCenter();
+                ItemPreview::SetHudPosition(center);
+                ItemPreview::SetSizeScale(1.0f);
+                ItemPreview::SetOpacity(0.0f);
+                ItemPreview::SilentPreviewMenu::Open();
+                ItemPreview::Show(item->form, item->uniqueID, item->hasUniqueID);
+                return true;
+            }
+            g_quickDrawHotkeyHandSelectionActive = true;
+            const ImVec2 center = Resolution::GetVirtualCenter();
+            ItemPreview::SetHudPosition(center);
+            ItemPreview::SetSizeScale(1.0f);
+            CancelGameplayPreviewFadeOut();
+            ItemPreview::SilentPreviewMenu::Open();
+            ItemPreview::Show(item->form, item->uniqueID, item->hasUniqueID);
+            return true;
+        }
+        return false;
+    }
+
+    bool HandleQuickDrawHotkeyRelease(int virtualKey)
+    {
+        if (virtualKey != g_quickDrawHotkeyPendingKey)
+            return false;
+
+        if (g_quickDrawHotkeyDirectPreviewActive)
+        {
+            g_quickDrawHotkeyDirectPreviewActive = false;
+            g_quickDrawHotkeyPendingKey = 0;
+            ExecuteQuickDrawHotkeyItem(g_quickDrawHotkeyPendingItem, false);
+            g_quickDrawHotkeyPendingItem = {};
+            BeginGameplayPreviewFadeOut(g_quickDrawHotkeyDirectPreviewAlpha);
+            return true;
+        }
+        if (!g_quickDrawHotkeyHandSelectionActive)
+            return false;
+
+        // Soltar a tecla sem selecionar uma mão cancela a operação. O preview
+        // fica onde nasceu, no centro, e usa o mesmo fade suave do gameplay.
+        g_quickDrawHotkeyHandSelectionActive = false;
+        g_quickDrawHotkeyPendingKey = 0;
+        g_quickDrawHotkeyPendingItem = {};
+        BeginGameplayPreviewFadeOut();
+        return true;
+    }
+
+    static void ConfirmQuickDrawHotkeyHand(bool left)
+    {
+        if (!g_quickDrawHotkeyHandSelectionActive)
+            return;
+        // DrawMenu desloca o preview em vários frames e só então inicia o fade.
+        g_quickDrawHotkeyPreviewExitActive = true;
+        g_quickDrawHotkeyPreviewExitT = 0.0f;
+        g_quickDrawHotkeyPreviewExitLeft = left;
+        ExecuteQuickDrawHotkeyItem(g_quickDrawHotkeyPendingItem, left);
+        g_quickDrawHotkeyHandSelectionActive = false;
+        g_quickDrawHotkeyPendingKey = 0;
+    }
+
+    bool HandleQuickDrawHotkeyHandKey(int virtualKey, bool firstPress)
+    {
+        if (!g_quickDrawHotkeyHandSelectionActive || !firstPress)
+            return false;
+        if (virtualKey == 'Q') ConfirmQuickDrawHotkeyHand(true);
+        else if (virtualKey == 'E') ConfirmQuickDrawHotkeyHand(false);
+        else return false;
+        return true;
+    }
+
+    bool HandleQuickDrawHotkeyHandMouseButton(int button, bool firstPress)
+    {
+        if (!firstPress || (button != 0 && button != 1))
+            return false;
+        if (g_quickDrawHotkeyDirectPreviewActive)
+        {
+            g_quickDrawHotkeyDirectPreviewActive = false;
+            g_quickDrawHotkeyPendingKey = 0;
+            g_quickDrawHotkeyPendingItem = {};
+            BeginGameplayPreviewFadeOut(g_quickDrawHotkeyDirectPreviewAlpha);
+            return true;
+        }
+        if (!g_quickDrawHotkeyHandSelectionActive)
+            return false;
+        ConfirmQuickDrawHotkeyHand(button == 0);
+        return true;
+    }
+
+    bool HandleQuickDrawHotkeyHandMouseMove(float deltaX)
+    {
+        if (std::abs(deltaX) < 0.01f)
+            return false;
+        if (g_quickDrawHotkeyDirectPreviewActive)
+        {
+            g_quickDrawHotkeyDirectPreviewActive = false;
+            g_quickDrawHotkeyPendingKey = 0;
+            g_quickDrawHotkeyPendingItem = {};
+            BeginGameplayPreviewFadeOut(g_quickDrawHotkeyDirectPreviewAlpha);
+            return true;
+        }
+        if (!g_quickDrawHotkeyHandSelectionActive)
+            return false;
+        ConfirmQuickDrawHotkeyHand(deltaX < 0.0f);
+        return true;
+    }
+
+    bool IsQuickDrawHotkeyHandSelectionActive()
+    {
+        return g_quickDrawHotkeyHandSelectionActive || g_quickDrawHotkeyDirectPreviewActive;
     }
 
     static void ConfirmQuickDrawEditor()
@@ -15692,6 +15986,14 @@ namespace Menu
         g_quickDrawEditorOkHoverT = 0.0f;
         g_quickDrawEditorAutoUseClickFlash = 0.0f;
         g_quickDrawEditorAutoUseShadowT = 0.0f;
+        g_quickDrawEditorWaitingHotkey = false;
+        g_quickDrawEditorHotkeyClickFlash = 0.0f;
+        g_quickDrawEditorHotkeyConflictItem = {};
+        g_quickDrawEditorHotkeyConflictPreviewT = -1.0f;
+        g_quickDrawEditorHotkeyConflictLabel.clear();
+        g_quickDrawEditorHotkeyConflictLabelUntil = 0.0f;
+        g_quickDrawEditorHotkeyTraceT = -1.0f;
+        g_quickDrawEditorHotkeyPulseT = -1.0f;
         // O fundo do WheelSettings desaparece devagar ao entrar no editor,
         // preservando apenas o Quick Draw sobre o jogo.
         TransitionSettingsBackdrop(0.0f, 0.8f);
@@ -16060,6 +16362,74 @@ namespace Menu
 
         DrawQuickDrawSettingsPanel(draw, center, alpha);
 
+        // Confirmação visual do bind: o traço nasce do botão de hotkey (lado
+        // esquerdo), percorre o limite do gesto e termina em um único pulso.
+        // É desenhado antes dos controles para permanecer atrás deles.
+        const float hotkeyDt = std::clamp(ImGui::GetIO().DeltaTime, 0.0f, 0.05f);
+        constexpr float hotkeyTraceRadius = QUICK_DRAW_EDITOR_RADIUS + 21.0f;
+        constexpr float hotkeyButtonOffset = 76.0f;
+        constexpr float hotkeyButtonRadius = kQuickDrawEditorHotkeyRadius;
+        const ImVec2 connectorStart(center.x - QUICK_DRAW_EDITOR_RADIUS -
+                hotkeyButtonOffset + hotkeyButtonRadius, center.y);
+        const ImVec2 connectorEnd(center.x - hotkeyTraceRadius, center.y);
+        const auto* savedHotkey = FindQuickDrawGesture(g_quickDrawEditorItem);
+        const bool hasSavedHotkey = savedHotkey && savedHotkey->hotkey != 0;
+        if (g_quickDrawEditorHotkeyTraceT >= 0.0f)
+        {
+            // Primeiro nasce o elo reto; só então o anel começa a contornar.
+            g_quickDrawEditorHotkeyTraceT += hotkeyDt;
+            constexpr float connectorDuration = 0.16f;
+            constexpr float circleDuration = 0.68f;
+            const float connectorT = std::clamp(
+                g_quickDrawEditorHotkeyTraceT / connectorDuration, 0.0f, 1.0f);
+            const ImVec2 connectorCurrent(connectorStart.x +
+                (connectorEnd.x - connectorStart.x) * connectorT, center.y);
+            draw->AddLine(connectorStart, connectorCurrent,
+                FadeColor(IM_COL32(245, 245, 245, 128), alpha), 1.35f);
+            const float progress = std::clamp(
+                (g_quickDrawEditorHotkeyTraceT - connectorDuration) / circleDuration,
+                0.0f, 1.0f);
+            if (progress > 0.0f)
+            {
+            constexpr int segments = 96;
+            const int activeSegments = std::max(2, static_cast<int>(segments * progress));
+            std::vector<ImVec2> arc;
+            arc.reserve(activeSegments + 1);
+            for (int i = 0; i <= activeSegments; ++i)
+            {
+                const float angle = 3.14159265359f +
+                    6.28318530718f * (static_cast<float>(i) / segments);
+                arc.emplace_back(center.x + std::cos(angle) * hotkeyTraceRadius,
+                    center.y + std::sin(angle) * hotkeyTraceRadius);
+            }
+            draw->AddPolyline(arc.data(), static_cast<int>(arc.size()),
+                FadeColor(IM_COL32(245, 245, 245, 128), alpha), 0, 1.35f);
+            }
+            if (progress >= 1.0f)
+            {
+                g_quickDrawEditorHotkeyTraceT = -1.0f;
+                g_quickDrawEditorHotkeyPulseT = 0.0f;
+            }
+        }
+        else if (hasSavedHotkey)
+        {
+            // Um bind já salvo chega ao editor com sua ligação visível.
+            draw->AddLine(connectorStart, connectorEnd,
+                FadeColor(IM_COL32(245, 245, 245, 128), alpha), 1.35f);
+            draw->AddCircle(center, hotkeyTraceRadius,
+                FadeColor(IM_COL32(245, 245, 245, 128), alpha), 96, 1.35f);
+        }
+        if (g_quickDrawEditorHotkeyPulseT >= 0.0f)
+        {
+            g_quickDrawEditorHotkeyPulseT += hotkeyDt / 0.36f;
+            const float pulse = std::min(g_quickDrawEditorHotkeyPulseT, 1.0f);
+            draw->AddCircle(center, hotkeyTraceRadius + 4.0f + 22.0f * pulse,
+                FadeColor(IM_COL32(255, 255, 255,
+                    static_cast<int>(150.0f * (1.0f - pulse))), alpha), 96, 1.35f);
+            if (pulse >= 1.0f)
+                g_quickDrawEditorHotkeyPulseT = -1.0f;
+        }
+
         const float r = QUICK_DRAW_EDITOR_RADIUS;
         // Os dois comandos ficam lado a lado com o seletor de configurações:
         // compactos em repouso e circulares/maiores somente no hover.
@@ -16074,6 +16444,10 @@ namespace Menu
         g_quickDrawEditorAutoUseCenter = ImVec2(
             g_quickDrawEditorOkCenter.x + 180.0f,  //aumentar manda p direita
             g_quickDrawEditorOkCenter.y - 100.0f); //aumentar sobe
+        // Atalho do item: à esquerda do círculo, centralizado verticalmente.
+        g_quickDrawEditorHotkeyCenter = ImVec2(center.x - r - 76.0f, center.y);
+        g_quickDrawEditorHotkeyGateCenter = ImVec2(
+            g_quickDrawEditorHotkeyCenter.x - 53.0f, center.y);
 
         const auto circleHovered = [&](const ImVec2& buttonCenter, float radius) {
             return IsSettingsCircleHovered(g_settingsMousePos, buttonCenter, radius);
@@ -16172,6 +16546,68 @@ namespace Menu
             }
         }
 
+        // Atalho individual do item e o pequeno "lock" que exige a tecla
+        // principal/secundária junto dele. Ambos são independentes do gesto.
+        const QuickDrawGesture* hotkeyGesture = FindQuickDrawGesture(g_quickDrawEditorItem);
+        const int hotkey = hotkeyGesture ? hotkeyGesture->hotkey : 0;
+        const bool requiresActivation = hotkeyGesture && hotkeyGesture->hotkeyRequiresActivation;
+        const bool hotkeyHovered = IsSettingsCircleHovered(g_settingsMousePos,
+            g_quickDrawEditorHotkeyCenter, kQuickDrawEditorHotkeyRadius);
+        const bool gateHovered = IsSettingsCircleHovered(g_settingsMousePos,
+            g_quickDrawEditorHotkeyGateCenter, kQuickDrawEditorHotkeyGateRadius);
+        g_quickDrawEditorHotkeyClickFlash = std::max(0.0f,
+            g_quickDrawEditorHotkeyClickFlash - dt * 5.5f);
+        draw->AddCircleFilled(g_quickDrawEditorHotkeyCenter,
+            kQuickDrawEditorHotkeyRadius + (hotkeyHovered ? 2.0f : 0.0f),
+            FadeColor(g_quickDrawEditorWaitingHotkey
+                    ? IM_COL32(85, 75, 55, 225)
+                    : IM_COL32(35, 36, 42, 220), alpha), 40);
+        draw->AddCircle(g_quickDrawEditorHotkeyCenter,
+            kQuickDrawEditorHotkeyRadius + (hotkeyHovered ? 2.0f : 0.0f),
+            FadeColor(IM_COL32(245, 242, 232,
+                g_quickDrawEditorWaitingHotkey ? 220 : hotkeyHovered ? 170 : 75), alpha),
+            40, 1.15f);
+        const std::string hotkeyText = !g_quickDrawEditorWaitingHotkey && hotkey != 0
+            ? Config::KeyToString(hotkey) : "";
+        if (!hotkeyText.empty())
+        {
+            const float hotkeyFontSize = ImGui::GetFontSize() * 3.0f;
+            const ImVec2 textSize = ImGui::GetFont()->CalcTextSizeA(hotkeyFontSize,
+                FLT_MAX, 0.0f, hotkeyText.c_str());
+            draw->AddText(ImGui::GetFont(), hotkeyFontSize,
+                ImVec2(g_quickDrawEditorHotkeyCenter.x - textSize.x * 0.5f,
+                    g_quickDrawEditorHotkeyCenter.y - textSize.y * 0.5f),
+                FadeColor(IM_COL32(235, 230, 215, 255), alpha), hotkeyText.c_str());
+        }
+        else if (hotkeyHovered || g_quickDrawEditorWaitingHotkey)
+        {
+            const float now = static_cast<float>(ImGui::GetTime());
+            const std::string& hint = g_quickDrawEditorWaitingHotkey &&
+                    now < g_quickDrawEditorHotkeyConflictLabelUntil
+                ? g_quickDrawEditorHotkeyConflictLabel
+                : Language::Get("waiting_key");
+            const ImVec2 hintSize = ImGui::CalcTextSize(hint.c_str());
+            draw->AddText(ImVec2(g_quickDrawEditorHotkeyCenter.x - hintSize.x * 0.5f,
+                    g_quickDrawEditorHotkeyCenter.y + kQuickDrawEditorHotkeyRadius + 12.0f),
+                FadeColor(IM_COL32(235, 230, 215, 255), alpha), hint.c_str());
+        }
+        draw->AddCircleFilled(g_quickDrawEditorHotkeyGateCenter,
+            kQuickDrawEditorHotkeyGateRadius + (gateHovered ? 1.5f : 0.0f),
+            FadeColor(requiresActivation ? IM_COL32(235, 235, 235, 155) :
+                IM_COL32(35, 36, 42, 220), alpha), 24);
+        draw->AddCircle(g_quickDrawEditorHotkeyGateCenter,
+            kQuickDrawEditorHotkeyGateRadius + (gateHovered ? 1.5f : 0.0f),
+            FadeColor(IM_COL32(245, 242, 232, gateHovered ? 210 : 100), alpha), 24, 1.1f);
+        if (gateHovered)
+        {
+            constexpr const char* gateHint = "REQUIRE WHEEL KEY";
+            const ImVec2 hintSize = ImGui::CalcTextSize(gateHint);
+            draw->AddText(ImVec2(g_quickDrawEditorHotkeyGateCenter.x -
+                    kQuickDrawEditorHotkeyGateRadius - hintSize.x - 12.0f,
+                    g_quickDrawEditorHotkeyGateCenter.y - hintSize.y * 0.5f),
+                FadeColor(IM_COL32(235, 230, 215, 255), alpha), gateHint);
+        }
+
         // Mantemos os retângulos atualizados apenas como envelope de
         // compatibilidade; o clique efetivo abaixo é circular.
         g_quickDrawEditorResetMin = g_quickDrawEditorResetCenter -
@@ -16191,9 +16627,33 @@ namespace Menu
         
         ItemPreview::SilentPreviewMenu::Open();
         
-        ItemPreview::Show(g_quickDrawEditorItem.form,
-            g_quickDrawEditorItem.uniqueID,
-            g_quickDrawEditorItem.hasUniqueID);
+        RadialItem previewItem = g_quickDrawEditorItem;
+        float previewAlpha = 1.0f;
+        if (g_quickDrawEditorHotkeyConflictPreviewT >= 0.0f)
+        {
+            g_quickDrawEditorHotkeyConflictPreviewT +=
+                std::clamp(ImGui::GetIO().DeltaTime, 0.0f, 0.05f);
+            constexpr float enterDuration = 0.18f;
+            constexpr float holdDuration = 2.0f;
+            constexpr float exitDuration = 0.22f;
+            const float elapsed = g_quickDrawEditorHotkeyConflictPreviewT;
+            if (elapsed < enterDuration)
+                previewAlpha = elapsed / enterDuration;
+            else if (elapsed > enterDuration + holdDuration)
+                previewAlpha = std::clamp(1.0f -
+                    (elapsed - enterDuration - holdDuration) / exitDuration, 0.0f, 1.0f);
+            if (elapsed >= enterDuration + holdDuration + exitDuration)
+            {
+                g_quickDrawEditorHotkeyConflictPreviewT = -1.0f;
+                g_quickDrawEditorHotkeyConflictItem = {};
+                previewAlpha = 1.0f;
+            }
+            else if (g_quickDrawEditorHotkeyConflictItem.form)
+                previewItem = g_quickDrawEditorHotkeyConflictItem;
+        }
+        ItemPreview::Show(previewItem.form, previewItem.uniqueID,
+            previewItem.hasUniqueID);
+        ItemPreview::SetOpacity(previewAlpha);
         
         DrawSettingsCursor();
     }
@@ -16202,6 +16662,18 @@ namespace Menu
     {
         if (!g_quickDrawEditorOpen)
             return false;
+
+        // Enquanto aguarda uma hotkey, qualquer clique fora do próprio botão
+        // cancela a captura — inclusive o botão direito.
+        if (g_quickDrawEditorWaitingHotkey && pressed && (button == 0 || button == 1) &&
+            !IsSettingsCircleHovered(g_settingsMousePos,
+                g_quickDrawEditorHotkeyCenter, kQuickDrawEditorHotkeyRadius))
+        {
+            g_quickDrawEditorWaitingHotkey = false;
+            g_quickDrawEditorHotkeyConflictLabel.clear();
+            g_quickDrawEditorHotkeyConflictLabelUntil = 0.0f;
+            return true;
+        }
 
         // O editor é modal: evita que ambos os cliques executem comandos
         // do Settings enquanto uma linha está sendo criada.
@@ -16287,6 +16759,28 @@ namespace Menu
             QuickDrawMagicEffects::ClearEdgeFlashes();
             g_quickDrawEffectPreviewStyle = Config::g_drawEdgeEffectStyle;
             g_quickDrawEffectPreviewUntil = static_cast<float>(ImGui::GetTime()) + 2.0f;
+            return true;
+        }
+
+        if (IsSettingsCircleHovered(g_settingsMousePos,
+                g_quickDrawEditorHotkeyCenter, kQuickDrawEditorHotkeyRadius))
+        {
+            g_quickDrawEditorWaitingHotkey = !g_quickDrawEditorWaitingHotkey;
+            return true;
+        }
+        if (IsSettingsCircleHovered(g_settingsMousePos,
+                g_quickDrawEditorHotkeyGateCenter, kQuickDrawEditorHotkeyGateRadius))
+        {
+            QuickDrawGesture* gesture = FindQuickDrawGesture(g_quickDrawEditorItem);
+            if (!gesture)
+            {
+                QuickDrawGesture created{};
+                created.key = MakeQuickDrawKey(g_quickDrawEditorItem);
+                created.autoUse = IsQuickDrawAutoUseEligible(g_quickDrawEditorItem.form);
+                g_quickDrawGestures.push_back(std::move(created));
+                gesture = &g_quickDrawGestures.back();
+            }
+            gesture->hotkeyRequiresActivation = !gesture->hotkeyRequiresActivation;
             return true;
         }
 
@@ -16420,12 +16914,15 @@ namespace Menu
             const auto& gesture = g_quickDrawGestures[i];
             const std::uint8_t hasUnique = gesture.key.hasUniqueID ? 1 : 0;
             const std::uint8_t autoUse = gesture.autoUse ? 1 : 0;
+            const std::uint8_t requiresActivation = gesture.hotkeyRequiresActivation ? 1 : 0;
             const std::uint16_t pointCount = static_cast<std::uint16_t>(
                 std::min<std::size_t>(gesture.points.size(), 2048));
             if (!serialization->WriteRecordData(&gesture.key.formID, sizeof(RE::FormID)) ||
                 !serialization->WriteRecordData(&gesture.key.uniqueID, sizeof(std::uint16_t)) ||
                 !serialization->WriteRecordData(&hasUnique, sizeof(hasUnique)) ||
                 !serialization->WriteRecordData(&autoUse, sizeof(autoUse)) ||
+                !serialization->WriteRecordData(&gesture.hotkey, sizeof(gesture.hotkey)) ||
+                !serialization->WriteRecordData(&requiresActivation, sizeof(requiresActivation)) ||
                 !serialization->WriteRecordData(&pointCount, sizeof(pointCount)))
                 return;
             for (std::uint16_t point = 0; point < pointCount; ++point)
@@ -16440,7 +16937,7 @@ namespace Menu
         std::uint32_t version, std::uint32_t)
     {
         g_quickDrawGestures.clear();
-        if (!serialization || (version != 1 && version != 2))
+        if (!serialization || (version != 1 && version != 2 && version != 3))
             return false;
 
         std::uint32_t count = 0;
@@ -16455,11 +16952,15 @@ namespace Menu
             std::uint16_t uniqueID = 0;
             std::uint8_t hasUnique = 0;
             std::uint8_t autoUse = 0;
+            std::int32_t hotkey = 0;
+            std::uint8_t requiresActivation = 0;
             std::uint16_t pointCount = 0;
             if (serialization->ReadRecordData(&oldFormID, sizeof(oldFormID)) != sizeof(oldFormID) ||
                 serialization->ReadRecordData(&uniqueID, sizeof(uniqueID)) != sizeof(uniqueID) ||
                 serialization->ReadRecordData(&hasUnique, sizeof(hasUnique)) != sizeof(hasUnique) ||
                 (version >= 2 && serialization->ReadRecordData(&autoUse, sizeof(autoUse)) != sizeof(autoUse)) ||
+                (version >= 3 && serialization->ReadRecordData(&hotkey, sizeof(hotkey)) != sizeof(hotkey)) ||
+                (version >= 3 && serialization->ReadRecordData(&requiresActivation, sizeof(requiresActivation)) != sizeof(requiresActivation)) ||
                 serialization->ReadRecordData(&pointCount, sizeof(pointCount)) != sizeof(pointCount) ||
                 pointCount > 2048)
                 return false;
@@ -16478,13 +16979,15 @@ namespace Menu
             QuickDrawGesture gesture{};
             gesture.key = { formID, uniqueID, hasUnique != 0 };
             gesture.autoUse = autoUse != 0;
+            gesture.hotkey = hotkey;
+            gesture.hotkeyRequiresActivation = requiresActivation != 0;
             gesture.points.resize(pointCount);
             for (auto& point : gesture.points)
             {
                 if (serialization->ReadRecordData(&point, sizeof(point)) != sizeof(point))
                     return false;
             }
-            if (!gesture.points.empty() || gesture.autoUse)
+            if (!gesture.points.empty() || gesture.autoUse || gesture.hotkey != 0)
                 g_quickDrawGestures.push_back(std::move(gesture));
         }
 
@@ -16504,6 +17007,14 @@ namespace Menu
         g_quickDrawSelectionOverride = nullptr;
         g_quickDrawSelectionSide = RadialSide::None;
         g_quickDrawSelectionAutoUse = false;
+        g_quickDrawHotkeyHandSelectionActive = false;
+        g_quickDrawHotkeyDirectPreviewActive = false;
+        g_quickDrawHotkeyDirectPreviewAlpha = 0.0f;
+        g_quickDrawHotkeyPreviewExitActive = false;
+        g_quickDrawHotkeyPreviewExitT = 0.0f;
+        g_quickDrawHotkeyPendingItem = {};
+        g_quickDrawHotkeyPendingKey = 0;
+        g_quickDrawEditorWaitingHotkey = false;
     }
 
     float GetRadialEdgeMargin()
@@ -28565,6 +29076,61 @@ namespace Menu
         // O preview 3D tem uma saída própria, independente do alpha do HUD.
         // Isso também mantém o menu silencioso vivo apenas até o último frame
         // da transparência do item.
+        // A escolha de mão por hotkey existe fora do radial. Sem esta guarda,
+        // o reset normal de alpha do radial escondia o preview no frame logo
+        // após ele ser mostrado, deixando apenas o flash na confirmação.
+        if (g_quickDrawHotkeyHandSelectionActive &&
+            g_quickDrawHotkeyPendingItem.form)
+        {
+            const ImVec2 center = Resolution::GetVirtualCenter();
+            ItemPreview::SetHudPosition(center);
+            ItemPreview::SetSizeScale(1.0f);
+            CancelGameplayPreviewFadeOut();
+            ItemPreview::SilentPreviewMenu::Open();
+            ItemPreview::Show(g_quickDrawHotkeyPendingItem.form,
+                g_quickDrawHotkeyPendingItem.uniqueID,
+                g_quickDrawHotkeyPendingItem.hasUniqueID);
+            return;
+        }
+        if (g_quickDrawHotkeyDirectPreviewActive &&
+            g_quickDrawHotkeyPendingItem.form)
+        {
+            g_quickDrawHotkeyDirectPreviewAlpha = std::min(1.0f,
+                g_quickDrawHotkeyDirectPreviewAlpha +
+                    std::clamp(deltaTime, 0.0f, 0.05f) / 0.18f);
+            const ImVec2 center = Resolution::GetVirtualCenter();
+            ItemPreview::SetHudPosition(center);
+            ItemPreview::SetSizeScale(1.0f);
+            ItemPreview::SilentPreviewMenu::Open();
+            ItemPreview::Show(g_quickDrawHotkeyPendingItem.form,
+                g_quickDrawHotkeyPendingItem.uniqueID,
+                g_quickDrawHotkeyPendingItem.hasUniqueID);
+            ItemPreview::SetOpacity(g_quickDrawHotkeyDirectPreviewAlpha);
+            return;
+        }
+        if (g_quickDrawHotkeyPreviewExitActive &&
+            g_quickDrawHotkeyPendingItem.form)
+        {
+            g_quickDrawHotkeyPreviewExitT = std::min(1.0f,
+                g_quickDrawHotkeyPreviewExitT + std::clamp(deltaTime, 0.0f, 0.05f) / 0.34f);
+            const float eased = g_quickDrawHotkeyPreviewExitT * g_quickDrawHotkeyPreviewExitT *
+                (3.0f - 2.0f * g_quickDrawHotkeyPreviewExitT);
+            const ImVec2 center = Resolution::GetVirtualCenter();
+            ItemPreview::SetHudPosition(ImVec2(center.x +
+                (g_quickDrawHotkeyPreviewExitLeft ? -72.0f : 72.0f) * eased, center.y));
+            ItemPreview::SetSizeScale(1.0f);
+            ItemPreview::SilentPreviewMenu::Open();
+            ItemPreview::Show(g_quickDrawHotkeyPendingItem.form,
+                g_quickDrawHotkeyPendingItem.uniqueID,
+                g_quickDrawHotkeyPendingItem.hasUniqueID);
+            if (g_quickDrawHotkeyPreviewExitT >= 1.0f)
+            {
+                g_quickDrawHotkeyPreviewExitActive = false;
+                g_quickDrawHotkeyPendingItem = {};
+                BeginGameplayPreviewFadeOut();
+            }
+            return;
+        }
         UpdateGameplayPreviewFadeOut(deltaTime);
 
         // RESET LIMPO: Só limpa o estado quando o menu sumir da tela por completo
