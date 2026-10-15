@@ -26734,18 +26734,25 @@ namespace Menu
                 white, label, alpha);
         };
         const auto drawDrawSlider = [&](LayoutSlider slider, const char* label,
-            float& value, float minimum, float maximum, float labelY) {
+            float& value, float minimum, float maximum, float labelY,
+            bool enabled = true) {
             const std::size_t index = static_cast<std::size_t>(slider);
             const float trackY = labelY + 25.0f * controlScale;
             const float resetX = x + width - 7.0f * controlScale;
             const float trackMaxX = resetX - 17.0f * controlScale;
             const float trackWidth = std::max(trackMaxX - x, 1.0f);
-            g_layoutSliderHitboxes[index] = { ImVec2(x, labelY - 4.0f * controlScale),
-                ImVec2(trackMaxX, trackY + 12.0f * controlScale) };
-            g_layoutResetHitboxes[index] = { ImVec2(resetX - 10.0f * controlScale,
-                    trackY - 10.0f * controlScale),
-                ImVec2(resetX + 10.0f * controlScale, trackY + 10.0f * controlScale) };
-            if (g_activeLayoutSlider == slider)
+            g_layoutSliderHitboxes[index] = enabled
+                ? LayoutSliderHitbox{ ImVec2(x, labelY - 4.0f * controlScale),
+                    ImVec2(trackMaxX, trackY + 12.0f * controlScale) }
+                : LayoutSliderHitbox{ ImVec2(1.0f, 1.0f), ImVec2(0.0f, 0.0f) };
+            g_layoutResetHitboxes[index] = enabled
+                ? LayoutSliderHitbox{ ImVec2(resetX - 10.0f * controlScale,
+                        trackY - 10.0f * controlScale),
+                    ImVec2(resetX + 10.0f * controlScale, trackY + 10.0f * controlScale) }
+                : LayoutSliderHitbox{ ImVec2(1.0f, 1.0f), ImVec2(0.0f, 0.0f) };
+            if (!enabled && g_activeLayoutSlider == slider)
+                g_activeLayoutSlider = LayoutSlider::None;
+            if (enabled && g_activeLayoutSlider == slider)
             {
                 const float normalized = std::clamp((g_settingsMousePos.x - x) / trackWidth, 0.0f, 1.0f);
                 value = minimum + (maximum - minimum) * normalized;
@@ -26754,19 +26761,20 @@ namespace Menu
             const float normalized = (value - minimum) / std::max(maximum - minimum, 0.001f);
             const std::string text = std::format("{:.0f}%", value);
             const ImVec2 textSize = ImGui::CalcTextSize(text.c_str());
-            DrawTextWithShadow(draw, ImVec2(x, labelY), white, label, alpha);
+            const float enabledAlpha = enabled ? alpha : alpha * 0.30f;
+            DrawTextWithShadow(draw, ImVec2(x, labelY), white, label, enabledAlpha);
             DrawTextWithShadow(draw, ImVec2(trackMaxX - textSize.x, labelY),
-                FadeColor(IM_COL32(180, 165, 130, 230), alpha), text.c_str(), alpha);
+                FadeColor(IM_COL32(180, 165, 130, 230), enabledAlpha), text.c_str(), enabledAlpha);
             draw->AddRectFilled(ImVec2(x, trackY - 6.0f * controlScale),
                 ImVec2(trackMaxX, trackY + 6.0f * controlScale),
-                FadeColor(IM_COL32(25, 26, 31, 235), alpha), 4.0f * controlScale);
+                FadeColor(IM_COL32(25, 26, 31, 235), enabledAlpha), 4.0f * controlScale);
             draw->AddRectFilled(ImVec2(x, trackY - 6.0f * controlScale),
                 ImVec2(x + trackWidth * normalized, trackY + 6.0f * controlScale),
-                FadeColor(IM_COL32(190, 184, 170, 205), alpha), 4.0f * controlScale);
+                FadeColor(IM_COL32(190, 184, 170, 205), enabledAlpha), 4.0f * controlScale);
             draw->AddCircleFilled(ImVec2(resetX, trackY), 5.0f * controlScale,
-                FadeColor(IM_COL32(65, 65, 65, 255), alpha), 20);
+                FadeColor(IM_COL32(65, 65, 65, 255), enabledAlpha), 20);
             draw->AddCircle(ImVec2(resetX, trackY), 6.5f * controlScale,
-                FadeColor(IM_COL32(135, 132, 126, 120), alpha), 20, 1.0f);
+                FadeColor(IM_COL32(135, 132, 126, 120), enabledAlpha), 20, 1.0f);
         };
         const auto drawDrawMarkStyleSelector = [&](float labelY) {
             constexpr int optionCount = 7;
@@ -26833,8 +26841,11 @@ namespace Menu
         g_drawToggleButtonCenters[2] = ImVec2(-10000.0f, -10000.0f);
         const float drawMarkY = drawControlsY;
         drawDrawMarkStyleSelector(drawMarkY);
+        const bool drawMarkDistanceAvailable = Config::g_drawMarkStyle != 5 &&
+            Config::g_drawMarkStyle != 6;
         drawDrawSlider(LayoutSlider::DrawMarkDistance, Language::Get("draw_mark_distance").c_str(),
-            Config::g_drawMarkDistance, 0.0f, 100.0f, drawMarkY + 55.0f * controlScale);
+            Config::g_drawMarkDistance, 0.0f, 100.0f, drawMarkY + 55.0f * controlScale,
+            drawMarkDistanceAvailable);
 
         const float iconsTitleY = drawMarkY + 115.0f * controlScale;
     
