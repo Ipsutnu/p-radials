@@ -627,6 +627,9 @@ namespace Menu
         QuickDrawKey key{};
         int hotkey = 0;
         float removeT = -1.0f;
+        // Filtro é somente visual: o bind e o cartão físico continuam
+        // presentes para que alternar categorias não reinicie a grade.
+        float filterT = 1.0f;
         ImVec2 min{};
         ImVec2 max{};
         ImVec2 clearCenter{};
@@ -655,6 +658,23 @@ namespace Menu
     static float g_quickDrawKeyboardScroll = 0.0f;
     static float g_quickDrawKeyboardMaxScroll = 0.0f;
     static int g_quickDrawKeyboardHoveredCard = -1;
+    enum class QuickDrawKeyboardFilter : std::size_t
+    {
+        Spells,
+        Weapons,
+        Armor,
+        Potions,
+        Books,
+        Other,
+        Count
+    };
+    static std::array<bool, static_cast<std::size_t>(QuickDrawKeyboardFilter::Count)>
+        g_quickDrawKeyboardFilters{ true, true, true, true, true, true };
+    static std::array<ImVec2, static_cast<std::size_t>(QuickDrawKeyboardFilter::Count)>
+        g_quickDrawKeyboardFilterCenters{};
+    static std::array<float, static_cast<std::size_t>(QuickDrawKeyboardFilter::Count)>
+        g_quickDrawKeyboardFilterHoverT{};
+    static constexpr float kQuickDrawKeyboardFilterRadius = 15.5f;
     static ImVec2 g_settingsHotkeyButtonCenter{};
     static float g_settingsHotkeyButtonHoverT = 0.0f;
     static constexpr float kSettingsHotkeyButtonBaseRadius = 24.0f;
@@ -681,6 +701,10 @@ namespace Menu
     static float g_quickDrawEditorHotkeyAuxiliaryT = 1.0f;
     static float g_quickDrawEditorResetHoverT = 0.0f;
     static float g_quickDrawEditorOkHoverT = 0.0f;
+    // Halos independentes dos comandos inferiores: usam a mesma linguagem
+    // visual do Waiting Key, mas respeitam o hover de cada comando.
+    static float g_quickDrawEditorResetShadowT = 0.0f;
+    static float g_quickDrawEditorOkShadowT = 0.0f;
     static bool g_quickDrawSettingsExpanded = false;
     static float g_quickDrawSettingsOpenT = 0.0f;
     static ImVec2 g_quickDrawSettingsButtonCenter{};
@@ -802,6 +826,23 @@ namespace Menu
         ItemPreview::SilentPreviewMenu::Close();
         g_settingsPreviewFadeOut = false;
         g_settingsPreviewFadeFrame = -1;
+    }
+
+    // O WheelSettings conserva o preview durante seu fade de saída. Se outra
+    // abertura ocorrer antes do settle terminar, esse preview antigo não pode
+    // atravessar para o novo radial/Hub e surgir por uma frame. Esta limpeza
+    // é intencionalmente imediata e só é chamada ao iniciar outro menu.
+    static void FinishResidualPreviewBeforeMenuOpen()
+    {
+        g_settingsPreviewFadeOut = false;
+        g_settingsPreviewFadeAlpha = 1.0f;
+        g_settingsPreviewFadeFrame = -1;
+        g_gameplayPreviewFadeOut = false;
+        g_gameplayPreviewFadeAlpha = 1.0f;
+        g_gameplayPreviewFadeFrame = -1;
+        ItemPreview::SetOpacity(0.0f);
+        ItemPreview::Hide();
+        ItemPreview::SilentPreviewMenu::Close();
     }
 
     static void BeginGameplayPreviewFadeOut(float initialAlpha = 1.0f)
@@ -1035,8 +1076,19 @@ namespace Menu
     static ImU32 MakeGameplayIconColor(const RadialItem& item, int alpha,
         float brightness = 1.0f, bool applyBaseOpacity = true,
         RadialSide side = RadialSide::Left);
+    enum class QuantityBadgeDirection
+    {
+        AutoToCenter,
+        Up,
+        Down
+    };
     static void DrawSettingsDragQuickDrawIndicator(
         ImDrawList* draw, const ImVec2& position, float radius);
+    static void DrawQuickDrawIndicator(
+        ImDrawList* draw, const RadialItem& item, const ImVec2& itemPos,
+        const ImVec2& radialCenter, float itemRadius, int quantity,
+        float alpha, float hoverT, bool isOverflow,
+        QuantityBadgeDirection directionMode);
     static ImVec2 GetSettingsBagCenter();
     static float GetSettingsBagExpandedRadius();
 
@@ -5256,6 +5308,7 @@ namespace Menu
 
     void OpenSettingsMenu()
     {
+        FinishResidualPreviewBeforeMenuOpen();
         Slowtime::End();
         g_showWindow = false;
         g_radialToggleLocked = false;
@@ -7663,6 +7716,22 @@ namespace Menu
                     MakeGameplayIconColor(item, static_cast<int>(235.0f * itemAlpha),
                         1.0f, true, RadialSide::Bag));
             }
+
+            // A bolsa é um quarto destino visual do Hub. Enquanto ela está
+            // aberta, o marcador usa a posição e o raio já animados da
+            // bolinha interna; assim acompanha a flutuação, a entrada e o
+            // hover sem criar um slot radial artificial.
+            DrawQuickDrawIndicator(
+                draw,
+                item,
+                visual.position,
+                center,
+                radius,
+                ItemInfo::Get(item.form, item.uniqueID, item.hasUniqueID).instanceQuantity,
+                itemAlpha,
+                visual.hoverT,
+                false,
+                QuantityBadgeDirection::AutoToCenter);
             RegisterSettingsItem(item.form, RadialSide::Bag, static_cast<int>(index),
                 visual.position, radius);
         }
@@ -8449,6 +8518,7 @@ namespace Menu
 
     void OpenRadialMenu()
     {
+        FinishResidualPreviewBeforeMenuOpen();
         // Um pulso de Quick Draw não pode sobreviver a uma nova abertura.
         // Isso remove qualquer frame residual se o radial anterior fechou
         // antes da camada visual concluir sua animação.
@@ -16196,6 +16266,34 @@ namespace Menu
         return true;
     }
 
+    static QuickDrawKeyboardFilter GetQuickDrawKeyboardFilterForForm(
+        const RE::TESForm* form)
+    {
+        if (form && (form->As<RE::SpellItem>() || form->As<RE::TESShout>() ||
+            form->As<RE::ScrollItem>()))
+            return QuickDrawKeyboardFilter::Spells;
+        if (form && form->As<RE::TESObjectWEAP>())
+            return QuickDrawKeyboardFilter::Weapons;
+        if (form && form->As<RE::TESObjectARMO>())
+            return QuickDrawKeyboardFilter::Armor;
+        if (form && form->As<RE::AlchemyItem>())
+            return QuickDrawKeyboardFilter::Potions;
+        if (form && form->As<RE::TESObjectBOOK>())
+            return QuickDrawKeyboardFilter::Books;
+        return QuickDrawKeyboardFilter::Other;
+    }
+
+    static bool IsQuickDrawKeyboardCardFilterVisible(
+        const QuickDrawKeyboardCard& card)
+    {
+        RadialItem item{};
+        if (!BuildQuickDrawHotkeyPreviewItem(card.key, item))
+            return g_quickDrawKeyboardFilters[static_cast<std::size_t>(
+                QuickDrawKeyboardFilter::Other)];
+        return g_quickDrawKeyboardFilters[static_cast<std::size_t>(
+            GetQuickDrawKeyboardFilterForForm(item.form))];
+    }
+
     static void OpenQuickDrawKeyboardBrowser(QuickDrawKeyboardReturnTarget returnTarget)
     {
         g_quickDrawKeyboardCards.clear();
@@ -16214,6 +16312,8 @@ namespace Menu
         g_quickDrawKeyboardScroll = 0.0f;
         g_quickDrawKeyboardMaxScroll = 0.0f;
         g_quickDrawKeyboardHoveredCard = -1;
+        g_quickDrawKeyboardFilters.fill(true);
+        g_quickDrawKeyboardFilterHoverT.fill(0.0f);
         g_quickDrawEditorWaitingHotkey = false;
         g_quickDrawSettingsExpanded = false;
     }
@@ -16290,13 +16390,22 @@ namespace Menu
                 (card.simulationInitialized ? card.simulationOffset : ImVec2{});
         }
 
+        // O filtro é visual: o cartão conserva seu bind e sua posição física
+        // enquanto desaparece ou reaparece suavemente.
+        for (auto& card : g_quickDrawKeyboardCards)
+        {
+            card.filterT = AnimateSettingsValue(card.filterT,
+                IsQuickDrawKeyboardCardFilterVisible(card) ? 1.0f : 0.0f,
+                9.0f, dt);
+        }
+
         // O hit-test usa a posição física do frame anterior, e não a grade
         // rígida. Assim um cartão continua coerente enquanto flutua.
         g_quickDrawKeyboardHoveredCard = -1;
         for (std::size_t i = 0; i < g_quickDrawKeyboardCards.size(); ++i)
         {
             auto& card = g_quickDrawKeyboardCards[i];
-            if (card.removeT >= 0.0f)
+            if (card.removeT >= 0.0f || card.filterT <= 0.08f)
                 continue;
             const ImVec2 min = visualCenters[i] -
                 ImVec2(cardWidth, cardHeight) * 0.5f;
@@ -16445,26 +16554,27 @@ namespace Menu
                 std::clamp(1.0f - card.removeT / 0.20f, 0.0f, 1.0f);
             const float cardAlpha = card.removeT < 0.20f ? 1.0f :
                 std::clamp(1.0f - (card.removeT - 0.20f) / 0.42f, 0.0f, 1.0f);
+            const float filteredCardAlpha = cardAlpha * card.filterT;
 
             draw->AddCircleFilled(cardCenter, mainRadius,
-                FadeColor(IM_COL32(20, 20, 25, 140), alpha * cardAlpha), 48);
+                FadeColor(IM_COL32(20, 20, 25, 140), alpha * filteredCardAlpha), 48);
             
             draw->AddCircle(cardCenter, mainRadius,
                 FadeColor(hovered ? IM_COL32(255, 255, 255, 125) :
-                    IM_COL32(235, 230, 215, 0), alpha * cardAlpha),
+                    IM_COL32(235, 230, 215, 0), alpha * filteredCardAlpha),
                 48, hovered ? 2.0f : 1.2f);
 
             const std::string keyText = Config::KeyToString(card.hotkey);
             const ImVec2 keyTextSize = ImGui::CalcTextSize(keyText.c_str());
             draw->AddCircleFilled(keyMoonCenter, keyMoonRadius,
-                FadeColor(IM_COL32(35, 36, 42, 235), alpha * cardAlpha), 24);
+                FadeColor(IM_COL32(35, 36, 42, 235), alpha * filteredCardAlpha), 24);
             
             draw->AddCircle(keyMoonCenter, keyMoonRadius,
-                FadeColor(IM_COL32(245, 242, 232, 165), alpha * cardAlpha), 24, 1.15f);
+                FadeColor(IM_COL32(245, 242, 232, 165), alpha * filteredCardAlpha), 24, 1.15f);
             
             draw->AddText(ImVec2(keyMoonCenter.x - keyTextSize.x * 0.5f,
                     keyMoonCenter.y - keyTextSize.y * 0.5f),
-                FadeColor(IM_COL32(235, 230, 215, 230), alpha * cardAlpha), keyText.c_str());
+                FadeColor(IM_COL32(235, 230, 215, 230), alpha * filteredCardAlpha), keyText.c_str());
 
             RadialItem item{};
             if (BuildQuickDrawHotkeyPreviewItem(card.key, item))
@@ -16478,7 +16588,7 @@ namespace Menu
                     // mesma linguagem visual. O browser aplica 80% como
                     // opacidade-base, além do fade de remoção do cartão.
                     const int iconOpacity = static_cast<int>(std::lround(
-                        255.0f * 0.70f * alpha * iconAlpha));
+                        255.0f * 0.70f * alpha * iconAlpha * card.filterT));
                     const ImU32 iconColor = MakeGameplayIconColor(item,
                         iconOpacity, 1.0f, false, RadialSide::Left);
                     draw->AddImage(reinterpret_cast<ImTextureID>(icon),
@@ -16490,15 +16600,15 @@ namespace Menu
             }
 
             draw->AddCircleFilled(card.clearCenter, clearMoonRadius,
-                FadeColor(IM_COL32(35, 36, 42, 240), alpha * cardAlpha), 20);
+                FadeColor(IM_COL32(35, 36, 42, 240), alpha * filteredCardAlpha), 20);
             draw->AddCircle(card.clearCenter, clearMoonRadius,
-                FadeColor(IM_COL32(245, 242, 232, 150), alpha * cardAlpha), 20, 1.0f);
+                FadeColor(IM_COL32(245, 242, 232, 150), alpha * filteredCardAlpha), 20, 1.0f);
             draw->AddLine(card.clearCenter - ImVec2(3.6f, 3.6f),
                 card.clearCenter + ImVec2(3.6f, 3.6f),
-                FadeColor(IM_COL32(245, 242, 232, 220), alpha * cardAlpha), 1.1f);
+                FadeColor(IM_COL32(245, 242, 232, 220), alpha * filteredCardAlpha), 1.1f);
             draw->AddLine(card.clearCenter + ImVec2(3.6f, -3.6f),
                 card.clearCenter + ImVec2(-3.6f, 3.6f),
-                FadeColor(IM_COL32(245, 242, 232, 220), alpha * cardAlpha), 1.1f);
+                FadeColor(IM_COL32(245, 242, 232, 220), alpha * filteredCardAlpha), 1.1f);
 
             if (card.removeT >= 0.62f)
             {
@@ -16523,9 +16633,57 @@ namespace Menu
             ++i;
         }
 
-        // Mesmo ponto inferior usado pelo círculo dourado que fecha o Hub.
+        // Seis filtros no topo, espelhados verticalmente ao botão de fechar.
+        // Não possuem ícone: o nome aparece como tooltip abaixo de cada um.
         g_quickDrawKeyboardCloseCenter =
             GetSettingsCloseButtonTarget(GetWheelLayout());
+        const float filtersY = screen.y - g_quickDrawKeyboardCloseCenter.y;
+        constexpr std::array<const char*, 6> filterLabels{
+            "keyboard_filter_spells", "keyboard_filter_weapons",
+            "keyboard_filter_armor", "keyboard_filter_potions",
+            "keyboard_filter_books", "keyboard_filter_other" };
+        constexpr float filterGap = 12.0f;
+        const float filterSpan = kQuickDrawKeyboardFilterRadius * 2.0f *
+                static_cast<float>(filterLabels.size()) +
+            filterGap * static_cast<float>(filterLabels.size() - 1);
+        const float firstFilterX = center.x - filterSpan * 0.5f +
+            kQuickDrawKeyboardFilterRadius;
+        for (std::size_t index = 0; index < filterLabels.size(); ++index)
+        {
+            const ImVec2 filterCenter(firstFilterX + static_cast<float>(index) *
+                    (kQuickDrawKeyboardFilterRadius * 2.0f + filterGap),
+                filtersY);
+            g_quickDrawKeyboardFilterCenters[index] = filterCenter;
+            const bool filterHovered = IsSettingsCircleHovered(g_settingsMousePos,
+                filterCenter, kQuickDrawKeyboardFilterRadius + 3.0f);
+            g_quickDrawKeyboardFilterHoverT[index] = AnimateSettingsValue(
+                g_quickDrawKeyboardFilterHoverT[index], filterHovered ? 1.0f : 0.0f,
+                13.0f, dt);
+            const bool active = g_quickDrawKeyboardFilters[index];
+            const float whiteStrength = active
+                ? 0.64f + 0.22f * g_quickDrawKeyboardFilterHoverT[index]
+                : 0.38f * g_quickDrawKeyboardFilterHoverT[index];
+            draw->AddCircleFilled(filterCenter, kQuickDrawKeyboardFilterRadius,
+                FadeColor(IM_COL32(35, 36, 42, 220), alpha), 24);
+            draw->AddCircleFilled(filterCenter, kQuickDrawKeyboardFilterRadius,
+                FadeColor(IM_COL32(245, 242, 232,
+                    static_cast<int>(180.0f * whiteStrength)), alpha), 24);
+            draw->AddCircle(filterCenter, kQuickDrawKeyboardFilterRadius,
+                FadeColor(IM_COL32(245, 242, 232,
+                    active ? 220 : static_cast<int>(125.0f *
+                        g_quickDrawKeyboardFilterHoverT[index])), alpha), 24, 1.0f);
+            if (filterHovered)
+            {
+                const std::string& label = Language::Get(filterLabels[index]);
+                const ImVec2 labelSize = ImGui::CalcTextSize(label.c_str());
+                draw->AddText(ImVec2(filterCenter.x - labelSize.x * 0.5f,
+                        filterCenter.y + kQuickDrawKeyboardFilterRadius + 9.0f),
+                    FadeColor(IM_COL32(245, 242, 232, 245),
+                        alpha * g_quickDrawKeyboardFilterHoverT[index]), label.c_str());
+            }
+        }
+
+        // Mesmo ponto inferior usado pelo círculo dourado que fecha o Hub.
         const bool closeHovered = IsSettingsCircleHovered(g_settingsMousePos,
             g_quickDrawKeyboardCloseCenter, g_quickDrawKeyboardCloseRadius);
         draw->AddCircleFilled(g_quickDrawKeyboardCloseCenter,
@@ -17104,6 +17262,8 @@ namespace Menu
         g_quickDrawSettingsScrollbarDragging = false;
         g_quickDrawEditorResetHoverT = 0.0f;
         g_quickDrawEditorOkHoverT = 0.0f;
+        g_quickDrawEditorResetShadowT = 0.0f;
+        g_quickDrawEditorOkShadowT = 0.0f;
         g_quickDrawEditorAutoUseClickFlash = 0.0f;
         g_quickDrawEditorAutoUseShadowT = 0.0f;
         g_quickDrawEditorWaitingHotkey = false;
@@ -17751,11 +17911,32 @@ namespace Menu
             circleHovered(g_quickDrawEditorOkCenter, commandExpandedRadius) ? 1.0f : 0.0f,
             13.0f, dt);
 
+        g_quickDrawEditorResetShadowT = AnimateSettingsValue(
+            g_quickDrawEditorResetShadowT,
+            g_quickDrawEditorResetHoverT > 0.001f ? 1.0f : 0.0f,
+            g_quickDrawEditorResetHoverT > 0.001f ? 8.0f : 6.0f, dt);
+        g_quickDrawEditorOkShadowT = AnimateSettingsValue(
+            g_quickDrawEditorOkShadowT,
+            g_quickDrawEditorOkHoverT > 0.001f ? 1.0f : 0.0f,
+            g_quickDrawEditorOkHoverT > 0.001f ? 8.0f : 6.0f, dt);
+
         const auto drawCommandCircle = [&](const ImVec2& buttonCenter, float hoverT,
-            float& outRadius, const char* label) {
+            float shadowT, float& outRadius, const char* label) {
             (void)commandBaseRadius;
             outRadius = commandExpandedRadius;
-            
+
+            // Mesmo fundo e dissolução do Waiting Key, proporcional ao
+            // tamanho menor dos botões CLEAR/OK.
+            if (shadowT > 0.001f) {
+                constexpr int shadowSteps = 10;
+                constexpr float shadowReach = 80.0f;
+                for (int step = shadowSteps; step >= 0; --step) {
+                    const float t = static_cast<float>(step) / shadowSteps;
+                    const float shadowAlpha = 58.0f * (1.0f - t) * (1.0f - t) * shadowT;
+                    draw->AddCircleFilled(buttonCenter, outRadius + shadowReach * t,
+                        FadeColor(IM_COL32(35, 36, 42, static_cast<int>(shadowAlpha)), alpha), 40);
+                }
+            }
             draw->AddCircleFilled(buttonCenter, outRadius,
                 FadeColor(IM_COL32(35, 36, 42, 220), alpha), 40);
             
@@ -17772,10 +17953,12 @@ namespace Menu
         };
 
         drawCommandCircle(g_quickDrawEditorResetCenter,
-            g_quickDrawEditorResetHoverT, g_quickDrawEditorResetRadius,
+            g_quickDrawEditorResetHoverT, g_quickDrawEditorResetShadowT,
+            g_quickDrawEditorResetRadius,
             Language::Get("reset").c_str());
         drawCommandCircle(g_quickDrawEditorOkCenter,
-            g_quickDrawEditorOkHoverT, g_quickDrawEditorOkRadius,
+            g_quickDrawEditorOkHoverT, g_quickDrawEditorOkShadowT,
+            g_quickDrawEditorOkRadius,
             Language::Get("ok").c_str());
 
         if (IsQuickDrawAutoUseEligible(g_quickDrawEditorItem.form))
@@ -18055,9 +18238,21 @@ namespace Menu
                 return true;
             if (button == 0)
             {
+                for (std::size_t index = 0;
+                    index < g_quickDrawKeyboardFilterCenters.size(); ++index)
+                {
+                    if (IsSettingsCircleHovered(g_settingsMousePos,
+                            g_quickDrawKeyboardFilterCenters[index],
+                            kQuickDrawKeyboardFilterRadius + 3.0f))
+                    {
+                        g_quickDrawKeyboardFilters[index] =
+                            !g_quickDrawKeyboardFilters[index];
+                        return true;
+                    }
+                }
                 for (auto& card : g_quickDrawKeyboardCards)
                 {
-                    if (card.removeT >= 0.0f)
+                    if (card.removeT >= 0.0f || card.filterT <= 0.08f)
                         continue;
                     if (IsSettingsCircleHovered(g_settingsMousePos,
                             card.clearCenter, 13.0f))
@@ -18963,14 +19158,6 @@ namespace Menu
     //const float baseOffset = itemRadius + badgeRadius + 3.0f;
     //const float hoverExtraOffset = 16.0f;
 
-    enum class QuantityBadgeDirection
-    {
-        AutoToCenter,
-        Up,
-        Down
-    };
-
-        
     static std::string FormatItemQuantity(int quantity)
     {
         if (quantity < 10000)
