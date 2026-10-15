@@ -665,6 +665,9 @@ namespace Menu
     static float g_quickDrawKeyboardScroll = 0.0f;
     static float g_quickDrawKeyboardMaxScroll = 0.0f;
     static int g_quickDrawKeyboardHoveredCard = -1;
+    // Pequena janela após remover um cartão: preserva a posição visual dos
+    // sobreviventes antes de reativar as forças de hover/preview.
+    static float g_quickDrawKeyboardReflowCooldown = 0.0f;
     enum class QuickDrawKeyboardFilter : std::size_t
     {
         Spells,
@@ -16320,6 +16323,7 @@ namespace Menu
         g_quickDrawKeyboardScroll = 0.0f;
         g_quickDrawKeyboardMaxScroll = 0.0f;
         g_quickDrawKeyboardHoveredCard = -1;
+        g_quickDrawKeyboardReflowCooldown = 0.0f;
         g_quickDrawKeyboardFilters.fill(true);
         g_quickDrawKeyboardFilterHoverT.fill(0.0f);
         g_quickDrawKeyboardRadialLayoutDirty = false;
@@ -16346,6 +16350,8 @@ namespace Menu
         const ImVec2 center(screen.x * 0.5f, screen.y * 0.5f);
         const float time = static_cast<float>(ImGui::GetTime());
         const float dt = std::clamp(ImGui::GetIO().DeltaTime, 0.0f, 0.05f);
+        g_quickDrawKeyboardReflowCooldown = std::max(0.0f,
+            g_quickDrawKeyboardReflowCooldown - dt);
         // O envelope continua retangular para a física/reflow da grade, mas
         // agora contém um núcleo circular e duas luas independentes.
         constexpr float cardWidth = 178.0f;
@@ -16458,21 +16464,47 @@ namespace Menu
         }
         g_quickDrawKeyboardRadialLayoutDirty = false;
 
-        // O hit-test usa a posição física do frame anterior, e não a grade
-        // rígida. Assim um cartão continua coerente enquanto flutua.
+        // O hit-test usa o disco real de cada cartão, não mais o envelope
+        // retangular. Antes, os envelopes dos cantos internos se cruzavam e
+        // um cartão próximo roubava o hover do outro/X.
         g_quickDrawKeyboardHoveredCard = -1;
-        for (std::size_t i = 0; i < g_quickDrawKeyboardCards.size(); ++i)
+        int hoveredDeleteCard = -1;
+        if (g_quickDrawKeyboardReflowCooldown <= 0.0f)
         {
-            auto& card = g_quickDrawKeyboardCards[i];
-            if (card.removeT >= 0.0f || card.filterT <= 0.08f)
-                continue;
-            const ImVec2 min = visualCenters[i] -
-                ImVec2(cardWidth, cardHeight) * 0.5f;
-            if (PointInQuickDrawRect(g_settingsMousePos, min,
-                    min + ImVec2(cardWidth, cardHeight)))
+            for (std::size_t i = 0; i < g_quickDrawKeyboardCards.size(); ++i)
             {
-                g_quickDrawKeyboardHoveredCard = static_cast<int>(i);
-                break;
+                auto& card = g_quickDrawKeyboardCards[i];
+                if (card.removeT >= 0.0f || card.filterT <= 0.08f)
+                    continue;
+                const ImVec2 deleteHitCenter = visualCenters[i] +
+                    ImVec2(61.0f * 0.80f, -61.0f * 0.78f);
+                // Área de preview deliberadamente maior que o X visível:
+                // atravessar a lua continua mantendo o preview deste cartão.
+                if (IsSettingsCircleHovered(g_settingsMousePos, deleteHitCenter, 34.0f))
+                {
+                    hoveredDeleteCard = static_cast<int>(i);
+                    break;
+                }
+            }
+        }
+        if (hoveredDeleteCard >= 0)
+        {
+            // O X faz parte do mesmo cartão: manter este índice conserva o
+            // preview do item sem deixar um vizinho roubar o hover.
+            g_quickDrawKeyboardHoveredCard = hoveredDeleteCard;
+        }
+        else if (g_quickDrawKeyboardReflowCooldown <= 0.0f)
+        {
+            for (std::size_t i = 0; i < g_quickDrawKeyboardCards.size(); ++i)
+            {
+                auto& card = g_quickDrawKeyboardCards[i];
+                if (card.removeT >= 0.0f || card.filterT <= 0.08f)
+                    continue;
+                if (IsSettingsCircleHovered(g_settingsMousePos, visualCenters[i], 61.0f))
+                {
+                    g_quickDrawKeyboardHoveredCard = static_cast<int>(i);
+                    break;
+                }
             }
         }
 
@@ -16496,7 +16528,8 @@ namespace Menu
         // lugar. A margem pequena mantém um espaço vivo, mas neutro no slot.
         constexpr float neighborSafeGap = 12.0f;
         constexpr float neighborForce = 3400.0f;
-        constexpr float springForce = 7.5f;
+        const float springForce = g_quickDrawKeyboardReflowCooldown > 0.0f
+            ? 3.2f : 7.5f;
         constexpr float velocityDamping = 5.5f;
         constexpr float previewForce = 3800.0f;
         // O cartão sob o cursor cria uma bolha de espaço própria. Ela é
@@ -16519,7 +16552,7 @@ namespace Menu
             forces[i] = offset * -springForce -
                 card.simulationVelocity * velocityDamping;
 
-            if (hasHoveredItem)
+            if (hasHoveredItem && g_quickDrawKeyboardReflowCooldown <= 0.0f)
             {
                 const ImVec2 delta = visualCenters[i] - center;
                 const float distance = std::sqrt(delta.x * delta.x + delta.y * delta.y);
@@ -16537,7 +16570,8 @@ namespace Menu
                 }
             }
 
-            if (g_quickDrawKeyboardHoveredCard >= 0 &&
+            if (g_quickDrawKeyboardReflowCooldown <= 0.0f &&
+                g_quickDrawKeyboardHoveredCard >= 0 &&
                 static_cast<int>(i) != g_quickDrawKeyboardHoveredCard)
             {
                 const ImVec2 hoveredCenter = visualCenters[
@@ -16577,6 +16611,33 @@ namespace Menu
                 constexpr float neighborCollisionRadius = 61.0f;
                 const float collisionDistance = neighborCollisionRadius * 2.0f +
                     neighborSafeGap;
+                // Reserva um espaço físico para a lua do X. O disco
+                // principal de um cartão vizinho pode encostar no núcleo,
+                // mas não pode avançar sobre o controle de remoção.
+                constexpr float deleteMoonOffsetX = 61.0f * 0.80f;
+                constexpr float deleteMoonOffsetY = -61.0f * 0.78f;
+                constexpr float deleteMoonClearance = 96.0f;
+                constexpr float deleteMoonForce = 5200.0f;
+                const auto repelFromDeleteMoon = [&](std::size_t owner,
+                    std::size_t target) {
+                    const ImVec2 moon = visualCenters[owner] +
+                        ImVec2(deleteMoonOffsetX, deleteMoonOffsetY);
+                    const ImVec2 moonDelta = visualCenters[target] - moon;
+                    const float moonDistance = std::sqrt(moonDelta.x * moonDelta.x +
+                        moonDelta.y * moonDelta.y);
+                    if (moonDistance >= deleteMoonClearance)
+                        return;
+                    const ImVec2 moonDirection = moonDistance > 0.01f
+                        ? moonDelta * (1.0f / moonDistance)
+                        : ImVec2((target & 1) ? 1.0f : -1.0f,
+                            (owner & 1) ? 0.55f : -0.55f);
+                    const float t = (deleteMoonClearance - moonDistance) /
+                        deleteMoonClearance;
+                    forces[target] += moonDirection * (deleteMoonForce * t * t);
+                };
+                repelFromDeleteMoon(i, j);
+                repelFromDeleteMoon(j, i);
+
                 if (distance >= collisionDistance)
                     continue;
 
@@ -16641,7 +16702,9 @@ namespace Menu
             if (card.removeT >= 0.0f)
                 card.removeT += dt;
             const bool clearHovered = IsSettingsCircleHovered(g_settingsMousePos,
-                card.clearCenter, clearMoonRadius + 3.0f);
+                // A área de seleção/hover acompanha a área ampliada que
+                // mantém o cartão atual ativo ao passar pelo X.
+                card.clearCenter, (clearMoonRadius + 3.0f) * 2.0f);
             card.clearHoverT = AnimateSettingsValue(card.clearHoverT,
                 clearHovered ? 1.0f : 0.0f, 15.0f, dt);
             card.clearClickFlash = std::max(0.0f,
@@ -16735,9 +16798,21 @@ namespace Menu
                     if (survivor == i)
                         continue;
                     auto& other = g_quickDrawKeyboardCards[survivor];
-                    other.reflowPreservedCenter = visualCenters[survivor];
-                    other.preserveReflowPosition = true;
+                    // Normalmente a posição já foi capturada no clique do X.
+                    // Só usamos este fallback para uma remoção disparada por
+                    // outro caminho, sem reescrever o ponto inicial dela.
+                    if (!other.preserveReflowPosition)
+                    {
+                        const ImVec2 preservedCenter = other.hasLastVisualCenter
+                            ? other.lastVisualCenter : visualCenters[survivor];
+                        other.reflowPreservedCenter = preservedCenter;
+                        other.lastVisualCenter = preservedCenter;
+                        other.hasLastVisualCenter = true;
+                        other.preserveReflowPosition = true;
+                    }
                 }
+                g_quickDrawKeyboardHoveredCard = -1;
+                g_quickDrawKeyboardReflowCooldown = 0.38f;
                 g_quickDrawKeyboardCards.erase(g_quickDrawKeyboardCards.begin() + i);
                 baseCenters.erase(baseCenters.begin() + i);
                 visualCenters.erase(visualCenters.begin() + i);
@@ -18371,6 +18446,24 @@ namespace Menu
                     if (IsSettingsCircleHovered(g_settingsMousePos,
                             card.clearCenter, 13.0f))
                     {
+                        // Preserve a posição exibida de cada sobrevivente já
+                        // neste clique. O cartão removido deixa de participar
+                        // da formação no frame seguinte; esperar o fim do
+                        // fade trocava as âncoras antes de a mola assumir e
+                        // produzia o teleporte visual.
+                        for (auto& other : g_quickDrawKeyboardCards)
+                        {
+                            if (&other == &card)
+                                continue;
+                            const ImVec2 preservedCenter = other.hasLastVisualCenter
+                                ? other.lastVisualCenter
+                                : ImVec2((other.min.x + other.max.x) * 0.5f,
+                                      (other.min.y + other.max.y) * 0.5f);
+                            other.reflowPreservedCenter = preservedCenter;
+                            other.lastVisualCenter = preservedCenter;
+                            other.hasLastVisualCenter = true;
+                            other.preserveReflowPosition = true;
+                        }
                         for (auto& gesture : g_quickDrawGestures)
                         {
                             if (SameQuickDrawKey(gesture.key, card.key))
