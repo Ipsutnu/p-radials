@@ -27,7 +27,10 @@ namespace Serialization
     constexpr std::uint32_t kVersionLegacy = 1;
 
     // Versão nova: FormID + UniqueID + hasUniqueID.
-    constexpr std::uint32_t kVersion = 2;
+    // v3 acrescenta a bolsa do Hub após os três radiais tradicionais.
+    constexpr std::uint32_t kVersionIdentity = 2;
+    constexpr std::uint32_t kVersionWithBag = 3;
+    constexpr std::uint32_t kVersion = kVersionWithBag;
 
     // Proteção contra dados inválidos ou corrompidos.
     constexpr std::uint32_t kMaxRadialItems = 4096;
@@ -68,6 +71,7 @@ namespace Serialization
         Menu::g_sideItems.clear();
         Menu::g_topItems.clear();
         Menu::g_bottomItems.clear();
+        Menu::g_bagItems.clear();
     }
 
     void SaveRadialLocks(
@@ -552,7 +556,7 @@ namespace Serialization
             // Somente existe na versão 2.
             // ----------------------------------------------------
 
-            if (a_version >= kVersion)
+            if (a_version >= kVersionIdentity)
             {
                 if (!a_intfc->ReadRecordData(
                         &uniqueID,
@@ -779,6 +783,17 @@ namespace Serialization
             return;
         }
 
+        if (!SaveRadial(
+                a_intfc,
+                Menu::g_bagItems))
+        {
+            spdlog::error(
+                "SERIALIZATION SAVE | bag failed"
+            );
+
+            return;
+        }
+
         // ============================================================
         // SALVA AS TRAVAS DOS RADIAIS EM UM REGISTRO SEPARADO
         // ============================================================
@@ -795,10 +810,11 @@ namespace Serialization
         }
 
         spdlog::info(
-            "SERIALIZATION SAVE COMPLETE | side={} | top={} | bottom={}",
+            "SERIALIZATION SAVE COMPLETE | side={} | top={} | bottom={} | bag={}",
             Menu::g_sideItems.size(),
             Menu::g_topItems.size(),
-            Menu::g_bottomItems.size()
+            Menu::g_bottomItems.size(),
+            Menu::g_bagItems.size()
         );
     }
 
@@ -854,6 +870,7 @@ namespace Serialization
                 // ----------------------------------------------------
 
                 if (version != kVersion &&
+                    version != 2 &&
                     version != kVersionLegacy)
                 {
                     spdlog::warn(
@@ -871,6 +888,7 @@ namespace Serialization
                 std::vector<Menu::RadialItem> sideItems;
                 std::vector<Menu::RadialItem> topItems;
                 std::vector<Menu::RadialItem> bottomItems;
+                std::vector<Menu::RadialItem> bagItems;
 
                 // ----------------------------------------------------
                 // SIDE
@@ -923,6 +941,20 @@ namespace Serialization
                     return;
                 }
 
+                if (version >= kVersionWithBag &&
+                    !LoadRadial(
+                        a_intfc,
+                        bagItems,
+                        version))
+                {
+                    spdlog::error(
+                        "SERIALIZATION LOAD | bag failed"
+                    );
+
+                    ClearRadials();
+                    return;
+                }
+
                 // ====================================================
                 // TRANSFERE AS LISTAS RECONSTRUÍDAS
                 // ====================================================
@@ -936,12 +968,16 @@ namespace Serialization
                 Menu::g_bottomItems =
                     std::move(bottomItems);
 
+                Menu::g_bagItems =
+                    std::move(bagItems);
+
                 spdlog::info(
-                    "SERIALIZATION LOAD COMPLETE | version={} | side={} | top={} | bottom={}",
+                    "SERIALIZATION LOAD COMPLETE | version={} | side={} | top={} | bottom={} | bag={}",
                     version,
                     Menu::g_sideItems.size(),
                     Menu::g_topItems.size(),
-                    Menu::g_bottomItems.size()
+                    Menu::g_bottomItems.size(),
+                    Menu::g_bagItems.size()
                 );
 
                 break;

@@ -148,6 +148,7 @@ namespace Config
     extern float g_drawMarkDistance;
     extern bool g_drawEffectsGameplay;
     extern bool g_drawEffectsEditor;
+    extern bool g_itemPreviewDuringShortcuts;
     extern int g_drawEdgeEffectStyle;
     extern float g_drawEdgeEffectSize;
     extern float g_drawEdgeEffectOpacity;
@@ -160,6 +161,11 @@ namespace Config
     extern float g_bottomVerticalPosition;
     extern float g_topHorizontalStretch;
     extern float g_bottomHorizontalStretch;
+    // Bolsa do Hub: posição normalizada; -1 usa o X original ao lado do
+    // INFORMATION, 30 px à esquerda, na altura central da tela.
+    extern float g_itemBagPositionX;
+    extern float g_itemBagPositionY;
+    extern float g_itemBagExpandedScale;
 
     inline constexpr float kDefaultCenterOpacity = 100.0f;
     inline constexpr float kDefaultRadialQuantity = 13.0f;
@@ -218,6 +224,8 @@ namespace Config
     inline constexpr float kDefaultBottomVerticalPosition = 45.76f;
     inline constexpr float kDefaultTopHorizontalStretch = 42.86f;
     inline constexpr float kDefaultBottomHorizontalStretch = 42.86f;
+    inline constexpr float kDefaultItemBagPosition = -1.0f;
+    inline constexpr float kDefaultItemBagExpandedScale = 1.0f;
 
     // Obtém o caminho do arquivo: "Data/SKSE/Plugins/p-radials/p-radials.ini"
     std::filesystem::path GetConfigPath();

@@ -58,7 +58,11 @@ enum class RadialSide
     Left,
     Right,
     Top,
-    Bottom
+    Bottom,
+    // Armazenamento visual do Hub. Nunca participa da abertura dos radiais
+    // durante o gameplay, mas preserva a identidade do item (Quick Draw,
+    // hotkeys e desenhos continuam pertencendo à mesma instância).
+    Bag
 };
 
 inline RadialMode g_radialMode = RadialMode::Gameplay;
@@ -153,6 +157,7 @@ namespace Menu {
         );
     
     bool ScrollSettingsItemInfo(int direction);
+    bool ScrollSettingsItemBag(int direction);
     bool SettingsLockClick();
     bool HandleMouseUnlockClick();
 
@@ -222,6 +227,7 @@ namespace Menu {
     extern std::vector<RadialItem> g_topItems;
     extern std::vector<RadialItem> g_bottomItems;
     extern std::vector<RadialItem> g_sideItems;
+    extern std::vector<RadialItem> g_bagItems;
 
 
     

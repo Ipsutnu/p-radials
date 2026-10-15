@@ -695,8 +695,8 @@ namespace Menu
     static float g_quickDrawSettingsScroll = 0.0f;
     static float g_quickDrawSettingsMaxScroll = 0.0f;
     static bool g_quickDrawSettingsScrollbarDragging = false;
-    static std::array<ImVec2, 2> g_quickDrawSettingsToggleCenters{};
-    static std::array<float, 2> g_quickDrawSettingsToggleRadii{};
+    static std::array<ImVec2, 3> g_quickDrawSettingsToggleCenters{};
+    static std::array<float, 3> g_quickDrawSettingsToggleRadii{};
     static ImVec2 g_quickDrawSettingsStyleMin{};
     static ImVec2 g_quickDrawSettingsStyleMax{};
     static ImVec2 g_quickDrawSettingsSizeMin{};
@@ -1037,6 +1037,8 @@ namespace Menu
         RadialSide side = RadialSide::Left);
     static void DrawSettingsDragQuickDrawIndicator(
         ImDrawList* draw, const ImVec2& position, float radius);
+    static ImVec2 GetSettingsBagCenter();
+    static float GetSettingsBagExpandedRadius();
 
     // Eventos recebidos pelo InputSink.
     // Serão processados dentro do DrawSettingsMenu().
@@ -3022,6 +3024,7 @@ namespace Menu
     std::vector<RadialItem> g_topItems;
     std::vector<RadialItem> g_bottomItems;
     std::vector<RadialItem> g_sideItems;
+    std::vector<RadialItem> g_bagItems;
 
     
 
@@ -3064,6 +3067,31 @@ namespace Menu
         RadialItemAnimation,
         RadialAnimKeyHash
     > g_itemAnimCache;
+
+    // Estado exclusivamente visual da bolsa do Hub. Não é serializado:
+    // cada sessão deixa os itens se acomodarem livremente de novo, enquanto a
+    // lista e sua identidade continuam persistidas normalmente.
+    struct SettingsBagVisual
+    {
+        ImVec2 position{};
+        ImVec2 velocity{};
+        ImVec2 entryStart{};
+        float hoverT = 0.0f;
+        float entryT = 1.0f;
+        float entryStartRadius = 17.0f;
+        bool entering = false;
+        bool initialized = false;
+    };
+    static std::unordered_map<RadialAnimKey, SettingsBagVisual, RadialAnimKeyHash>
+        g_settingsBagVisuals;
+    static float g_settingsBagExpandT = 0.0f;
+    // O valor salvo pelo scroll é o alvo. Este raio separado é apenas a
+    // apresentação e usa uma mola amortecida para não mudar em degraus.
+    static float g_settingsBagAnimatedExpandedRadius = 0.0f;
+    static float g_settingsBagRadiusVelocity = 0.0f;
+    static bool g_settingsBagRadiusInitialized = false;
+    static bool g_settingsBagMoving = false;
+    static ImVec2 g_settingsBagMoveOffset{};
 
     struct PendingNormalWeaponEquip
     {
@@ -4336,6 +4364,29 @@ namespace Menu
 
     bool SettingsMouseDown()
     {
+        // Mover a bolsa só é permitido ao clicar no espaço vazio dela já
+        // aberto. Clicar sobre uma bolinha continua iniciando o drag normal
+        // do item, sem disputar o gesto com a própria bolsa.
+        if (g_settingsBagExpandT > 0.90f && !g_settingsDrag.active)
+        {
+            const ImVec2 bagCenter = GetSettingsBagCenter();
+            const float bagRadius = GetSettingsBagExpandedRadius();
+            const float dx = g_settingsMousePos.x - bagCenter.x;
+            const float dy = g_settingsMousePos.y - bagCenter.y;
+            if (dx * dx + dy * dy <= bagRadius * bagRadius)
+            {
+                const auto* hovered = GetSettingsHoveredHitbox(g_settingsMousePos);
+                if (!hovered || hovered->side != RadialSide::Bag)
+                {
+                    g_settingsBagMoving = true;
+                    g_settingsBagMoveOffset = ImVec2(
+                        bagCenter.x - g_settingsMousePos.x,
+                        bagCenter.y - g_settingsMousePos.y);
+                    return true;
+                }
+            }
+        }
+
         if (g_settingsSection == SettingsSection::Settings)
         {
             if (g_settingsMousePos.x >= g_settingsScrollbarHitbox.min.x &&
@@ -4734,6 +4785,13 @@ namespace Menu
     void SettingsMouseUp()
     {
         g_previewLayoutButtonHeld = false;
+
+        if (g_settingsBagMoving)
+        {
+            g_settingsBagMoving = false;
+            Config::SaveConfig();
+            return;
+        }
 
         // O seletor de cor acompanha o cursor somente enquanto o botão está
         // realmente pressionado. Sem esta liberação, o marcador continuava
@@ -5967,10 +6025,18 @@ namespace Menu
         case RadialSide::Bottom:
             return &g_bottomItems;
 
+        case RadialSide::Bag:
+            return &g_bagItems;
+
         default:
             return nullptr;
         }
     }
+
+    // Declarada aqui porque os destinos de drag precisam reconhecê-la antes
+    // de o painel INFORMATION ser calculado mais abaixo no arquivo.
+    static ImVec2 GetSettingsBagCenter();
+    static float GetSettingsBagExpandedRadius();
 
 
     static void RegisterSettingsItem(
@@ -6207,6 +6273,12 @@ namespace Menu
         const ImVec2& screen)
     {
         (void)screen;
+        const ImVec2 bagCenter = GetSettingsBagCenter();
+        const float bagDropRadius = GetSettingsBagExpandedRadius();
+        const float bagDx = mouse.x - bagCenter.x;
+        const float bagDy = mouse.y - bagCenter.y;
+        if (bagDx * bagDx + bagDy * bagDy <= bagDropRadius * bagDropRadius)
+            return RadialSide::Bag;
         const WheelLayout layout = GetWheelLayout();
         const ImVec2 leftCenter = layout.leftRadial;
         const ImVec2 topCenter = layout.topRadial;
@@ -6389,6 +6461,12 @@ namespace Menu
             return -1;
 
         const int total = static_cast<int>(list->size());
+
+        // A bolsa não tem ordem espacial persistente: as bolinhas recebem
+        // posições livres e se acomodam por repulsão. Inserir no fim evita
+        // reordenar visualmente os demais itens.
+        if (side == RadialSide::Bag)
+            return total;
 
         if (total == 0)
             return 0;
@@ -6643,6 +6721,24 @@ namespace Menu
             targetList->begin() + insertIndex,
             std::move(movedItem)
         );
+
+        // A entrada na bolsa preserva visualmente o item que estava no
+        // cursor: ele viaja até o centro e reduz até o tamanho das bolinhas
+        // internas antes de participar da física livre da bolsa.
+        if (targetSide == RadialSide::Bag)
+        {
+            const RadialAnimKey key{ drag.form, drag.uniqueID, drag.hasUniqueID };
+            auto& visual = g_settingsBagVisuals[key];
+            const ItemVisualStyle sourceStyle = GetItemVisualStyle(drag.sourceSide);
+            visual.position = drag.position;
+            visual.entryStart = drag.position;
+            visual.velocity = ImVec2(0.0f, 0.0f);
+            visual.entryT = 0.0f;
+            visual.entryStartRadius = 34.0f * (sourceStyle.generalSize * 0.01f) *
+                (sourceStyle.slotSize * 0.01f);
+            visual.entering = true;
+            visual.initialized = true;
+        }
         
         seedAnimationAtDrop(drag.position, targetSide);
         
@@ -6809,6 +6905,9 @@ namespace Menu
             return true;
 
         if (removeFrom(g_bottomItems))
+            return true;
+
+        if (removeFrom(g_bagItems))
             return true;
 
         return false;
@@ -7126,6 +7225,46 @@ namespace Menu
                 g_settingsMousePos
             );
 
+        // A bolsa é desenhada após este processamento para que o drop possa
+        // começar na mesma frame. Suas hitboxes, portanto, não estão na
+        // coleção comum neste ponto. Reconstituímos somente o hover a partir
+        // das posições visuais persistentes: isso devolve preview e drag sem
+        // reintroduzir a frame vazia na animação de entrada.
+        SettingsItemHitbox bagHovered{};
+        if (!hovered && g_settingsBagExpandT > 0.002f)
+        {
+            float closestDistanceSq = FLT_MAX;
+            for (int index = 0; index < static_cast<int>(g_bagItems.size()); ++index)
+            {
+                const RadialItem& item = g_bagItems[static_cast<std::size_t>(index)];
+                if (!item.form)
+                    continue;
+
+                const RadialAnimKey key{ item.form, item.uniqueID, item.hasUniqueID };
+                const auto visualIt = g_settingsBagVisuals.find(key);
+                if (visualIt == g_settingsBagVisuals.end() || visualIt->second.entering)
+                    continue;
+
+                const SettingsBagVisual& visual = visualIt->second;
+                const float radius = 17.0f * (1.0f + visual.hoverT);
+                const float dx = g_settingsMousePos.x - visual.position.x;
+                const float dy = g_settingsMousePos.y - visual.position.y;
+                const float distanceSq = dx * dx + dy * dy;
+                if (distanceSq > radius * radius || distanceSq >= closestDistanceSq)
+                    continue;
+
+                closestDistanceSq = distanceSq;
+                bagHovered.form = item.form;
+                bagHovered.uniqueID = item.uniqueID;
+                bagHovered.hasUniqueID = item.hasUniqueID;
+                bagHovered.side = RadialSide::Bag;
+                bagHovered.index = index;
+                bagHovered.position = visual.position;
+                bagHovered.radius = radius;
+                hovered = &bagHovered;
+            }
+        }
+
         g_settingsHoveredItem =
             hovered ? hovered->form : nullptr;
 
@@ -7200,19 +7339,33 @@ namespace Menu
             g_settingsDrag.position;
 
         const ItemVisualStyle style = GetItemVisualStyle(g_settingsDrag.sourceSide);
-        const float radius = 34.0f * (style.generalSize * 0.01f) *
+        const float fullRadius = 34.0f * (style.generalSize * 0.01f) *
             (style.slotSize * 0.01f);
+        float radius = fullRadius;
+
+        // Ao sair da bolsa, o item começa do tamanho interno dela e cresce
+        // apenas enquanto se afasta do círculo. Assim não há salto de escala
+        // no instante em que o drag é iniciado.
+        if (g_settingsDrag.sourceSide == RadialSide::Bag)
+        {
+            const ImVec2 bagCenter = GetSettingsBagCenter();
+            const float dx = position.x - bagCenter.x;
+            const float dy = position.y - bagCenter.y;
+            float t = std::clamp(std::sqrt(dx * dx + dy * dy) / 96.0f, 0.0f, 1.0f);
+            t = t * t * (3.0f - 2.0f * t);
+            radius = 17.0f + (fullRadius - 17.0f) * t;
+        }
 
         // ============================================================
         // FUNDO SUAVE
         // ============================================================
 
-        draw->AddCircleFilled(
-            position,
-            radius + 5.0f,
-            IM_COL32(255, 255, 255, 35),
-            48
-        );
+        //draw->AddCircleFilled(
+        //    position,
+        //    radius + 5.0f,
+        //    IM_COL32(255, 255, 255, 35),
+        //    48
+        //);
 
         //draw->AddCircleFilled(
         //    position,
@@ -7283,6 +7436,282 @@ namespace Menu
         // Mantém o mesmo indicador de Quick Draw do slot enquanto a instância
         // está sendo arrastada, sem reiniciar sua órbita nem sua cauda.
         DrawSettingsDragQuickDrawIndicator(draw, position, radius);
+    }
+
+    // Bolsa de itens do Hub. Diferente de um radial, seus slots não possuem
+    // ângulo nem ordem visual: cada item recebe velocidade própria e a força
+    // de repulsão impede sobreposição dentro do círculo expandido.
+    static void DrawSettingsItemBag(float alpha, float deltaTime)
+    {
+        ImDrawList* draw = ImGui::GetForegroundDrawList();
+        if (!draw)
+            return;
+
+        constexpr float collapsedRadius = 23.0f;
+        const float expandedRadiusTarget = GetSettingsBagExpandedRadius();
+        if (!g_settingsBagRadiusInitialized)
+        {
+            g_settingsBagAnimatedExpandedRadius = expandedRadiusTarget;
+            g_settingsBagRadiusInitialized = true;
+        }
+
+        // Mola amortecida: cada notch do wheel altera somente o alvo. O
+        // contorno acelera, freia e alcança o novo raio sem teletransportar.
+        const float animationDt = std::min(deltaTime, 0.050f);
+        const float radiusDelta = expandedRadiusTarget - g_settingsBagAnimatedExpandedRadius;
+        g_settingsBagRadiusVelocity += radiusDelta * 280.0f * animationDt;
+        g_settingsBagRadiusVelocity *= std::exp(-24.0f * animationDt);
+        g_settingsBagAnimatedExpandedRadius += g_settingsBagRadiusVelocity * animationDt;
+        if (std::abs(radiusDelta) < 0.05f && std::abs(g_settingsBagRadiusVelocity) < 0.05f)
+        {
+            g_settingsBagAnimatedExpandedRadius = expandedRadiusTarget;
+            g_settingsBagRadiusVelocity = 0.0f;
+        }
+
+        const float expandedRadius = g_settingsBagAnimatedExpandedRadius;
+        ImVec2 center = GetSettingsBagCenter();
+
+        // Arrastar a área vazia da bolsa aberta muda a posição persistida.
+        // O raio inteiro respeita as quatro bordas do viewport.
+        if (g_settingsBagMoving)
+        {
+            const ImVec2 viewport = ImGui::GetIO().DisplaySize;
+            const ImVec2 requested(g_settingsMousePos.x + g_settingsBagMoveOffset.x,
+                g_settingsMousePos.y + g_settingsBagMoveOffset.y);
+            center.x = std::clamp(requested.x, expandedRadius,
+                std::max(expandedRadius, viewport.x - expandedRadius));
+            center.y = std::clamp(requested.y, expandedRadius,
+                std::max(expandedRadius, viewport.y - expandedRadius));
+            Config::g_itemBagPositionX = center.x / std::max(viewport.x, 1.0f) * 100.0f;
+            Config::g_itemBagPositionY = center.y / std::max(viewport.y, 1.0f) * 100.0f;
+        }
+        const float hoverRadius = std::max(collapsedRadius, expandedRadius * 0.92f);
+        const float dx = g_settingsMousePos.x - center.x;
+        const float dy = g_settingsMousePos.y - center.y;
+        const bool pointerNear = dx * dx + dy * dy <= hoverRadius * hoverRadius;
+        const bool draggingNear = g_settingsDrag.active && pointerNear;
+        const bool shouldExpand = pointerNear || draggingNear;
+        g_settingsBagExpandT = AnimateSettingsValue(g_settingsBagExpandT,
+            shouldExpand ? 1.0f : 0.0f, 7.5f, deltaTime);
+
+        float bagRadius = collapsedRadius +
+            (expandedRadius - collapsedRadius) * g_settingsBagExpandT;
+
+        const float itemAlpha = alpha * g_settingsBagExpandT;
+        const ImU32 outline = FadeColor(IM_COL32(255, 255, 255,
+            static_cast<int>(76.0f + 74.0f * g_settingsBagExpandT)), alpha);
+
+        // A bolsa fechada permanece deliberadamente vazia e discreta.
+        draw->AddCircle(center, bagRadius, outline, 56,
+            1.3f + g_settingsBagExpandT * 0.7f);
+
+        if (g_settingsBagExpandT <= 0.002f)
+            return;
+
+        const float itemRadius = 17.0f;
+        const float usableRadius = std::max(8.0f, bagRadius - itemRadius - 8.0f);
+        std::unordered_set<RadialAnimKey, RadialAnimKeyHash> liveKeys;
+        liveKeys.reserve(g_bagItems.size());
+
+        for (std::size_t index = 0; index < g_bagItems.size(); ++index)
+        {
+            const RadialItem& item = g_bagItems[index];
+            if (!item.form)
+                continue;
+
+            const RadialAnimKey key{ item.form, item.uniqueID, item.hasUniqueID };
+            liveKeys.insert(key);
+            auto& visual = g_settingsBagVisuals[key];
+            if (!visual.initialized)
+            {
+                const float seed = static_cast<float>((item.form->GetFormID() * 37u +
+                    static_cast<std::uint32_t>(item.uniqueID) * 13u + index * 71u) % 360u) *
+                    (PI / 180.0f);
+                const float distance = 12.0f + std::fmod(static_cast<float>(index * 29u),
+                    std::max(14.0f, usableRadius * 0.54f));
+                // Nasce no centro e chega suavemente à posição livre.
+                visual.position = center;
+                visual.velocity = ImVec2(std::cos(seed) * distance * 1.8f,
+                    std::sin(seed) * distance * 1.8f);
+                visual.initialized = true;
+            }
+        }
+
+        // Hover é uma transição própria de cada bolinha. Atualizá-lo antes
+        // da física também deixa a repulsão considerar o tamanho expandido.
+        for (const auto& item : g_bagItems)
+        {
+            if (!item.form)
+                continue;
+            const RadialAnimKey key{ item.form, item.uniqueID, item.hasUniqueID };
+            auto& visual = g_settingsBagVisuals[key];
+            const float hoverDx = g_settingsMousePos.x - visual.position.x;
+            const float hoverDy = g_settingsMousePos.y - visual.position.y;
+            const bool hovered = !visual.entering &&
+                hoverDx * hoverDx + hoverDy * hoverDy < itemRadius * itemRadius;
+            visual.hoverT = AnimateSettingsValue(visual.hoverT,
+                hovered ? 1.0f : 0.0f, 11.0f, deltaTime);
+        }
+
+        // Integração leve, com repulsão simétrica entre todas as bolinhas.
+        for (std::size_t i = 0; i < g_bagItems.size(); ++i)
+        {
+            const auto& item = g_bagItems[i];
+            if (!item.form) continue;
+            const RadialAnimKey key{ item.form, item.uniqueID, item.hasUniqueID };
+            auto& a = g_settingsBagVisuals[key];
+            if (a.entering)
+                continue;
+            for (std::size_t j = i + 1; j < g_bagItems.size(); ++j)
+            {
+                const auto& other = g_bagItems[j];
+                if (!other.form) continue;
+                const RadialAnimKey otherKey{ other.form, other.uniqueID, other.hasUniqueID };
+                auto& b = g_settingsBagVisuals[otherKey];
+                if (b.entering)
+                    continue;
+                float ddx = b.position.x - a.position.x;
+                float ddy = b.position.y - a.position.y;
+                float distanceSq = ddx * ddx + ddy * ddy;
+                if (distanceSq < 0.001f)
+                {
+                    ddx = 1.0f;
+                    ddy = 0.0f;
+                    distanceSq = 1.0f;
+                }
+                const float distance = std::sqrt(distanceSq);
+                const float aRadius = itemRadius * (1.0f + a.hoverT);
+                const float bRadius = itemRadius * (1.0f + b.hoverT);
+                const float minimumDistance = (aRadius + bRadius) * 1.09f;
+                if (distance < minimumDistance)
+                {
+                    const float push = (minimumDistance - distance) * 7.5f;
+                    const float nx = ddx / distance;
+                    const float ny = ddy / distance;
+                    a.velocity.x -= nx * push * deltaTime;
+                    a.velocity.y -= ny * push * deltaTime;
+                    b.velocity.x += nx * push * deltaTime;
+                    b.velocity.y += ny * push * deltaTime;
+                }
+            }
+        }
+
+        for (std::size_t index = 0; index < g_bagItems.size(); ++index)
+        {
+            const RadialItem& item = g_bagItems[index];
+            if (!item.form) continue;
+            const RadialAnimKey key{ item.form, item.uniqueID, item.hasUniqueID };
+            auto& visual = g_settingsBagVisuals[key];
+            if (visual.entering)
+            {
+                visual.entryT = std::min(1.0f, visual.entryT + deltaTime / 0.34f);
+                const float eased = visual.entryT * visual.entryT *
+                    (3.0f - 2.0f * visual.entryT);
+                visual.position = ImVec2(
+                    visual.entryStart.x + (center.x - visual.entryStart.x) * eased,
+                    visual.entryStart.y + (center.y - visual.entryStart.y) * eased);
+                if (visual.entryT >= 1.0f)
+                {
+                    const float seed = static_cast<float>((item.form->GetFormID() * 37u +
+                        static_cast<std::uint32_t>(item.uniqueID) * 13u + index * 71u) % 360u) *
+                        (PI / 180.0f);
+                    visual.velocity = ImVec2(std::cos(seed) * 28.0f, std::sin(seed) * 28.0f);
+                    visual.entering = false;
+                }
+            }
+            else
+            {
+                const float wobble = static_cast<float>(index) * 1.93f +
+                    static_cast<float>(ImGui::GetTime()) * 0.72f;
+                visual.velocity.x += std::cos(wobble) * 4.0f * deltaTime;
+                visual.velocity.y += std::sin(wobble * 1.31f) * 4.0f * deltaTime;
+                visual.velocity.x *= std::pow(0.18f, deltaTime);
+                visual.velocity.y *= std::pow(0.18f, deltaTime);
+                visual.position.x += visual.velocity.x * deltaTime;
+                visual.position.y += visual.velocity.y * deltaTime;
+
+                float px = visual.position.x - center.x;
+                float py = visual.position.y - center.y;
+                const float distance = std::sqrt(px * px + py * py);
+                if (distance > usableRadius)
+                {
+                    const float scale = usableRadius / std::max(distance, 0.001f);
+                    visual.position = ImVec2(center.x + px * scale, center.y + py * scale);
+                    visual.velocity.x *= -0.36f;
+                    visual.velocity.y *= -0.36f;
+                }
+            }
+
+            const float entryRadius = visual.entering
+                ? visual.entryStartRadius + (itemRadius - visual.entryStartRadius) *
+                    (visual.entryT * visual.entryT * (3.0f - 2.0f * visual.entryT))
+                : itemRadius;
+            const float radius = entryRadius * (1.0f + visual.hoverT);
+            const bool hovered = visual.hoverT > 0.01f;
+            DrawEquippedItemBackground(draw, item.form, item.uniqueID, item.hasUniqueID,
+                visual.position, radius, itemAlpha, RadialSide::Bag);
+            draw->AddCircle(visual.position, radius,
+                FadeColor(IM_COL32(235, 230, 215, hovered ? 225 : 145), itemAlpha),
+                28, hovered ? 1.7f : 1.15f);
+            if (auto* icon = ItemIcon::Get(item.form))
+            {
+                const float iconRadius = radius * 0.58f;
+                draw->AddImage(reinterpret_cast<ImTextureID>(icon),
+                    ImVec2(visual.position.x - iconRadius, visual.position.y - iconRadius),
+                    ImVec2(visual.position.x + iconRadius, visual.position.y + iconRadius),
+                    ImVec2(0.0f, 0.0f), ImVec2(1.0f, 1.0f),
+                    MakeGameplayIconColor(item, static_cast<int>(235.0f * itemAlpha),
+                        1.0f, true, RadialSide::Bag));
+            }
+            RegisterSettingsItem(item.form, RadialSide::Bag, static_cast<int>(index),
+                visual.position, radius);
+        }
+
+        for (auto it = g_settingsBagVisuals.begin(); it != g_settingsBagVisuals.end();)
+        {
+            if (!liveKeys.contains(it->first)) it = g_settingsBagVisuals.erase(it);
+            else ++it;
+        }
+    }
+
+    static void DrawInventoryItemBag(float alpha)
+    {
+        ImDrawList* draw = ImGui::GetForegroundDrawList();
+        if (!draw)
+            return;
+        const ImVec2 center = GetSettingsBagCenter();
+        const float dx = g_inventoryDraggedPosition.x - center.x;
+        const float dy = g_inventoryDraggedPosition.y - center.y;
+        const bool nearby = dx * dx + dy * dy <=
+            GetSettingsBagExpandedRadius() * GetSettingsBagExpandedRadius();
+        const float radius = nearby ? GetSettingsBagExpandedRadius() : 23.0f;
+        draw->AddCircle(center, radius,
+            FadeColor(IM_COL32(255, 255, 255, nearby ? 135 : 76), alpha), 56,
+            nearby ? 1.8f : 1.3f);
+        if (!nearby)
+            return;
+
+        const float orbit = std::max(12.0f, radius - 28.0f);
+        const int count = static_cast<int>(g_bagItems.size());
+        for (int i = 0; i < count; ++i)
+        {
+            const auto& item = g_bagItems[static_cast<std::size_t>(i)];
+            if (!item.form) continue;
+            const float angle = (PI * 2.0f * static_cast<float>(i) /
+                std::max(count, 1)) + static_cast<float>(ImGui::GetTime()) * 0.20f;
+            const ImVec2 pos(center.x + std::cos(angle) * orbit * 0.55f,
+                center.y + std::sin(angle) * orbit * 0.55f);
+            draw->AddCircle(pos, 14.0f,
+                FadeColor(IM_COL32(235, 230, 215, 170), alpha), 24, 1.1f);
+            if (auto* icon = ItemIcon::Get(item.form))
+            {
+                draw->AddImage(reinterpret_cast<ImTextureID>(icon),
+                    ImVec2(pos.x - 8.0f, pos.y - 8.0f),
+                    ImVec2(pos.x + 8.0f, pos.y + 8.0f),
+                    ImVec2(0.0f, 0.0f), ImVec2(1.0f, 1.0f),
+                    FadeColor(MakeGameplayIconColor(item, 220), alpha));
+            }
+        }
     }
 
     //=======================
@@ -8581,6 +9010,22 @@ namespace Menu
 
         const ImVec2 position = g_inventoryDraggedPosition;
 
+        // A bolsa existe também no Inventory, mas não abre como radial no
+        // gameplay. É um alvo circular simples, antes dos demais radiais.
+        {
+            const ImVec2 bagCenter = GetSettingsBagCenter();
+            const float bagRadius = GetSettingsBagExpandedRadius();
+            const float dx = position.x - bagCenter.x;
+            const float dy = position.y - bagCenter.y;
+            if (dx * dx + dy * dy <= bagRadius * bagRadius)
+            {
+                result.side = RadialSide::Bag;
+                result.slot = static_cast<int>(g_bagItems.size());
+                result.valid = true;
+                return result;
+            }
+        }
+
         // No radial custom o alvo real pode estar fora do círculo principal.
         // Procura primeiro o slot físico mais próximo em todo o circuito,
         // incluindo os excedentes, e converte seu ordinal para o índice real
@@ -8946,6 +9391,9 @@ namespace Menu
         case RadialSide::Bottom:
             return GetBottomSlotPosition(target.slot);
 
+        case RadialSide::Bag:
+            return GetSettingsBagCenter();
+
         default:
             return g_inventoryDraggedPosition;
         }
@@ -9101,6 +9549,13 @@ namespace Menu
             g_draggedInventoryHasUniqueID
         );
 
+        removeItem(
+            g_bagItems,
+            g_draggedInventoryItem,
+            g_draggedInventoryUniqueID,
+            g_draggedInventoryHasUniqueID
+        );
+
         // ============================================================
         // CRIA O ITEM
         // ============================================================
@@ -9150,6 +9605,10 @@ namespace Menu
         case RadialSide::Left:
         case RadialSide::Right:
             targetList = &g_sideItems;
+            break;
+
+        case RadialSide::Bag:
+            targetList = &g_bagItems;
             break;
 
         default:
@@ -10470,6 +10929,7 @@ namespace Menu
         pruneList(g_topItems);
         pruneList(g_bottomItems);
         pruneList(g_sideItems);
+        pruneList(g_bagItems);
     }
 
     // ============================================================
@@ -15031,7 +15491,8 @@ namespace Menu
 
         return contains(g_sideItems) ||
             contains(g_topItems) ||
-            contains(g_bottomItems);
+            contains(g_bottomItems) ||
+            contains(g_bagItems);
     }
 
     void HandleInventoryKeyPressed()
@@ -15707,7 +16168,8 @@ namespace Menu
         };
         if (auto* item = find(g_sideItems)) return item;
         if (auto* item = find(g_topItems)) return item;
-        return find(g_bottomItems);
+        if (auto* item = find(g_bottomItems)) return item;
+        return find(g_bagItems);
     }
 
     static bool BuildQuickDrawHotkeyPreviewItem(
@@ -16220,21 +16682,37 @@ namespace Menu
                 // dela pode cancelar com segurança, sem desfazer equipamento.
                 g_quickDrawHotkeyDirectPreviewActive = true;
                 g_quickDrawHotkeyDirectPreviewAlpha = 0.0f;
-                const ImVec2 center = Resolution::GetVirtualCenter();
-                ItemPreview::SetHudPosition(center);
-                ItemPreview::SetSizeScale(1.0f);
-                ItemPreview::SetOpacity(0.0f);
-                ItemPreview::SilentPreviewMenu::Open();
-                ItemPreview::Show(item->form, item->uniqueID, item->hasUniqueID);
+                if (Config::g_itemPreviewDuringShortcuts)
+                {
+                    const ImVec2 center = Resolution::GetVirtualCenter();
+                    ItemPreview::SetHudPosition(center);
+                    ItemPreview::SetSizeScale(1.0f);
+                    ItemPreview::SetOpacity(0.0f);
+                    ItemPreview::SilentPreviewMenu::Open();
+                    ItemPreview::Show(item->form, item->uniqueID, item->hasUniqueID);
+                }
+                else
+                {
+                    ItemPreview::Hide();
+                    ItemPreview::SilentPreviewMenu::Close();
+                }
                 return true;
             }
             g_quickDrawHotkeyHandSelectionActive = true;
-            const ImVec2 center = Resolution::GetVirtualCenter();
-            ItemPreview::SetHudPosition(center);
-            ItemPreview::SetSizeScale(1.0f);
-            CancelGameplayPreviewFadeOut();
-            ItemPreview::SilentPreviewMenu::Open();
-            ItemPreview::Show(item->form, item->uniqueID, item->hasUniqueID);
+            if (Config::g_itemPreviewDuringShortcuts)
+            {
+                const ImVec2 center = Resolution::GetVirtualCenter();
+                ItemPreview::SetHudPosition(center);
+                ItemPreview::SetSizeScale(1.0f);
+                CancelGameplayPreviewFadeOut();
+                ItemPreview::SilentPreviewMenu::Open();
+                ItemPreview::Show(item->form, item->uniqueID, item->hasUniqueID);
+            }
+            else
+            {
+                ItemPreview::Hide();
+                ItemPreview::SilentPreviewMenu::Close();
+            }
             return true;
         }
         return false;
@@ -16807,7 +17285,7 @@ namespace Menu
         const float sliderBlockHeight = labelToTrack + 30.0f;
         // Reserva espaço ao fim: o scrollbar já responde à roda hoje e essa
         // área será ocupada naturalmente quando novos controles entrarem.
-        const float contentHeight = 14.0f + toggleRowHeight * 2.0f + 12.0f +
+        const float contentHeight = 14.0f + toggleRowHeight * 3.0f + 12.0f +
             sliderBlockHeight * 3.0f + 18.0f + 72.0f;
         g_quickDrawSettingsMaxScroll = std::max(0.0f, contentHeight - viewportHeight);
         g_quickDrawSettingsScroll = std::clamp(g_quickDrawSettingsScroll,
@@ -16847,9 +17325,11 @@ namespace Menu
                 fadedWhite, label, alpha);
             y += toggleRowHeight;
         };
-        drawToggle(0, Config::g_drawEffectsGameplay,
+        drawToggle(0, Config::g_itemPreviewDuringShortcuts,
+            Language::Get("item_preview_during_shortcuts").c_str());
+        drawToggle(1, Config::g_drawEffectsGameplay,
             Language::Get("draw_effects_gameplay").c_str());
-        drawToggle(1, Config::g_drawEffectsEditor,
+        drawToggle(2, Config::g_drawEffectsEditor,
             Language::Get("draw_effects_editor").c_str());
         y += 12.0f;
 
@@ -17656,6 +18136,8 @@ namespace Menu
                 if (dx * dx + dy * dy <= hitRadius * hitRadius)
                 {
                     if (i == 0)
+                        Config::g_itemPreviewDuringShortcuts = !Config::g_itemPreviewDuringShortcuts;
+                    else if (i == 1)
                         Config::g_drawEffectsGameplay = !Config::g_drawEffectsGameplay;
                     else
                         Config::g_drawEffectsEditor = !Config::g_drawEffectsEditor;
@@ -22645,6 +23127,7 @@ namespace Menu
 
         DrawTopRadialMenu(topCenter, static_cast<int>(g_topItems.size()), topAlpha);
         DrawBottomRadialMenu(bottomCenter, static_cast<int>(g_bottomItems.size()), bottomAlpha);
+        DrawInventoryItemBag(g_globalAlpha);
     }
 
 
@@ -24085,6 +24568,51 @@ namespace Menu
             panel.max.y - panel.min.y;
 
         return panel;
+    }
+
+    // Bolsa: imediatamente à esquerda do INFORMATION e alinhada com o
+    // desbloqueio do mouse do radial Bottom. A posição deriva do painel para
+    // continuar correta com fonte, resolução e layout diferentes.
+    static ImVec2 GetSettingsBagCenter()
+    {
+        const ImVec2 screen = ImGui::GetIO().DisplaySize;
+        // Padrão: preserva o X original ao lado do INFORMATION, 30 px mais
+        // à esquerda; somente a altura passa a ser o centro da tela.
+        const SettingsInfoPanel panel = GetSettingsInfoPanel(screen);
+        const ImVec2 defaultCenter(panel.min.x - 72.0f, screen.y * 0.5f);
+        if (Config::g_itemBagPositionX < 0.0f ||
+            Config::g_itemBagPositionY < 0.0f)
+            return defaultCenter;
+
+        return ImVec2(screen.x * Config::g_itemBagPositionX * 0.01f,
+            screen.y * Config::g_itemBagPositionY * 0.01f);
+    }
+
+    static float GetSettingsBagExpandedRadius()
+    {
+        return 118.0f * std::clamp(Config::g_itemBagExpandedScale, 0.5f, 3.0f);
+    }
+
+    bool ScrollSettingsItemBag(int direction)
+    {
+        if (!SettingsMenu::WheelSettingsMenu::IsOpen() ||
+            g_settingsBagExpandT < 0.80f || direction == 0)
+            return false;
+
+        const ImVec2 center = GetSettingsBagCenter();
+        const float radius = GetSettingsBagExpandedRadius();
+        const float dx = g_settingsMousePos.x - center.x;
+        const float dy = g_settingsMousePos.y - center.y;
+        if (dx * dx + dy * dy > radius * radius)
+            return false;
+
+        // direction segue o padrão do InputSink: botão 8 sobe (+1), 9
+        // desce (-1). A escala só altera o raio aberto da bolsa.
+        Config::g_itemBagExpandedScale = std::clamp(
+            Config::g_itemBagExpandedScale + static_cast<float>(direction) * 0.12f,
+            0.5f, 3.0f);
+        Config::SaveConfig();
+        return true;
     }
 
       
@@ -29773,6 +30301,16 @@ namespace Menu
             bottomRadialPreviewAlpha
         );
 
+        // Processa o drop depois de os radiais registrarem as hitboxes, mas
+        // antes de desenhar a bolsa. Assim, ao soltar um item sobre ela, a
+        // primeira frame da animação de entrada já é renderizada — sem um
+        // frame vazio entre o item em drag e a bolinha que encolhe.
+        ProcessSettingsEditor(dt);
+
+        // Quarto destino, exclusivo do Hub/Inventory. É desenhado antes do
+        // editor de drag para que o item carregado permaneça por cima.
+        DrawSettingsItemBag(alpha, dt);
+
         if (g_activeLayoutSlider == LayoutSlider::CenterOpacity)
         {
             const float centerPreviewAlpha =
@@ -29784,12 +30322,6 @@ namespace Menu
         }
 
         ImGui::PopStyleVar();
-
-        // ============================================================
-        // INTERAÇÃO
-        // ============================================================
-
-        ProcessSettingsEditor(dt);
 
         // Atualiza o item selecionado e o timer.
         UpdateSettingsPreviewSelection();
@@ -30483,16 +31015,19 @@ namespace Menu
         if (g_quickDrawHotkeyHandSelectionActive &&
             g_quickDrawHotkeyPendingItem.form)
         {
-            const ImVec2 center = Resolution::GetVirtualCenter();
-            ItemPreview::SetHudPosition(center);
-            ItemPreview::SetSizeScale(1.0f);
-            CancelGameplayPreviewFadeOut();
-            ItemPreview::SilentPreviewMenu::Open();
-            ItemPreview::Show(g_quickDrawHotkeyPendingItem.form,
-                g_quickDrawHotkeyPendingItem.uniqueID,
-                g_quickDrawHotkeyPendingItem.hasUniqueID);
-            DrawQuickDrawHotkeyPreviewQuantity(
-                g_quickDrawHotkeyPendingItem, 1.0f, center);
+            if (Config::g_itemPreviewDuringShortcuts)
+            {
+                const ImVec2 center = Resolution::GetVirtualCenter();
+                ItemPreview::SetHudPosition(center);
+                ItemPreview::SetSizeScale(1.0f);
+                CancelGameplayPreviewFadeOut();
+                ItemPreview::SilentPreviewMenu::Open();
+                ItemPreview::Show(g_quickDrawHotkeyPendingItem.form,
+                    g_quickDrawHotkeyPendingItem.uniqueID,
+                    g_quickDrawHotkeyPendingItem.hasUniqueID);
+                DrawQuickDrawHotkeyPreviewQuantity(
+                    g_quickDrawHotkeyPendingItem, 1.0f, center);
+            }
             return;
         }
         if (g_quickDrawHotkeyDirectPreviewActive &&
@@ -30501,18 +31036,21 @@ namespace Menu
             g_quickDrawHotkeyDirectPreviewAlpha = std::min(1.0f,
                 g_quickDrawHotkeyDirectPreviewAlpha +
                     std::clamp(deltaTime, 0.0f, 0.05f) / 0.18f);
-            const ImVec2 center = Resolution::GetVirtualCenter();
-            ItemPreview::SetHudPosition(center);
-            ItemPreview::SetSizeScale(1.0f);
-            ItemPreview::SilentPreviewMenu::Open();
-            ItemPreview::Show(g_quickDrawHotkeyPendingItem.form,
-                g_quickDrawHotkeyPendingItem.uniqueID,
-                g_quickDrawHotkeyPendingItem.hasUniqueID);
-            ItemPreview::SetOpacity(g_quickDrawHotkeyDirectPreviewAlpha);
-            DrawQuickDrawHotkeyPreviewQuantity(
-                g_quickDrawHotkeyPendingItem,
-                g_quickDrawHotkeyDirectPreviewAlpha,
-                center);
+            if (Config::g_itemPreviewDuringShortcuts)
+            {
+                const ImVec2 center = Resolution::GetVirtualCenter();
+                ItemPreview::SetHudPosition(center);
+                ItemPreview::SetSizeScale(1.0f);
+                ItemPreview::SilentPreviewMenu::Open();
+                ItemPreview::Show(g_quickDrawHotkeyPendingItem.form,
+                    g_quickDrawHotkeyPendingItem.uniqueID,
+                    g_quickDrawHotkeyPendingItem.hasUniqueID);
+                ItemPreview::SetOpacity(g_quickDrawHotkeyDirectPreviewAlpha);
+                DrawQuickDrawHotkeyPreviewQuantity(
+                    g_quickDrawHotkeyPendingItem,
+                    g_quickDrawHotkeyDirectPreviewAlpha,
+                    center);
+            }
             return;
         }
         if (g_quickDrawHotkeyPreviewExitActive &&
@@ -30522,20 +31060,20 @@ namespace Menu
                 g_quickDrawHotkeyPreviewExitT + std::clamp(deltaTime, 0.0f, 0.05f) / 0.34f);
             const float eased = g_quickDrawHotkeyPreviewExitT * g_quickDrawHotkeyPreviewExitT *
                 (3.0f - 2.0f * g_quickDrawHotkeyPreviewExitT);
-            const ImVec2 center = Resolution::GetVirtualCenter();
-            ItemPreview::SetHudPosition(ImVec2(center.x +
-                (g_quickDrawHotkeyPreviewExitLeft ? -72.0f : 72.0f) * eased, center.y));
-            ItemPreview::SetSizeScale(1.0f);
-            ItemPreview::SilentPreviewMenu::Open();
-            ItemPreview::Show(g_quickDrawHotkeyPendingItem.form,
-                g_quickDrawHotkeyPendingItem.uniqueID,
-                g_quickDrawHotkeyPendingItem.hasUniqueID);
-            DrawQuickDrawHotkeyPreviewQuantity(
-                g_quickDrawHotkeyPendingItem,
-                1.0f,
-                ImVec2(center.x +
-                    (g_quickDrawHotkeyPreviewExitLeft ? -72.0f : 72.0f) * eased,
-                    center.y));
+            if (Config::g_itemPreviewDuringShortcuts)
+            {
+                const ImVec2 center = Resolution::GetVirtualCenter();
+                const ImVec2 exitPosition(center.x +
+                    (g_quickDrawHotkeyPreviewExitLeft ? -72.0f : 72.0f) * eased, center.y);
+                ItemPreview::SetHudPosition(exitPosition);
+                ItemPreview::SetSizeScale(1.0f);
+                ItemPreview::SilentPreviewMenu::Open();
+                ItemPreview::Show(g_quickDrawHotkeyPendingItem.form,
+                    g_quickDrawHotkeyPendingItem.uniqueID,
+                    g_quickDrawHotkeyPendingItem.hasUniqueID);
+                DrawQuickDrawHotkeyPreviewQuantity(
+                    g_quickDrawHotkeyPendingItem, 1.0f, exitPosition);
+            }
             if (g_quickDrawHotkeyPreviewExitT >= 1.0f)
             {
                 g_quickDrawHotkeyPreviewExitActive = false;

@@ -66,6 +66,7 @@ namespace Language
             { "show_item_quantity", "Show Item Quantity" },
             { "show_overflow_icon", "Show Icon inside Overflow" },
             { "draw_effects_gameplay", "Effects during Gameplay" },
+            { "item_preview_during_shortcuts", "Item Preview during Shortcuts" },
             { "draw_effects_editor", "Effects during Editor" },
             { "draw_edge_effect", "Edge Effect" },
             { "draw_edge_none", "None" },

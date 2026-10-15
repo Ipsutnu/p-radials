@@ -1122,7 +1122,11 @@ RE::BSEventNotifyControl InputHandler::ProcessEvent(
                         continue;
                     }
 
-                    if (!Menu::ScrollSettingsItemInfo(direction))
+                    // A bolsa recebe o notch real do InputSink antes do
+                    // painel INFORMATION e dos radiais. ImGui::MouseWheel
+                    // não é alimentado neste fluxo.
+                    if (!Menu::ScrollSettingsItemBag(direction) &&
+                        !Menu::ScrollSettingsItemInfo(direction))
                     {
                         // Mouse fora do painel:
                         // continua rolando os radiais normalmente.

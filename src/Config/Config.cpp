@@ -100,6 +100,7 @@ namespace Config
     float g_drawMarkDistance = kDefaultDrawMarkDistance;
     bool g_drawEffectsGameplay = false;
     bool g_drawEffectsEditor = true;
+    bool g_itemPreviewDuringShortcuts = true;
     int g_drawEdgeEffectStyle = 0;
     float g_drawEdgeEffectSize = kDefaultDrawEdgeEffectSize;
     float g_drawEdgeEffectOpacity = kDefaultDrawEdgeEffectOpacity;
@@ -111,6 +112,9 @@ namespace Config
     float g_bottomVerticalPosition = kDefaultBottomVerticalPosition;
     float g_topHorizontalStretch = kDefaultTopHorizontalStretch;
     float g_bottomHorizontalStretch = kDefaultBottomHorizontalStretch;
+    float g_itemBagPositionX = kDefaultItemBagPosition;
+    float g_itemBagPositionY = kDefaultItemBagPosition;
+    float g_itemBagExpandedScale = kDefaultItemBagExpandedScale;
 
     ItemPreviewLayoutConfig& GetItemPreviewLayout(ItemPreviewProfile profile)
     {
@@ -539,6 +543,7 @@ namespace Config
         if (key == "StardustEnabled") { g_stardustEnabled = ParseEnabled(value); return true; }
         if (key == "DrawEffectsGameplay") { g_drawEffectsGameplay = ParseEnabled(value); return true; }
         if (key == "DrawEffectsEditor") { g_drawEffectsEditor = ParseEnabled(value); return true; }
+        if (key == "ItemPreviewDuringShortcuts") { g_itemPreviewDuringShortcuts = ParseEnabled(value); return true; }
         if (key == "DrawEdgeEffectStyle")
         {
             try { g_drawEdgeEffectStyle = std::clamp(std::stoi(value), 0, 10); }
@@ -792,6 +797,7 @@ namespace Config
         write("StardustEnabled", g_stardustEnabled ? 1 : 0);
         write("DrawEffectsGameplay", g_drawEffectsGameplay ? 1 : 0);
         write("DrawEffectsEditor", g_drawEffectsEditor ? 1 : 0);
+        write("ItemPreviewDuringShortcuts", g_itemPreviewDuringShortcuts ? 1 : 0);
         write("DrawEdgeEffectStyle", g_drawEdgeEffectStyle);
         write("DrawEdgeEffectSize", g_drawEdgeEffectSize);
         write("DrawEdgeEffectOpacity", g_drawEdgeEffectOpacity);
@@ -1198,11 +1204,13 @@ namespace Config
                     else g_showOverflowIcon = enabled;
                 }
                 else if (key == "DrawEffectsGameplay" || key == "DrawEffectsEditor" ||
+                    key == "ItemPreviewDuringShortcuts" ||
                     key == "ShowDrawMark")
                 {
                     const bool enabled = ParseEnabled(value);
                     if (key == "DrawEffectsGameplay") g_drawEffectsGameplay = enabled;
                     else if (key == "DrawEffectsEditor") g_drawEffectsEditor = enabled;
+                    else if (key == "ItemPreviewDuringShortcuts") g_itemPreviewDuringShortcuts = enabled;
                     else { g_showDrawMark = enabled; g_drawMarkStyle = enabled ? 1 : 0; }
                 }
                 else if (key == "DrawMarkStyle")
@@ -1257,6 +1265,21 @@ namespace Config
                     {
                         // Mantem o valor padrao.
                     }
+                }
+                else if (key == "ItemBagPositionX" || key == "ItemBagPositionY" ||
+                    key == "ItemBagExpandedScale")
+                {
+                    try
+                    {
+                        const float parsed = std::stof(value);
+                        if (key == "ItemBagExpandedScale")
+                            g_itemBagExpandedScale = std::clamp(parsed, 0.5f, 3.0f);
+                        else if (key == "ItemBagPositionX")
+                            g_itemBagPositionX = std::clamp(parsed, -1.0f, 100.0f);
+                        else
+                            g_itemBagPositionY = std::clamp(parsed, -1.0f, 100.0f);
+                    }
+                    catch (...) {}
                 }
                 else if (key == "FontFamily")
                 {
@@ -1524,6 +1547,7 @@ namespace Config
         g_drawMarkDistance = kDefaultDrawMarkDistance;
         g_drawEffectsGameplay = false;
         g_drawEffectsEditor = true;
+        g_itemPreviewDuringShortcuts = true;
         g_drawEdgeEffectStyle = 0;
         g_drawEdgeEffectSize = kDefaultDrawEdgeEffectSize;
         g_drawEdgeEffectOpacity = kDefaultDrawEdgeEffectOpacity;
@@ -1535,6 +1559,9 @@ namespace Config
         g_bottomVerticalPosition = kDefaultBottomVerticalPosition;
         g_topHorizontalStretch = kDefaultTopHorizontalStretch;
         g_bottomHorizontalStretch = kDefaultBottomHorizontalStretch;
+        g_itemBagPositionX = kDefaultItemBagPosition;
+        g_itemBagPositionY = kDefaultItemBagPosition;
+        g_itemBagExpandedScale = kDefaultItemBagExpandedScale;
         Language::SetCurrent(g_language);
         SaveConfig();
     }
@@ -1694,6 +1721,7 @@ namespace Config
         SetIniValue(lines, "Layout", "DrawMarkDistance", std::to_string(g_drawMarkDistance));
         SetIniValue(lines, "Layout", "DrawEffectsGameplay", g_drawEffectsGameplay ? "1" : "0");
         SetIniValue(lines, "Layout", "DrawEffectsEditor", g_drawEffectsEditor ? "1" : "0");
+        SetIniValue(lines, "Layout", "ItemPreviewDuringShortcuts", g_itemPreviewDuringShortcuts ? "1" : "0");
         SetIniValue(lines, "Layout", "DrawEdgeEffectStyle", std::to_string(g_drawEdgeEffectStyle));
         SetIniValue(lines, "Layout", "DrawEdgeEffectSize", std::to_string(g_drawEdgeEffectSize));
         SetIniValue(lines, "Layout", "DrawEdgeEffectOpacity", std::to_string(g_drawEdgeEffectOpacity));
@@ -1704,6 +1732,9 @@ namespace Config
         SetIniValue(lines, "Layout", "BottomVerticalPosition", std::to_string(g_bottomVerticalPosition));
         SetIniValue(lines, "Layout", "TopHorizontalStretch", std::to_string(g_topHorizontalStretch));
         SetIniValue(lines, "Layout", "BottomHorizontalStretch", std::to_string(g_bottomHorizontalStretch));
+        SetIniValue(lines, "Settings", "ItemBagPositionX", std::to_string(g_itemBagPositionX));
+        SetIniValue(lines, "Settings", "ItemBagPositionY", std::to_string(g_itemBagPositionY));
+        SetIniValue(lines, "Settings", "ItemBagExpandedScale", std::to_string(g_itemBagExpandedScale));
         SetIniValue(lines, "Language", "Selected", g_language);
         RemoveIniSection(lines, "Layout");
         RemoveIniKey(lines, "Settings", "ShowItemPreviewGameplay");
