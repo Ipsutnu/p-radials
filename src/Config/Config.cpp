@@ -104,7 +104,7 @@ namespace Config
     int g_drawEdgeEffectStyle = 0;
     float g_drawEdgeEffectSize = kDefaultDrawEdgeEffectSize;
     float g_drawEdgeEffectOpacity = kDefaultDrawEdgeEffectOpacity;
-    int g_drawMarkStyle = 0;
+    int g_drawMarkStyle = 1;
     bool g_showDrawMark = true;
     int g_fontFamily = 0;
     float g_sideRadialPosition = kDefaultSideRadialPosition;
@@ -1552,7 +1552,7 @@ namespace Config
         g_drawEdgeEffectSize = kDefaultDrawEdgeEffectSize;
         g_drawEdgeEffectOpacity = kDefaultDrawEdgeEffectOpacity;
         g_showDrawMark = true;
-        g_drawMarkStyle = 0;
+        g_drawMarkStyle = 1;
         g_fontFamily = 0;
         g_sideRadialPosition = kDefaultSideRadialPosition;
         g_topVerticalPosition = kDefaultTopVerticalPosition;
