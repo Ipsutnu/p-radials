@@ -44,6 +44,7 @@ namespace Language
             { "keyboard_filter_potions", "Potions" },
             { "keyboard_filter_books", "Books" },
             { "keyboard_filter_other", "Other" },
+            { "show_keyboard", "Show Keyboard" },
             { "require_wheel_key", "REQUIRE WHEEL KEY" },
             { "show_item_information", "Show item information during Gameplay" },
             { "menu_section", "MENU" },
