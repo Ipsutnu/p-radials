@@ -103,6 +103,7 @@ namespace Config
     int g_drawEdgeEffectStyle = 0;
     float g_drawEdgeEffectSize = kDefaultDrawEdgeEffectSize;
     float g_drawEdgeEffectOpacity = kDefaultDrawEdgeEffectOpacity;
+    int g_drawMarkStyle = 0;
     bool g_showDrawMark = true;
     int g_fontFamily = 0;
     float g_sideRadialPosition = kDefaultSideRadialPosition;
@@ -546,7 +547,20 @@ namespace Config
         }
         if (key == "DrawEdgeEffectSize") { g_drawEdgeEffectSize = std::clamp(std::stof(value), 25.0f, 250.0f); return true; }
         if (key == "DrawEdgeEffectOpacity") { g_drawEdgeEffectOpacity = std::clamp(std::stof(value), 0.0f, 100.0f); return true; }
-        if (key == "ShowDrawMark") { g_showDrawMark = ParseEnabled(value); return true; }
+        if (key == "DrawMarkStyle")
+        {
+            try { g_drawMarkStyle = std::clamp(std::stoi(value), 0, 6); }
+            catch (...) { return false; }
+            return true;
+        }
+        // Compatibilidade com configurações antigas, quando a marca era só
+        // um botão ligado/desligado.
+        if (key == "ShowDrawMark")
+        {
+            g_showDrawMark = ParseEnabled(value);
+            g_drawMarkStyle = g_showDrawMark ? 1 : 0;
+            return true;
+        }
 
         try
         {
@@ -781,7 +795,7 @@ namespace Config
         write("DrawEdgeEffectStyle", g_drawEdgeEffectStyle);
         write("DrawEdgeEffectSize", g_drawEdgeEffectSize);
         write("DrawEdgeEffectOpacity", g_drawEdgeEffectOpacity);
-        write("ShowDrawMark", g_showDrawMark ? 1 : 0);
+        write("DrawMarkStyle", g_drawMarkStyle);
         write("StardustFade", g_stardustFade);
         write("FontSizeScale", g_fontSizeScale); write("DrawMarkDistance", g_drawMarkDistance); write("FontFamily", g_fontFamily);
         write("CenterOpacity", g_centerOpacity); write("RadialQuantity", g_radialQuantity);
@@ -1189,7 +1203,12 @@ namespace Config
                     const bool enabled = ParseEnabled(value);
                     if (key == "DrawEffectsGameplay") g_drawEffectsGameplay = enabled;
                     else if (key == "DrawEffectsEditor") g_drawEffectsEditor = enabled;
-                    else g_showDrawMark = enabled;
+                    else { g_showDrawMark = enabled; g_drawMarkStyle = enabled ? 1 : 0; }
+                }
+                else if (key == "DrawMarkStyle")
+                {
+                    try { g_drawMarkStyle = std::clamp(std::stoi(value), 0, 6); }
+                    catch (...) {}
                 }
                 else if (key == "DrawEdgeEffectStyle")
                 {
@@ -1509,6 +1528,7 @@ namespace Config
         g_drawEdgeEffectSize = kDefaultDrawEdgeEffectSize;
         g_drawEdgeEffectOpacity = kDefaultDrawEdgeEffectOpacity;
         g_showDrawMark = true;
+        g_drawMarkStyle = 0;
         g_fontFamily = 0;
         g_sideRadialPosition = kDefaultSideRadialPosition;
         g_topVerticalPosition = kDefaultTopVerticalPosition;
@@ -1677,7 +1697,7 @@ namespace Config
         SetIniValue(lines, "Layout", "DrawEdgeEffectStyle", std::to_string(g_drawEdgeEffectStyle));
         SetIniValue(lines, "Layout", "DrawEdgeEffectSize", std::to_string(g_drawEdgeEffectSize));
         SetIniValue(lines, "Layout", "DrawEdgeEffectOpacity", std::to_string(g_drawEdgeEffectOpacity));
-        SetIniValue(lines, "Layout", "ShowDrawMark", g_showDrawMark ? "1" : "0");
+        SetIniValue(lines, "Layout", "DrawMarkStyle", std::to_string(g_drawMarkStyle));
         SetIniValue(lines, "Layout", "FontFamily", std::to_string(g_fontFamily));
         SetIniValue(lines, "Layout", "SideRadialPosition", std::to_string(g_sideRadialPosition));
         SetIniValue(lines, "Layout", "TopVerticalPosition", std::to_string(g_topVerticalPosition));

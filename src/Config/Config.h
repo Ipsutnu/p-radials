@@ -151,6 +151,8 @@ namespace Config
     extern int g_drawEdgeEffectStyle;
     extern float g_drawEdgeEffectSize;
     extern float g_drawEdgeEffectOpacity;
+    // 0 = none; 1..5 = estilos do marcador de Quick Draw.
+    extern int g_drawMarkStyle;
     extern bool g_showDrawMark;
     extern int g_fontFamily;
     extern float g_sideRadialPosition;

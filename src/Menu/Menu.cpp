@@ -677,6 +677,7 @@ namespace Menu
     static float g_quickDrawEditorHotkeyEntryT = 1.0f;
     static bool g_quickDrawEditorHotkeyEntryTraceStarted = true;
     static float g_quickDrawEditorHotkeyEntryFadeT = 1.0f;
+    static float g_quickDrawEditorHotkeyTextRevealT = 1.0f;
     static float g_quickDrawEditorHotkeyAuxiliaryT = 1.0f;
     static float g_quickDrawEditorResetHoverT = 0.0f;
     static float g_quickDrawEditorOkHoverT = 0.0f;
@@ -1170,6 +1171,8 @@ namespace Menu
     static std::array<float, 3> g_drawToggleButtonHoverT{};
     static LayoutSliderHitbox g_drawEdgeEffectStyleHitbox{};
     static bool g_drawEdgeEffectStyleDragging = false;
+    static LayoutSliderHitbox g_drawMarkStyleHitbox{};
+    static bool g_drawMarkStyleDragging = false;
 
     struct LanguageOptionHitbox
     {
@@ -4744,12 +4747,14 @@ namespace Menu
 
         if (g_radialShapeSliderDragging ||
             g_radialAnimationSliderDragging ||
-            g_slowTimeSliderDragging || g_drawEdgeEffectStyleDragging)
+            g_slowTimeSliderDragging || g_drawEdgeEffectStyleDragging ||
+            g_drawMarkStyleDragging)
         {
             g_radialShapeSliderDragging = false;
             g_radialAnimationSliderDragging = false;
             g_slowTimeSliderDragging = false;
             g_drawEdgeEffectStyleDragging = false;
+            g_drawMarkStyleDragging = false;
             Config::SaveConfig();
             return;
         }
@@ -4930,6 +4935,7 @@ namespace Menu
             for (const auto& center : g_drawToggleButtonCenters)
                 add(center, 18.0f);
             addRect(g_drawEdgeEffectStyleHitbox);
+            addRect(g_drawMarkStyleHitbox);
             addRect(g_layoutSliderHitboxes[
                 static_cast<std::size_t>(LayoutSlider::DrawEdgeEffectSize)]);
             addRect(g_layoutSliderHitboxes[
@@ -4971,6 +4977,7 @@ namespace Menu
             for (std::size_t i = 0; i < g_drawToggleButtonCenters.size(); ++i)
                 add(g_drawToggleButtonCenters[i], std::max(12.0f, g_drawToggleButtonRadii[i]));
             addRect(g_drawEdgeEffectStyleHitbox);
+            addRect(g_drawMarkStyleHitbox);
         
             for (const auto& hitbox : g_layoutSliderHitboxes) addRect(hitbox);
             for (const auto& hitbox : g_layoutResetHitboxes) addRect(hitbox);
@@ -5721,6 +5728,7 @@ namespace Menu
             for (const auto& center : g_drawToggleButtonCenters)
                 addCircle(center, 18.0f);
             targets.push_back(g_drawEdgeEffectStyleHitbox);
+            targets.push_back(g_drawMarkStyleHitbox);
             targets.push_back(g_layoutSliderHitboxes[
                 static_cast<std::size_t>(LayoutSlider::DrawEdgeEffectSize)]);
             targets.push_back(g_layoutSliderHitboxes[
@@ -5749,6 +5757,7 @@ namespace Menu
             for (const auto& center : g_drawToggleButtonCenters)
                 addCircle(center, 18.0f);
             targets.push_back(g_drawEdgeEffectStyleHitbox);
+            targets.push_back(g_drawMarkStyleHitbox);
         }
         
         if (targets.empty())
@@ -16616,6 +16625,7 @@ namespace Menu
         g_quickDrawEditorHotkeyEntryT = 0.0f;
         g_quickDrawEditorHotkeyEntryTraceStarted = false;
         g_quickDrawEditorHotkeyEntryFadeT = 0.0f;
+        g_quickDrawEditorHotkeyTextRevealT = 0.0f;
         g_quickDrawEditorHotkeyAuxiliaryT = 0.0f;
         // O fundo do WheelSettings desaparece devagar ao entrar no editor,
         // preservando apenas o Quick Draw sobre o jogo.
@@ -16701,6 +16711,10 @@ namespace Menu
         // mantinha em relação ao arco inferior. OK e LIMPAR permanecem abaixo.
         g_quickDrawSettingsButtonCenter = ImVec2(center.x,
             center.y - QUICK_DRAW_EDITOR_RADIUS - 66.0f);
+        const float settingsFloatTime = static_cast<float>(ImGui::GetTime());
+        g_quickDrawSettingsButtonCenter += ImVec2(
+            std::sin(settingsFloatTime * 0.84f + 0.8f) * 1.4f,
+            std::cos(settingsFloatTime * 0.67f + 0.8f) * 2.1f);
 
         const float buttonDx = g_settingsMousePos.x - g_quickDrawSettingsButtonCenter.x;
         const float buttonDy = g_settingsMousePos.y - g_quickDrawSettingsButtonCenter.y;
@@ -17042,6 +17056,9 @@ namespace Menu
         g_quickDrawEditorHotkeyEntryFadeT = AnimateSettingsValue(
             g_quickDrawEditorHotkeyEntryFadeT, 1.0f, 2.05f, hotkeyDt);
         const bool hotkeyEntryFinished = g_quickDrawEditorHotkeyEntryT >= 1.0f;
+        // A letra viaja junto da bolinha, mas seu fade acompanha o progresso
+        // inteiro da órbita: começa invisível e só chega a 100% no encaixe.
+        g_quickDrawEditorHotkeyTextRevealT = g_quickDrawEditorHotkeyEntryT;
         g_quickDrawEditorHotkeyAuxiliaryT = AnimateSettingsValue(
             g_quickDrawEditorHotkeyAuxiliaryT,
             hotkeyEntryFinished ? 1.0f : 0.0f, 7.0f, hotkeyDt);
@@ -17162,6 +17179,13 @@ namespace Menu
         const float commandsY = center.y + r + 66.0f;
         g_quickDrawEditorResetCenter = ImVec2(center.x - commandSpacing, commandsY);
         g_quickDrawEditorOkCenter = ImVec2(center.x + commandSpacing, commandsY);
+        const float commandFloatTime = static_cast<float>(ImGui::GetTime());
+        g_quickDrawEditorResetCenter += ImVec2(
+            std::sin(commandFloatTime * 0.72f + 1.6f) * 1.7f,
+            std::cos(commandFloatTime * 0.91f + 1.6f) * 2.35f);
+        g_quickDrawEditorOkCenter += ImVec2(
+            std::sin(commandFloatTime * 0.86f + 4.2f) * 1.7f,
+            std::cos(commandFloatTime * 0.69f + 4.2f) * 2.35f);
         // Acompanha a curvatura inferior direita, mas mantém o mesmo raio
         // máximo do OK mesmo fora do hover.
         const ImVec2 autoUseRestCenter(
@@ -17382,7 +17406,8 @@ namespace Menu
             draw->AddText(ImGui::GetFont(), hotkeyFontSize,
                 ImVec2(g_quickDrawEditorHotkeyCenter.x - textSize.x * 0.5f,
                     g_quickDrawEditorHotkeyCenter.y - textSize.y * 0.5f + 1.0f),
-                FadeColor(IM_COL32(235, 230, 215, 255), alpha * hotkeyEntryAlpha), hotkeyText.c_str());
+                FadeColor(IM_COL32(235, 230, 215, 255), alpha * hotkeyEntryAlpha *
+                    SmoothSettingsProgress(g_quickDrawEditorHotkeyTextRevealT)), hotkeyText.c_str());
         }
         else if (hotkeyHovered || g_quickDrawEditorWaitingHotkey)
         {
@@ -18673,9 +18698,193 @@ namespace Menu
 
         if (!draw ||
             !settingsOpen ||
-            !Config::g_showDrawMark ||
+            Config::g_drawMarkStyle == 0 ||
             alpha <= 0.001f)
             return;
+
+        // Wanderer é deliberadamente um marcador global: em vez de cada
+        // slot carregar sua própria marca, uma única forma escolhe um item,
+        // atraca nele por alguns segundos e então viaja até outro radial.
+        if (Config::g_drawMarkStyle == 6)
+        {
+            struct WanderCandidate
+            {
+                RE::FormID formID = 0;
+                std::uint16_t uniqueID = 0;
+                bool hasUniqueID = false;
+                ImVec2 position{};
+                float radius = 0.0f;
+            };
+            static std::vector<WanderCandidate> previousCandidates;
+            static std::vector<WanderCandidate> currentCandidates;
+            static int candidateFrame = -1;
+            static int drawnFrame = -1;
+            static RE::FormID targetFormID = 0;
+            static std::uint16_t targetUniqueID = 0;
+            static bool targetHasUniqueID = false;
+            static ImVec2 wanderPosition{};
+            static ImVec2 transitionFrom{};
+            static ImVec2 transitionTo{};
+            static float transitionStartedAt = 0.0f;
+            static float transitionDuration = 0.0f;
+            static float orbitStartedAt = 0.0f;
+            static float nextTargetAt = 0.0f;
+            static float orbitPhaseOffset = 0.0f;
+            static bool transitioning = false;
+            static std::uint32_t randomState = 0xA91E3C47u;
+
+            const int frame = ImGui::GetFrameCount();
+            if (frame != candidateFrame)
+            {
+                previousCandidates = std::move(currentCandidates);
+                currentCandidates.clear();
+                candidateFrame = frame;
+            }
+            if (item.form)
+            {
+                currentCandidates.push_back({ item.form->GetFormID(), item.uniqueID,
+                    item.hasUniqueID, itemPos, itemRadius });
+            }
+            if (drawnFrame == frame || previousCandidates.empty())
+                return;
+            drawnFrame = frame;
+
+            const float time = static_cast<float>(ImGui::GetTime());
+            const auto random01 = [&]() {
+                randomState = randomState * 1664525u + 1013904223u;
+                return static_cast<float>((randomState >> 8) & 0x00FFFFFFu) /
+                    static_cast<float>(0x00FFFFFFu);
+            };
+            const auto isTarget = [&](const WanderCandidate& candidate) {
+                return candidate.formID == targetFormID &&
+                    candidate.uniqueID == targetUniqueID &&
+                    candidate.hasUniqueID == targetHasUniqueID;
+            };
+            const auto findTarget = [&]() -> const WanderCandidate* {
+                const auto it = std::find_if(previousCandidates.begin(), previousCandidates.end(), isTarget);
+                return it != previousCandidates.end() ? &*it : nullptr;
+            };
+            const auto chooseTarget = [&]() -> const WanderCandidate& {
+                std::size_t choice = static_cast<std::size_t>(random01() * previousCandidates.size());
+                choice = std::min(choice, previousCandidates.size() - 1);
+                if (previousCandidates.size() > 1)
+                {
+                    for (int attempts = 0; attempts < 5 && isTarget(previousCandidates[choice]); ++attempts)
+                    {
+                        choice = static_cast<std::size_t>(random01() * previousCandidates.size());
+                        choice = std::min(choice, previousCandidates.size() - 1);
+                    }
+                }
+                return previousCandidates[choice];
+            };
+            const auto setTarget = [&](const WanderCandidate& candidate) {
+                targetFormID = candidate.formID;
+                targetUniqueID = candidate.uniqueID;
+                targetHasUniqueID = candidate.hasUniqueID;
+            };
+
+            const WanderCandidate* target = findTarget();
+            if (!target)
+            {
+                const WanderCandidate& candidate = chooseTarget();
+                setTarget(candidate);
+                target = &candidate;
+                wanderPosition = candidate.position;
+                orbitStartedAt = time;
+                orbitPhaseOffset = random01() * 6.28318530718f - time * 1.12f;
+                nextTargetAt = time + 1.0f + random01() * 4.0f;
+                transitioning = false;
+            }
+            else if (!transitioning && time >= nextTargetAt)
+            {
+                const WanderCandidate& candidate = chooseTarget();
+                if (!isTarget(candidate))
+                {
+                    transitionFrom = wanderPosition;
+                    transitionStartedAt = time;
+                    transitionDuration = 0.38f + random01() * 0.42f;
+                    const float arrivalAngle = random01() * 6.28318530718f;
+                    transitionTo = candidate.position +
+                        ImVec2(std::cos(arrivalAngle), std::sin(arrivalAngle)) *
+                            (candidate.radius + 11.0f);
+                    // A fase é preparada para que, no exato fim da viagem,
+                    // a órbita comece no mesmo ponto em que a forma atracou.
+                    orbitPhaseOffset = arrivalAngle -
+                        (time + transitionDuration) * 1.12f;
+                    setTarget(candidate);
+                    target = &candidate;
+                    transitioning = true;
+                }
+                else
+                {
+                    nextTargetAt = time + 1.0f + random01() * 4.0f;
+                }
+            }
+
+            if (transitioning)
+            {
+                const float t = std::clamp((time - transitionStartedAt) /
+                    std::max(transitionDuration, 0.001f), 0.0f, 1.0f);
+                const float eased = t * t * (3.0f - 2.0f * t);
+                wanderPosition = transitionFrom + (transitionTo - transitionFrom) * eased;
+                if (t >= 1.0f)
+                {
+                    transitioning = false;
+                    // A viagem já terminou no ponto da órbita. Não reinicie
+                    // o "arrive" em raio zero, pois isso o puxava de volta
+                    // para o centro do item por um frame antes de orbitar.
+                    orbitStartedAt = time - 0.34f;
+                    nextTargetAt = time + 1.0f + random01() * 4.0f;
+                }
+            }
+            else if (target)
+            {
+                const float arrive = std::clamp((time - orbitStartedAt) / 0.34f, 0.0f, 1.0f);
+                const float eased = arrive * arrive * (3.0f - 2.0f * arrive);
+                const float targetOrbit = target->radius + 11.0f;
+                const float angle = time * 1.12f + orbitPhaseOffset;
+                wanderPosition = target->position + ImVec2(std::cos(angle), std::sin(angle)) *
+                    (targetOrbit * eased);
+            }
+
+            // A forma se metamorfoseia por um contorno procedural de 36
+            // vértices. Em vez de trocar um desenho pronto, cada vértice
+            // desliza devagar até o próximo perfil: círculo, pentágono,
+            // estrela, quadrado ou hexágono.
+            const float travelScale = transitioning ? 0.78f : 1.0f;
+            const float shapeRadius = 4.2f * travelScale;
+            const ImU32 color = FadeColor(IM_COL32(255, 255, 255, 255), alpha * 0.88f);
+            constexpr float twoPi = 6.28318530718f;
+            const float shapeTime = time * 0.52f + static_cast<float>(orbitSession) * 0.37f;
+            const int shapeFrom = static_cast<int>(std::floor(shapeTime)) % 5;
+            const int shapeTo = (shapeFrom + 1) % 5;
+            float shapeBlend = shapeTime - std::floor(shapeTime);
+            shapeBlend = shapeBlend * shapeBlend * (3.0f - 2.0f * shapeBlend);
+            const auto profileRadius = [&](int shape, float angle) {
+                if (shape == 0)
+                    return 1.0f;
+                if (shape == 2)
+                    return 0.58f + 0.42f * std::cos(angle * 5.0f);
+                const int sides = shape == 1 ? 5 : shape == 3 ? 4 : 6;
+                const float sector = twoPi / static_cast<float>(sides);
+                const float local = std::fmod(angle + sector * 0.5f, sector) - sector * 0.5f;
+                return std::cos(3.14159265359f / static_cast<float>(sides)) /
+                    std::max(0.20f, std::cos(local));
+            };
+            constexpr int morphVertices = 36;
+            std::array<ImVec2, morphVertices> vertices{};
+            const float rotation = time * 0.65f - 1.5708f;
+            for (int i = 0; i < morphVertices; ++i)
+            {
+                const float angle = rotation + twoPi * static_cast<float>(i) / morphVertices;
+                const float radius = shapeRadius * (profileRadius(shapeFrom, angle) *
+                    (1.0f - shapeBlend) + profileRadius(shapeTo, angle) * shapeBlend);
+                vertices[i] = wanderPosition + ImVec2(std::cos(angle), std::sin(angle)) * radius;
+            }
+            draw->AddPolyline(vertices.data(), static_cast<int>(vertices.size()), color,
+                ImDrawFlags_Closed, 1.25f);
+            return;
+        }
 
         const auto* quickDraw = FindQuickDrawGesture(item);
         const bool hasStroke = quickDraw && !quickDraw->points.empty();
@@ -18901,44 +19110,125 @@ namespace Menu
         }
 #endif
 
-        // Cauda circular fixa: usa apenas a órbita atual do marcador. O
-        // hover altera o offset/radius inteiro, portanto bolinha e cauda
-        // crescem juntas sem qualquer influência do movimento de drag.
-        const float fixedTailVariation = 0.50f +
-            static_cast<float>((orbitSeed >> 1) & 0xFFFFu) / 65535.0f;
-        const float fixedTailLength = 200.0f * fixedTailVariation * floatScale;
-        const float fixedOrbitRadius = std::max(
-            1.0f, std::sqrt(baseX * baseX + baseY * baseY));
-        const int fixedTailSegments = std::max(
-            16, static_cast<int>(std::ceil(fixedTailLength / 4.0f)));
-        ImVec2 fixedTailPrevious = markerPos;
-        for (int segment = 1; segment <= fixedTailSegments; ++segment)
+        const int markStyle = std::clamp(Config::g_drawMarkStyle, 0, 5);
+        const auto orbitPoint = [&](float angle, float radius) {
+            return ImVec2(itemPos.x + std::cos(angle) * radius + ownFloat.x,
+                itemPos.y + std::sin(angle) * radius + ownFloat.y);
+        };
+        const ImU32 markColor = FadeColor(IM_COL32(255, 255, 255, 255), indicatorAlpha);
+
+        if (markStyle == 1)
         {
-            const float progress = static_cast<float>(segment) /
-                static_cast<float>(fixedTailSegments);
-            const float angleBack = (fixedTailLength * progress) /
-                fixedOrbitRadius;
-            const float tailAngle = orbitAngle - orbitDirection * angleBack;
-            const float tailCos = std::cos(tailAngle);
-            const float tailSin = std::sin(tailAngle);
-            const ImVec2 fixedTailPoint(
-                itemPos.x + baseX * tailCos - baseY * tailSin + ownFloat.x,
-                itemPos.y + baseX * tailSin + baseY * tailCos + ownFloat.y);
-            const float tailAlpha = indicatorAlpha * 0.70f *
-                std::pow(1.0f - progress, 1.35f);
-            if (tailAlpha > 0.001f)
+            // Lines: a animação original, agora primeiro estilo do seletor.
+            const float tailVariation = 0.50f +
+                static_cast<float>((orbitSeed >> 1) & 0xFFFFu) / 65535.0f;
+            const float tailLength = 200.0f * tailVariation * floatScale;
+            const float orbitRadius = std::max(1.0f, offset);
+            const int segments = std::max(16, static_cast<int>(std::ceil(tailLength / 4.0f)));
+            ImVec2 previous = markerPos;
+            for (int segment = 1; segment <= segments; ++segment)
             {
-                draw->AddLine(
-                    fixedTailPrevious,
-                    fixedTailPoint,
-                    FadeColor(IM_COL32(255, 255, 255, 255), tailAlpha),
-                    1.25f * floatScale);
+                const float progress = static_cast<float>(segment) / static_cast<float>(segments);
+                const float tailAngle = orbitAngle - orbitDirection * (tailLength * progress) / orbitRadius;
+                const ImVec2 point = orbitPoint(tailAngle, offset);
+                const float tailAlpha = indicatorAlpha * 0.70f * std::pow(1.0f - progress, 1.35f);
+                draw->AddLine(previous, point,
+                    FadeColor(IM_COL32(255, 255, 255, 255), tailAlpha), 1.25f * floatScale);
+                previous = point;
             }
-            fixedTailPrevious = fixedTailPoint;
         }
-        
-        // Sem ponto terminal: o marcador agora é somente sua linha orbital
-        // circular, sem a bolinha branca nem a sombra que a acompanhava.
+        else if (markStyle == 2)
+        {
+            // Três pontos ligados como um pequeno sistema gravitacional: o
+            // triângulo nunca é perfeitamente rígido, comprimindo/abrindo e
+            // trocando discretamente a liderança enquanto viaja na órbita.
+            constexpr float twoPi = 6.28318530718f;
+            const float localAngle = time * (1.25f + orbitVariation * 0.75f) + phase;
+            for (int i = 0; i < 3; ++i)
+            {
+                const float indexPhase = twoPi * static_cast<float>(i) / 3.0f;
+                const float pull = std::sin(time * (1.9f + 0.15f * i) + phase * 1.8f +
+                    indexPhase * 1.7f);
+                const float wobble = std::sin(time * (0.81f + 0.11f * i) + phase +
+                    indexPhase) * 0.42f;
+                const float angle = localAngle + indexPhase + wobble;
+                const float radius = (6.8f + pull * 2.35f) * floatScale;
+                const ImVec2 point(markerPos.x + std::cos(angle) * radius,
+                    markerPos.y + std::sin(angle) * radius);
+                const float dotRadius = (2.35f + 0.45f * (0.5f + 0.5f * pull)) * floatScale;
+                draw->AddCircleFilled(point, dotRadius, markColor, 16);
+            }
+        }
+        else if (markStyle == 3)
+        {
+            // Ponto único, limpo: sem cauda e sem halo.
+            draw->AddCircleFilled(markerPos, 2.1f * floatScale, markColor, 20);
+        }
+        else if (markStyle == 4)
+        {
+            // Duas linhas opostas com "vida" própria. A composição de três
+            // ritmos com frequência e fase sorteadas por item/sessão cria
+            // aceleração, freio e reversão sem saltos: cada desenho recebe
+            // uma sequência diferente a cada abertura do WheelSettings.
+            const float behaviorA = static_cast<float>((orbitSeed >> 3) & 0xFFFFu) /
+                65535.0f;
+            const float behaviorB = static_cast<float>((orbitSeed >> 19) & 0x1FFFu) /
+                8191.0f;
+            const float slowFrequency = 0.21f + behaviorA * 0.17f;
+            const float reverseFrequency = 0.39f + behaviorB * 0.31f;
+            const float burstFrequency = 0.12f + orbitVariation * 0.14f;
+            const float slowPhase = phase * (1.3f + behaviorB);
+            const float reversePhase = phase * (2.1f + behaviorA);
+            const float burstPhase = phase * 0.73f + behaviorB * 6.28318530718f;
+            const float lineMotion = time * (0.52f + orbitVariation * 0.24f) +
+                std::sin(time * slowFrequency + slowPhase) * 2.10f +
+                std::sin(time * reverseFrequency + reversePhase) * 1.42f +
+                std::sin(time * burstFrequency + burstPhase) * 2.85f;
+            const float lineAngle = orbitDirection * lineMotion;
+            for (int i = 0; i < 2; ++i)
+            {
+                const float angle = lineAngle + 3.14159265359f * static_cast<float>(i);
+                // Cada arco nasce com um tamanho-base diferente e pode crescer
+                // suavemente até 200% durante sua própria animação.
+                const float sizePhase = time * (0.74f + behaviorA * 0.52f + 0.09f * i) +
+                    phase * (1.4f + 0.2f * i) + static_cast<float>(i) * 1.9f;
+                const float sizeT = 0.5f + 0.5f * std::sin(sizePhase);
+                const float arcScale = 1.0f + sizeT;
+                const float halfArc = 0.315f * arcScale;
+                constexpr int arcSegments = 18;
+                std::array<ImVec2, arcSegments + 1> arc{};
+                for (int pointIndex = 0; pointIndex <= arcSegments; ++pointIndex)
+                {
+                    const float t = static_cast<float>(pointIndex) / arcSegments;
+                    arc[pointIndex] = orbitPoint(angle - halfArc + 2.0f * halfArc * t, offset);
+                }
+                // As duas pontas se dissolvem até zero; o arco fica vivo no
+                // centro e se encaixa sem cortes bruscos na circunferência.
+                for (int segment = 0; segment < arcSegments; ++segment)
+                {
+                    const float middle = (static_cast<float>(segment) + 0.5f) /
+                        static_cast<float>(arcSegments);
+                    const float endpointFade = std::pow(
+                        std::max(0.0f, 1.0f - std::abs(middle * 2.0f - 1.0f)), 0.78f);
+                    draw->AddLine(arc[segment], arc[segment + 1],
+                        FadeColor(IM_COL32(255, 255, 255, 255), indicatorAlpha * endpointFade),
+                        1.55f * floatScale);
+                }
+            }
+        }
+        else if (markStyle == 5)
+        {
+            // Pulso individual com ritmo e fase definidos pela semente do item.
+            const float pulsePhase = time * (0.70f + orbitVariation * 0.75f) + phase * 1.7f;
+            const float pulseT = 0.5f + 0.5f * std::sin(pulsePhase);
+            const float ringRadius = itemRadius + (6.0f + 10.0f * pulseT) * floatScale;
+            const float ringAlpha = indicatorAlpha * (0.35f + 0.65f * (1.0f - pulseT));
+            // O anel usa exatamente o centro já animado do slot. A flutuação
+            // individual do marcador não entra aqui, para não fazê-lo parecer
+            // escorregar/desalinhar do item durante o pulso.
+            draw->AddCircle(itemPos, ringRadius,
+                FadeColor(IM_COL32(255, 255, 255, 255), ringAlpha), 48, 1.25f * floatScale);
+        }
     }
 
     static void DrawSettingsDragQuickDrawIndicator(
@@ -25059,8 +25349,11 @@ namespace Menu
                 Config::SaveConfig();
                 return true;
             }
-            if (toggleDrawOption(2, Config::g_showDrawMark))
+            if (insideRect(g_drawMarkStyleHitbox.min, g_drawMarkStyleHitbox.max))
+            {
+                g_drawMarkStyleDragging = true;
                 return true;
+            }
             const std::array<LayoutSlider, 1> drawSliders{
                 LayoutSlider::DrawMarkDistance };
             for (const auto slider : drawSliders)
@@ -25142,12 +25435,16 @@ namespace Menu
             }
 
             if (toggleDrawOption(0, Config::g_drawEffectsGameplay) ||
-                toggleDrawOption(1, Config::g_drawEffectsEditor) ||
-                toggleDrawOption(2, Config::g_showDrawMark))
+                toggleDrawOption(1, Config::g_drawEffectsEditor))
                 return true;
             if (insideRect(g_drawEdgeEffectStyleHitbox.min, g_drawEdgeEffectStyleHitbox.max))
             {
                 g_drawEdgeEffectStyleDragging = true;
+                return true;
+            }
+            if (insideRect(g_drawMarkStyleHitbox.min, g_drawMarkStyleHitbox.max))
+            {
+                g_drawMarkStyleDragging = true;
                 return true;
             }
             return false;
@@ -26471,6 +26768,56 @@ namespace Menu
             draw->AddCircle(ImVec2(resetX, trackY), 6.5f * controlScale,
                 FadeColor(IM_COL32(135, 132, 126, 120), alpha), 20, 1.0f);
         };
+        const auto drawDrawMarkStyleSelector = [&](float labelY) {
+            constexpr int optionCount = 7;
+            static constexpr std::array<const char*, optionCount> labels{
+                "none", "draw_mark_lines", "draw_mark_orbiting_points",
+                "draw_mark_orbiting_dot", "draw_mark_twin_lines",
+                "draw_mark_pulse_ring", "draw_mark_wanderer" };
+            const float trackY = labelY + 25.0f * controlScale;
+            const float trackWidth = std::max(width, 1.0f);
+            const float cellWidth = trackWidth / static_cast<float>(optionCount);
+            g_drawMarkStyleHitbox = { ImVec2(x, labelY - 4.0f * controlScale),
+                ImVec2(x + width, trackY + 12.0f * controlScale) };
+            if (g_drawMarkStyleDragging)
+            {
+                const float normalized = std::clamp(
+                    (g_settingsMousePos.x - x) / trackWidth, 0.0f, 1.0f);
+                Config::g_drawMarkStyle = std::clamp(
+                    static_cast<int>(normalized * static_cast<float>(optionCount)),
+                    0, optionCount - 1);
+            }
+            Config::g_drawMarkStyle = std::clamp(Config::g_drawMarkStyle, 0, optionCount - 1);
+            Config::g_showDrawMark = Config::g_drawMarkStyle != 0;
+            const bool hovered = g_settingsMousePos.x >= g_drawMarkStyleHitbox.min.x &&
+                g_settingsMousePos.x <= g_drawMarkStyleHitbox.max.x &&
+                g_settingsMousePos.y >= g_drawMarkStyleHitbox.min.y &&
+                g_settingsMousePos.y <= g_drawMarkStyleHitbox.max.y;
+            const float selectedMinX = x + cellWidth * static_cast<float>(Config::g_drawMarkStyle);
+            const char* value = Language::Get(labels[Config::g_drawMarkStyle]).c_str();
+            const ImVec2 valueSize = ImGui::CalcTextSize(value);
+            DrawTextWithShadow(draw, ImVec2(x, labelY), white,
+                Language::Get("draw_mark").c_str(), alpha);
+            DrawTextWithShadow(draw, ImVec2(x + width - valueSize.x, labelY),
+                FadeColor(IM_COL32(180, 165, 130, 230), alpha), value, alpha);
+            draw->AddRectFilled(ImVec2(x, trackY - 6.0f * controlScale),
+                ImVec2(x + width, trackY + 6.0f * controlScale),
+                FadeColor(IM_COL32(25, 26, 31, 235), alpha), 4.0f * controlScale);
+            draw->AddRectFilled(ImVec2(selectedMinX + 0.5f * controlScale,
+                    trackY - 5.5f * controlScale),
+                ImVec2(selectedMinX + cellWidth - 0.5f * controlScale,
+                    trackY + 5.5f * controlScale),
+                FadeColor(g_drawMarkStyleDragging || hovered
+                    ? IM_COL32(245, 240, 220, 245) : IM_COL32(180, 176, 165, 225), alpha),
+                2.0f * controlScale);
+            for (int i = 0; i <= optionCount; ++i)
+            {
+                const float tickX = x + cellWidth * static_cast<float>(i);
+                draw->AddLine(ImVec2(tickX, trackY - 5.0f * controlScale),
+                    ImVec2(tickX, trackY + 5.0f * controlScale),
+                    FadeColor(IM_COL32(180, 180, 185, 70), alpha), 1.0f);
+            }
+        };
         // Os efeitos de borda pertencem agora ao painel do Quick Draw Editor.
         // O Gameplay mantém somente a marca persistente dos itens e distância.
         g_drawToggleButtonCenters[0] = g_drawToggleButtonCenters[1] = ImVec2(-10000.0f, -10000.0f);
@@ -26483,13 +26830,13 @@ namespace Menu
             { ImVec2(1.0f, 1.0f), ImVec2(0.0f, 0.0f) };
         g_layoutResetHitboxes[static_cast<std::size_t>(LayoutSlider::DrawEdgeEffectOpacity)] =
             { ImVec2(1.0f, 1.0f), ImVec2(0.0f, 0.0f) };
+        g_drawToggleButtonCenters[2] = ImVec2(-10000.0f, -10000.0f);
         const float drawMarkY = drawControlsY;
-        drawDrawToggle(2, drawMarkY, Config::g_showDrawMark,
-            Language::Get("show_draw_mark").c_str());
+        drawDrawMarkStyleSelector(drawMarkY);
         drawDrawSlider(LayoutSlider::DrawMarkDistance, Language::Get("draw_mark_distance").c_str(),
-            Config::g_drawMarkDistance, 0.0f, 100.0f, drawMarkY + 27.0f * controlScale);
+            Config::g_drawMarkDistance, 0.0f, 100.0f, drawMarkY + 55.0f * controlScale);
 
-        const float iconsTitleY = drawMarkY + 87.0f * controlScale;
+        const float iconsTitleY = drawMarkY + 115.0f * controlScale;
     
         const float inventoryTitleY =
             iconsTitleY + (32.0f + 4.0f * 32.0f) * controlScale;
@@ -27964,9 +28311,8 @@ namespace Menu
         };
         drawEdgeEffectStyleSelector(drawEdgeEffectStyleRow);
 
-        drawLayoutToggle(drawToggleRows[2], g_drawToggleButtonCenters[2],
-            g_drawToggleButtonRadii[2], g_drawToggleButtonHoverT[2],
-            Config::g_showDrawMark, Language::Get("show_draw_mark").c_str());
+        // O seletor da marca pertence ao painel Gameplay; Layout não mantém
+        // mais o antigo toggle binário para evitar duas fontes de estado.
 
         for (auto& hitbox : g_layoutColorHitboxes)
             hitbox = { ImVec2(1.0f, 1.0f), ImVec2(0.0f, 0.0f) };
