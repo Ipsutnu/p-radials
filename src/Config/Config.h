@@ -216,7 +216,7 @@ namespace Config
     inline constexpr float kDefaultFontSizeScale = 1.3f;
     // Distância extra, em pixels virtuais, entre o marcador de Draw e a
     // borda do slot. Zero deixa o marcador tangente à borda.
-    inline constexpr float kDefaultDrawMarkDistance = 0.0f;
+    inline constexpr float kDefaultDrawMarkDistance = 5.0f;
     inline constexpr float kDefaultDrawEdgeEffectSize = 100.0f;
     inline constexpr float kDefaultDrawEdgeEffectOpacity = 100.0f;
     inline constexpr float kDefaultSideRadialPosition = 56.0f;

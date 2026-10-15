@@ -16237,8 +16237,10 @@ namespace Menu
         const ImVec2 center(screen.x * 0.5f, screen.y * 0.5f);
         const float time = static_cast<float>(ImGui::GetTime());
         const float dt = std::clamp(ImGui::GetIO().DeltaTime, 0.0f, 0.05f);
-        constexpr float cardWidth = 184.0f;
-        constexpr float cardHeight = 126.0f;
+        // O envelope continua retangular para a física/reflow da grade, mas
+        // agora contém um núcleo circular e duas luas independentes.
+        constexpr float cardWidth = 178.0f;
+        constexpr float cardHeight = 158.0f;
         constexpr float gapX = 20.0f;
         constexpr float gapY = 18.0f;
         constexpr float edgeMargin = 30.0f;
@@ -16372,26 +16374,22 @@ namespace Menu
                 if (g_quickDrawKeyboardCards[j].removeT >= 0.0f)
                     continue;
                 const ImVec2 delta = visualCenters[i] - visualCenters[j];
-                const float overlapX = (cardWidth + neighborSafeGap) - std::abs(delta.x);
-                const float overlapY = (cardHeight + neighborSafeGap) - std::abs(delta.y);
-                if (overlapX <= 0.0f || overlapY <= 0.0f)
+                const float distanceSq = delta.x * delta.x + delta.y * delta.y;
+                const float distance = std::sqrt(distanceSq);
+                // O corpo visual deixou de ser um cartão. A mesma força de
+                // vizinhança passa a usar somente o disco principal, para
+                // os contatos acompanharem o formato circular exibido.
+                constexpr float neighborCollisionRadius = 61.0f;
+                const float collisionDistance = neighborCollisionRadius * 2.0f +
+                    neighborSafeGap;
+                if (distance >= collisionDistance)
                     continue;
 
-                // Separa pelo menor eixo de penetração, como dois cartões
-                // físicos. Assim a pressão se transmite aos vizinhos sem
-                // criar uma direção preferencial permanente nas extremidades.
-                ImVec2 direction{};
-                float penetration = 0.0f;
-                if (overlapX < overlapY)
-                {
-                    direction = ImVec2(delta.x >= 0.0f ? 1.0f : -1.0f, 0.0f);
-                    penetration = overlapX;
-                }
-                else
-                {
-                    direction = ImVec2(0.0f, delta.y >= 0.0f ? 1.0f : -1.0f);
-                    penetration = overlapY;
-                }
+                const ImVec2 direction = distance > 0.01f
+                    ? delta * (1.0f / distance)
+                    : ImVec2((i & 1) ? 1.0f : -1.0f,
+                        (j & 1) ? 0.65f : -0.65f);
+                const float penetration = collisionDistance - distance;
                 const float normalizedPenetration = std::clamp(
                     penetration / neighborSafeGap, 0.0f, 1.0f);
                 const ImVec2 force = direction * (neighborForce *
@@ -16419,12 +16417,27 @@ namespace Menu
         {
             auto& card = g_quickDrawKeyboardCards[i];
             const bool hovered = static_cast<int>(i) == g_quickDrawKeyboardHoveredCard;
-            const float cardScale = hovered ? 1.05f : 1.0f;
-            const ImVec2 scaledSize(cardWidth * cardScale, cardHeight * cardScale);
             const ImVec2 cardCenter = visualCenters[i];
-            card.min = cardCenter - scaledSize * 0.5f;
-            card.max = cardCenter + scaledSize * 0.5f;
-            card.clearCenter = ImVec2(card.max.x - 18.0f, card.min.y + 18.0f);
+            const float cardScale = 1.0f; //hovered ? 1.05f : 1.0f;
+            const float mainRadius = 61.0f * cardScale;
+            const float phase = static_cast<float>(card.hotkey % 29) * 0.37f;
+            // As duas luas têm órbitas sutis próprias. O núcleo continua com
+            // o float que já vem da grade/baseCenters acima.
+            const ImVec2 keyMoonFloat(
+                std::sin(time * 1.08f + phase + 0.8f) * 2.1f,
+                std::cos(time * 0.83f + phase * 1.6f) * 2.8f);
+            const ImVec2 clearMoonFloat(
+                std::sin(time * 0.91f + phase + 2.4f) * 2.4f,
+                std::cos(time * 1.17f + phase * 0.72f) * 2.0f);
+            const ImVec2 keyMoonCenter = cardCenter +
+                ImVec2(-mainRadius * 0.80f, mainRadius * 0.78f) + keyMoonFloat;
+            card.clearCenter = cardCenter +
+                ImVec2(mainRadius * 0.80f, -mainRadius * 0.78f) + clearMoonFloat;
+            constexpr float keyMoonRadius = 20.0f;
+            constexpr float clearMoonRadius = 13.0f;
+            // Mantém o hitbox/envelope usado pela física e pelo click fora.
+            card.min = cardCenter - ImVec2(cardWidth, cardHeight) * 0.5f;
+            card.max = cardCenter + ImVec2(cardWidth, cardHeight) * 0.5f;
 
             if (card.removeT >= 0.0f)
                 card.removeT += dt;
@@ -16433,17 +16446,24 @@ namespace Menu
             const float cardAlpha = card.removeT < 0.20f ? 1.0f :
                 std::clamp(1.0f - (card.removeT - 0.20f) / 0.42f, 0.0f, 1.0f);
 
-            draw->AddRectFilled(card.min, card.max,
-                FadeColor(IM_COL32(20, 20, 25, 180), alpha * cardAlpha), 14.0f);
-            draw->AddRect(card.min, card.max,
-                FadeColor(hovered ? IM_COL32(255, 255, 255, 230) :
-                    IM_COL32(235, 230, 215, 125), alpha * cardAlpha),
-                14.0f, 0, hovered ? 2.0f : 1.2f);
+            draw->AddCircleFilled(cardCenter, mainRadius,
+                FadeColor(IM_COL32(20, 20, 25, 140), alpha * cardAlpha), 48);
+            
+            draw->AddCircle(cardCenter, mainRadius,
+                FadeColor(hovered ? IM_COL32(255, 255, 255, 125) :
+                    IM_COL32(235, 230, 215, 0), alpha * cardAlpha),
+                48, hovered ? 2.0f : 1.2f);
 
             const std::string keyText = Config::KeyToString(card.hotkey);
             const ImVec2 keyTextSize = ImGui::CalcTextSize(keyText.c_str());
-            draw->AddText(ImVec2(card.min.x + 13.0f,
-                    card.max.y - keyTextSize.y - 11.0f),
+            draw->AddCircleFilled(keyMoonCenter, keyMoonRadius,
+                FadeColor(IM_COL32(35, 36, 42, 235), alpha * cardAlpha), 24);
+            
+            draw->AddCircle(keyMoonCenter, keyMoonRadius,
+                FadeColor(IM_COL32(245, 242, 232, 165), alpha * cardAlpha), 24, 1.15f);
+            
+            draw->AddText(ImVec2(keyMoonCenter.x - keyTextSize.x * 0.5f,
+                    keyMoonCenter.y - keyTextSize.y * 0.5f),
                 FadeColor(IM_COL32(235, 230, 215, 230), alpha * cardAlpha), keyText.c_str());
 
             RadialItem item{};
@@ -16451,15 +16471,14 @@ namespace Menu
             {
                 if (auto* icon = ItemIcon::Get(item.form))
                 {
-                    const ImVec2 iconCenter((card.min.x + card.max.x) * 0.5f,
-                        (card.min.y + card.max.y) * 0.5f + 7.0f);
-                    constexpr float iconRadius = 39.0f;
+                    const ImVec2 iconCenter = cardCenter;
+                    constexpr float iconRadius = 30.0f;
                     // Reutiliza o resolvedor dos radiais: poções, escolas,
                     // encantamentos e ícones customizados permanecem com a
                     // mesma linguagem visual. O browser aplica 80% como
                     // opacidade-base, além do fade de remoção do cartão.
                     const int iconOpacity = static_cast<int>(std::lround(
-                        255.0f * 0.80f * alpha * iconAlpha));
+                        255.0f * 0.70f * alpha * iconAlpha));
                     const ImU32 iconColor = MakeGameplayIconColor(item,
                         iconOpacity, 1.0f, false, RadialSide::Left);
                     draw->AddImage(reinterpret_cast<ImTextureID>(icon),
@@ -16470,9 +16489,9 @@ namespace Menu
                 }
             }
 
-            draw->AddCircleFilled(card.clearCenter, 11.0f,
+            draw->AddCircleFilled(card.clearCenter, clearMoonRadius,
                 FadeColor(IM_COL32(35, 36, 42, 240), alpha * cardAlpha), 20);
-            draw->AddCircle(card.clearCenter, 11.0f,
+            draw->AddCircle(card.clearCenter, clearMoonRadius,
                 FadeColor(IM_COL32(245, 242, 232, 150), alpha * cardAlpha), 20, 1.0f);
             draw->AddLine(card.clearCenter - ImVec2(3.6f, 3.6f),
                 card.clearCenter + ImVec2(3.6f, 3.6f),
@@ -17651,8 +17670,8 @@ namespace Menu
         }
 
         const float r = QUICK_DRAW_EDITOR_RADIUS;
-        // Os dois comandos ficam lado a lado com o seletor de configurações:
-        // compactos em repouso e circulares/maiores somente no hover.
+        // Os dois comandos permanecem no raio expandido. O hover revela só
+        // o texto, sem redimensionar o círculo.
         constexpr float commandBaseRadius = 24.0f;
         constexpr float commandExpandedRadius = 45.0f;
         const float commandSpacing = 82.0f;
@@ -17734,7 +17753,8 @@ namespace Menu
 
         const auto drawCommandCircle = [&](const ImVec2& buttonCenter, float hoverT,
             float& outRadius, const char* label) {
-            outRadius = commandBaseRadius + (commandExpandedRadius - commandBaseRadius) * hoverT;
+            (void)commandBaseRadius;
+            outRadius = commandExpandedRadius;
             
             draw->AddCircleFilled(buttonCenter, outRadius,
                 FadeColor(IM_COL32(35, 36, 42, 220), alpha), 40);
@@ -30174,6 +30194,12 @@ namespace Menu
         // OK do Quick Draw, sem abrir o editor de gesto.
         g_settingsHotkeyButtonCenter = ImVec2(topLockCenter.x,
             wheelLayout.min.y + visibleHeight * 0.075f);
+        // Flutuação própria do atalho Keys, aplicada antes de hover/click
+        // para a área interativa acompanhar exatamente o círculo desenhado.
+        const float hotkeyFloatTime = static_cast<float>(ImGui::GetTime());
+        g_settingsHotkeyButtonCenter += ImVec2(
+            std::sin(hotkeyFloatTime * 0.76f + 1.35f) * 1.85f,
+            std::cos(hotkeyFloatTime * 0.91f + 1.35f) * 2.35f);
         const float hotkeyButtonDx = g_settingsMousePos.x -
             g_settingsHotkeyButtonCenter.x;
         const float hotkeyButtonDy = g_settingsMousePos.y -
