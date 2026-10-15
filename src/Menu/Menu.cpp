@@ -657,6 +657,7 @@ namespace Menu
         // Centro usado pela representação mini dentro do teclado visual.
         ImVec2 keyboardMiniCenter{};
         ImVec2 keyboardRemoveCenter{};
+        float keyboardHoverT = 0.0f;
     };
     static bool g_quickDrawKeyboardOpen = false;
     enum class QuickDrawKeyboardReturnTarget
@@ -697,11 +698,48 @@ namespace Menu
         g_quickDrawKeyboardFilterHoverT{};
     static constexpr float kQuickDrawKeyboardFilterRadius = 15.5f;
     static constexpr float kQuickDrawKeyboardToggleRadius =
-        kQuickDrawKeyboardFilterRadius * 0.5f;
+        kQuickDrawKeyboardFilterRadius;
     static ImVec2 g_quickDrawKeyboardToggleCenter{};
     static float g_quickDrawKeyboardToggleHoverT = 0.0f;
     static bool g_quickDrawKeyboardVisualMode = false;
     static float g_quickDrawKeyboardVisualModeT = 0.0f;
+    // Preview exclusivo do modo teclado: preserva o último item durante o
+    // fade, sem reutilizar a seleção/preview central da lista radial.
+    static RadialItem g_quickDrawKeyboardVisualPreviewItem{};
+    static bool g_quickDrawKeyboardVisualPreviewWanted = false;
+    static float g_quickDrawKeyboardVisualPreviewAlpha = 0.0f;
+    static ImVec2 g_quickDrawKeyboardVisualPreviewMaskCenter{};
+    static ImVec2 g_quickDrawKeyboardVisualPreviewRopePosition{};
+    static ImVec2 g_quickDrawKeyboardVisualPreviewRopeVelocity{};
+    static bool g_quickDrawKeyboardVisualPreviewRopeInitialized = false;
+    struct QuickDrawKeyboardVisualSlot
+    {
+        int key = 0;
+        ImVec2 min{};
+        ImVec2 max{};
+    };
+    struct QuickDrawKeyboardSourceItem
+    {
+        RadialItem item{};
+        ImVec2 center{};
+        float radius = 19.0f;
+        std::uint64_t visualKey = 0;
+        bool keyboardBound = false;
+    };
+    struct QuickDrawKeyboardSourceVisual
+    {
+        ImVec2 position{};
+        ImVec2 velocity{};
+        float hoverT = 0.0f;
+        float alpha = 0.0f;
+        bool initialized = false;
+    };
+    static std::vector<QuickDrawKeyboardVisualSlot> g_quickDrawKeyboardVisualSlots;
+    static std::vector<QuickDrawKeyboardSourceItem> g_quickDrawKeyboardSourceItems;
+    static std::unordered_map<std::uint64_t, QuickDrawKeyboardSourceVisual>
+        g_quickDrawKeyboardSourceVisuals;
+    static bool g_quickDrawKeyboardItemDragActive = false;
+    static RadialItem g_quickDrawKeyboardDraggedItem{};
     static bool g_quickDrawKeyboardRadialLayoutDirty = false;
     static ImVec2 g_settingsHotkeyButtonCenter{};
     static float g_settingsHotkeyButtonHoverT = 0.0f;
@@ -15841,10 +15879,6 @@ namespace Menu
         static float ringYawVelocity = 0.0f;
         static float ringPitchVelocity = 0.0f;
         const float dt = std::clamp(ImGui::GetIO().DeltaTime, 0.0f, 0.05f);
-        g_quickDrawKeyboardVisualModeT = AnimateSettingsValue(
-            g_quickDrawKeyboardVisualModeT,
-            g_quickDrawKeyboardVisualMode ? 1.0f : 0.0f, 4.8f, dt);
-        const float radialCardsAlpha = 1.0f - g_quickDrawKeyboardVisualModeT;
         if (!indicatorInitialized)
         {
             previousMouse = mousePos;
@@ -16349,9 +16383,17 @@ namespace Menu
         g_quickDrawKeyboardReflowCooldown = 0.0f;
         g_quickDrawKeyboardFilters.fill(true);
         g_quickDrawKeyboardFilterHoverT.fill(0.0f);
-        g_quickDrawKeyboardVisualMode = false;
+        g_quickDrawKeyboardVisualMode =
+            returnTarget == QuickDrawKeyboardReturnTarget::WheelSettings;
         g_quickDrawKeyboardVisualModeT = 0.0f;
+        g_quickDrawKeyboardVisualPreviewItem = {};
+        g_quickDrawKeyboardVisualPreviewWanted = false;
+        g_quickDrawKeyboardVisualPreviewAlpha = 0.0f;
+        g_quickDrawKeyboardVisualPreviewRopeInitialized = false;
+        g_quickDrawKeyboardVisualPreviewRopeVelocity = {};
         g_quickDrawKeyboardToggleHoverT = 0.0f;
+        g_quickDrawKeyboardItemDragActive = false;
+        g_quickDrawKeyboardDraggedItem = {};
         g_quickDrawKeyboardRadialLayoutDirty = false;
         g_quickDrawEditorWaitingHotkey = false;
         g_quickDrawSettingsExpanded = false;
@@ -16368,6 +16410,15 @@ namespace Menu
         g_quickDrawKeyboardRemovingPreviewItem = {};
         g_quickDrawKeyboardVisualMode = false;
         g_quickDrawKeyboardVisualModeT = 0.0f;
+        g_quickDrawKeyboardVisualPreviewItem = {};
+        g_quickDrawKeyboardVisualPreviewWanted = false;
+        g_quickDrawKeyboardVisualPreviewAlpha = 0.0f;
+        g_quickDrawKeyboardVisualPreviewRopeInitialized = false;
+        g_quickDrawKeyboardVisualPreviewRopeVelocity = {};
+        g_quickDrawKeyboardVisualSlots.clear();
+        g_quickDrawKeyboardSourceItems.clear();
+        g_quickDrawKeyboardItemDragActive = false;
+        g_quickDrawKeyboardDraggedItem = {};
         g_quickDrawKeyboardReturnTarget = QuickDrawKeyboardReturnTarget::QuickDrawEditor;
     }
 
@@ -16376,19 +16427,109 @@ namespace Menu
         int key = 0;
         const char* label = "";
         float units = 1.0f;
+        // Espaçadores preservam a geometria física (numpad/navegação) sem
+        // desenhar uma tecla inexistente.
+        bool visible = true;
+        float rowSpan = 1.0f;
     };
 
-    static void DrawQuickDrawVisualKeyboard(ImDrawList* draw, const ImVec2& screen,
+    static std::string ResolveQuickDrawVisualKeyboardLabel(int virtualKey,
+        const char* fallback)
+    {
+        // Os nomes de teclas especiais são parte do desenho físico; não
+        // deixe KeyToString trocar PgUp/PgDn/Del por rótulos longos.
+        if (virtualKey == VK_PRIOR || virtualKey == VK_NEXT ||
+            virtualKey == VK_DELETE)
+            return fallback;
+        // A disposição é consultada a cada desenho para acompanhar troca de
+        // idioma/layout feita pelo Windows sem precisar reiniciar o jogo.
+        const HKL layout = GetKeyboardLayout(0);
+        const UINT mapped = MapVirtualKeyExA(static_cast<UINT>(virtualKey),
+            MAPVK_VK_TO_CHAR, layout) & 0x7FFFFFFFu;
+        if (mapped >= 0x20u && mapped <= 0x7Eu)
+            return std::string(1, static_cast<char>(mapped));
+        const std::string configured = Config::KeyToString(virtualKey);
+        return configured.empty() ? std::string(fallback) : configured;
+    }
+
+    static float GetQuickDrawKeyboardPreviewOcclusion(const ImVec2& position)
+    {
+        if (g_quickDrawKeyboardVisualPreviewAlpha <= 0.002f)
+            return 1.0f;
+        const ImVec2 delta = position - g_quickDrawKeyboardVisualPreviewMaskCenter;
+        const float distance = std::sqrt(delta.x * delta.x + delta.y * delta.y);
+        // Máscara radial com dureza zero: o conteúdo ImGui se dissolve sob o
+        // preview, mas o preview 3D nunca recebe esse alpha.
+        // O preview ocupa uma área maior que o antigo raio de 155 px.  Um
+        // núcleo largo garante que nada do teclado atravesse o modelo, e a
+        // queda até fora continua totalmente suave.
+        const float t = std::clamp(1.0f - distance / 235.0f, 0.0f, 1.0f);
+        const float softness = t * t * (3.0f - 2.0f * t);
+        // No núcleo a UI precisa desaparecer por completo, porque o preview
+        // 3D é composto antes do ImGui. A transição para fora continua suave.
+        return 1.0f - softness * g_quickDrawKeyboardVisualPreviewAlpha;
+    }
+
+    static bool IsQuickDrawSkyrimKey(std::uint32_t mappedKey, int virtualKey)
+    {
+        const UINT scan = MapVirtualKeyW(static_cast<UINT>(virtualKey),
+            MAPVK_VK_TO_VSC_EX);
+        const std::uint32_t rawScan = scan & 0xFFu;
+        const std::uint32_t skyrimScan = (scan & 0xFF00u) == 0xE000u
+            ? rawScan | 0x80u : rawScan;
+        return mappedKey == rawScan || mappedKey == skyrimScan;
+    }
+
+    static std::string ResolveQuickDrawUnavailableReason(int virtualKey)
+    {
+        // A razão exibida vem do ControlMap em tempo real: respeita qualquer
+        // remapeamento feito pelo jogador dentro do próprio Skyrim.
+        if (auto* controls = RE::ControlMap::GetSingleton())
+        {
+            static constexpr std::array<std::pair<const char*, const char*>, 22> events{{
+                { "Pause", "Pause" }, { "Sprint", "Sprint" },
+                { "Jump", "Jump" }, { "Activate", "Activate" },
+                { "Ready Weapon", "Ready Weapon" }, { "Sneak", "Sneak" },
+                { "Toggle POV", "Toggle POV" }, { "Shout", "Shout" },
+                { "Favorites", "Favorites" }, { "Quick Inventory", "Inventory" },
+                { "Quick Magic", "Magic" }, { "Quick Map", "Map" },
+                { "Journal", "Journal" }, { "Wait", "Wait" },
+                { "Auto Move", "Auto Move" }, { "Tween Menu", "Menu" },
+                { "Console", "Console" }, { "Screenshot", "Screenshot" },
+                { "Forward", "Forward" }, { "Back", "Back" },
+                { "Strafe Left", "Strafe Left" }, { "Strafe Right", "Strafe Right" }
+            }};
+            for (const auto& [eventName, displayName] : events)
+            {
+                const auto mapped = controls->GetMappedKey(eventName,
+                    RE::INPUT_DEVICE::kKeyboard);
+                if (mapped != RE::ControlMap::kInvalid &&
+                    IsQuickDrawSkyrimKey(static_cast<std::uint32_t>(mapped), virtualKey))
+                    return displayName;
+            }
+        }
+        return "Sys";
+    }
+
+    static float DrawQuickDrawVisualKeyboard(ImDrawList* draw, const ImVec2& screen,
         float alpha, float dt)
     {
         if (!draw || alpha <= 0.002f)
-            return;
+            return 0.0f;
 
         // As teclas usam os VKs do layout ativo do Windows. KeyToString
         // resolve o rótulo conforme a disposição (QWERTY/AZERTY etc.) que o
         // jogador está usando, enquanto o desenho conserva a forma física.
-        static const std::array<std::vector<QuickDrawVisualKeyboardKey>, 5> rows{{
-            { { VK_ESCAPE, "ESC", 1.35f }, { '1', "1" }, { '2', "2" }, { '3', "3" },
+        // As seis primeiras linhas formam o corpo principal. As seis finais
+        // ocupam o bloco direito: navegação, setas e numpad. Mantê-los como
+        // linhas separadas permite que ambos preencham o mesmo retângulo sem
+        // criar uma segunda faixa abaixo do teclado.
+        static const std::array<std::vector<QuickDrawVisualKeyboardKey>, 12> rows{{
+            { { VK_ESCAPE, "ESC", 1.15f }, { VK_F1, "F1" }, { VK_F2, "F2" },
+              { VK_F3, "F3" }, { VK_F4, "F4" }, { VK_F5, "F5" }, { VK_F6, "F6" },
+              { VK_F7, "F7" }, { VK_F8, "F8" }, { VK_F9, "F9" }, { VK_F10, "F10" },
+              { VK_F11, "F11" }, { VK_F12, "F12" } },
+            { { VK_OEM_3, "~", 1.35f }, { '1', "1" }, { '2', "2" }, { '3', "3" },
               { '4', "4" }, { '5', "5" }, { '6', "6" }, { '7', "7" }, { '8', "8" },
               { '9', "9" }, { '0', "0" }, { VK_BACK, "BACKSPACE", 1.7f } },
             { { VK_TAB, "TAB", 1.45f }, { 'Q', "Q" }, { 'W', "W" }, { 'E', "E" },
@@ -16403,55 +16544,195 @@ namespace Menu
               { VK_OEM_PERIOD, "." }, { VK_OEM_2, "/" }, { VK_RSHIFT, "SHIFT", 2.1f } },
             { { VK_LCONTROL, "CTRL", 1.45f }, { VK_LWIN, "WIN", 1.2f }, { VK_LMENU, "ALT", 1.2f },
               { VK_SPACE, "", 5.9f }, { VK_RMENU, "ALT", 1.2f }, { VK_RCONTROL, "CTRL", 1.45f },
-              { VK_LEFT, "◀" }, { VK_DOWN, "▼" }, { VK_RIGHT, "▶" } }
+              { VK_APPS, "MENU" } },
+            { { VK_INSERT, "INS" }, { VK_HOME, "HOME" }, { VK_PRIOR, "PgUp" },
+              { VK_NUMLOCK, "NUM" }, { VK_DIVIDE, "/" }, { VK_MULTIPLY, "*" },
+              { VK_SUBTRACT, "-" } },
+            { { VK_DELETE, "DEL" }, { VK_END, "END" }, { VK_NEXT, "PgDn" },
+              { VK_NUMPAD7, "7" }, { VK_NUMPAD8, "8" }, { VK_NUMPAD9, "9" },
+              { VK_ADD, "+", 1.0f, true, 2.0f } },
+            { { VK_PAUSE, "PAUSE" }, { VK_SCROLL, "SCRLK" }, { VK_SNAPSHOT, "PRTSC" },
+              { VK_NUMPAD4, "4" }, { VK_NUMPAD5, "5" }, { VK_NUMPAD6, "6" },
+              { 0, "", 1.0f, false } },
+            { { 0, "", 1.0f, false }, { 0, "", 1.0f, false }, { 0, "", 1.0f, false },
+              { VK_NUMPAD1, "1" }, { VK_NUMPAD2, "2" }, { VK_NUMPAD3, "3" },
+              { 0, "ENTER", 1.0f, true, 2.0f } },
+            { { 0, "", 1.0f, false }, { VK_UP, "▲" },
+              { 0, "", 1.0f, false }, { 0, "", 1.0f, false },
+              { VK_NUMPAD0, "0", 2.0f }, { 0, "", 1.0f, false } },
+            { { VK_LEFT, "◀" }, { VK_DOWN, "▼" }, { VK_RIGHT, "▶" },
+              { 0, "", 1.0f, false }, { 0, "", 1.0f, false },
+              { 0, "", 1.0f, false }, { 0, "", 1.0f, false } }
         }};
 
         const float marginX = 50.0f;
         const float keyboardWidth = std::max(260.0f, screen.x - marginX * 2.0f);
         const float keyGap = 5.0f;
-        const float rowHeight = std::clamp(keyboardWidth / 17.0f, 38.0f, 67.0f);
-        const float keyboardHeight = rowHeight * 5.0f + keyGap * 4.0f + 28.0f;
-        const ImVec2 keyboardMin(marginX, (screen.y - keyboardHeight) * 0.5f);
+        // A borda lateral é propositalmente maior que o vão entre teclas:
+        // acompanha o respiro visual da base do painel arredondado.
+        const float sidePadding = 15.0f;
+        const float verticalPadding = 15.0f;
+        const float maxHeightForKeyboard = std::max(260.0f, screen.y - 38.0f);
+        const float rowHeight = std::clamp(std::min(keyboardWidth / 17.0f,
+                (maxHeightForKeyboard - verticalPadding * 2.0f - keyGap * 5.0f) / 6.0f),
+            32.0f, 67.0f);
+        const float keyboardHeight = rowHeight * 6.0f + keyGap * 5.0f +
+            verticalPadding * 2.0f;
+        const ImVec2 keyboardMin(marginX, std::max(18.0f,
+            (screen.y - keyboardHeight) * 0.5f - 130.0f));
         const ImVec2 keyboardMax(screen.x - marginX, keyboardMin.y + keyboardHeight);
-        const float unitWidth = (keyboardWidth - keyGap * 13.0f) / 15.0f;
+        const float innerWidth = keyboardWidth - sidePadding * 2.0f;
+        // O corpo e o bloco lateral dividem a mesma altura. Isso mantém o
+        // numpad dentro do contorno e dá espaço de borda idêntico ao vão das
+        // teclas, inclusive em resoluções ultrawide.
+        const float mainAreaWidth = innerWidth * 0.735f;
+        const float sideAreaWidth = innerWidth - mainAreaWidth - keyGap;
+        const float mainAreaX = keyboardMin.x + sidePadding;
+        const float sideAreaX = mainAreaX + mainAreaWidth + keyGap;
 
-        draw->AddRectFilled(keyboardMin, keyboardMax,
-            FadeColor(IM_COL32(17, 18, 23, 112), alpha), 20.0f);
-        draw->AddRect(keyboardMin, keyboardMax,
-            FadeColor(IM_COL32(245, 242, 232, 105), alpha), 20.0f, 0, 1.25f);
+        // O fundo também precisa receber a máscara do preview. Antes apenas
+        // teclas/ícones eram atenuados; o grande retângulo escuro seguia
+        // inteiro por baixo do modelo 3D. A malha fina mantém a transição
+        // radial suave, inclusive no núcleo totalmente invisível.
+        constexpr int backgroundColumns = 48;
+        constexpr int backgroundRows = 16;
+        const ImVec2 backgroundCellSize(
+            (keyboardMax.x - keyboardMin.x) / static_cast<float>(backgroundColumns),
+            (keyboardMax.y - keyboardMin.y) / static_cast<float>(backgroundRows));
+        for (int row = 0; row < backgroundRows; ++row)
+        {
+            for (int column = 0; column < backgroundColumns; ++column)
+            {
+                const ImVec2 cellMin = keyboardMin + ImVec2(
+                    backgroundCellSize.x * static_cast<float>(column),
+                    backgroundCellSize.y * static_cast<float>(row));
+                const ImVec2 cellMax = cellMin + backgroundCellSize;
+                const ImVec2 cellCenter((cellMin.x + cellMax.x) * 0.5f,
+                    (cellMin.y + cellMax.y) * 0.5f);
+                const float cellAlpha = alpha *
+                    GetQuickDrawKeyboardPreviewOcclusion(cellCenter);
+                if (cellAlpha > 0.002f)
+                    draw->AddRectFilled(cellMin, cellMax,
+                        FadeColor(IM_COL32(17, 18, 23, 112), cellAlpha));
+            }
+        }
+        //draw->AddRect(keyboardMin, keyboardMax,
+        //    FadeColor(IM_COL32(245, 242, 232, 105), alpha), 20.0f, 0, 1.25f);
 
         g_quickDrawKeyboardHoveredCard = -1;
+        g_quickDrawKeyboardVisualSlots.clear();
+        std::vector<std::pair<ImVec2, std::string>> hoveredItemNames;
         for (std::size_t rowIndex = 0; rowIndex < rows.size(); ++rowIndex)
         {
             const auto& row = rows[rowIndex];
+            const bool sideRow = rowIndex >= 6;
+            const float areaWidth = sideRow ? sideAreaWidth : mainAreaWidth;
+            const float areaX = sideRow ? sideAreaX : mainAreaX;
+            const std::size_t displayRow = sideRow ? rowIndex - 6 : rowIndex;
+            const float currentRowHeight = rowHeight;
             float units = 0.0f;
             for (const auto& key : row)
                 units += key.units;
-            const float rowWidth = units * unitWidth +
-                keyGap * static_cast<float>(row.size() - 1);
-            float x = (screen.x - rowWidth) * 0.5f;
-            const float y = keyboardMin.y + 14.0f +
-                static_cast<float>(rowIndex) * (rowHeight + keyGap);
+            // Cada linha preenche sua própria área. Assim não existem buracos
+            // nas pontas: Esc/F-keys, modificadores e numpad crescem apenas o
+            // necessário para fechar a largura disponível.
+            const float unitWidth = (areaWidth - keyGap *
+                static_cast<float>(row.size() - 1)) / std::max(units, 1.0f);
+            float x = areaX;
+            const float y = keyboardMin.y + verticalPadding +
+                static_cast<float>(displayRow) * (currentRowHeight + keyGap);
             for (const auto& key : row)
             {
                 const float width = key.units * unitWidth;
+                if (!key.visible)
+                {
+                    x += width + keyGap;
+                    continue;
+                }
+                // O espaço visível entre teclas é exatamente 5px; o conjunto
+                // continua menor porque a área principal divide largura com
+                // o bloco lateral de navegação/numpad.
                 const ImVec2 keyMin(x, y);
-                const ImVec2 keyMax(x + width, y + rowHeight);
+                const ImVec2 keyMax(x + width, y + currentRowHeight * key.rowSpan +
+                    keyGap * (key.rowSpan - 1.0f));
                 const ImVec2 keyCenter((keyMin.x + keyMax.x) * 0.5f,
                     (keyMin.y + keyMax.y) * 0.5f);
-                draw->AddRectFilled(keyMin, keyMax,
-                    FadeColor(IM_COL32(25, 26, 32, 160), alpha), 7.0f);
-                draw->AddRect(keyMin, keyMax,
-                    FadeColor(IM_COL32(245, 242, 232, 125), alpha), 7.0f, 0, 1.0f);
+                // Para teclas extensas — especialmente SPACE — usar apenas
+                // o centro deixa uma ponta visível sob o preview. A amostra
+                // mais próxima da máscara garante que toda tecla tocada pelo
+                // preview desapareça junto com sua borda.
+                const ImVec2 nearestMaskPoint(
+                    std::clamp(g_quickDrawKeyboardVisualPreviewMaskCenter.x,
+                        keyMin.x, keyMax.x),
+                    std::clamp(g_quickDrawKeyboardVisualPreviewMaskCenter.y,
+                        keyMin.y, keyMax.y));
+                const float keyAlpha = alpha *
+                    GetQuickDrawKeyboardPreviewOcclusion(nearestMaskPoint);
+                if (key.key != 0)
+                    g_quickDrawKeyboardVisualSlots.push_back({ key.key, keyMin, keyMax });
+
+                auto boundCard = std::find_if(g_quickDrawKeyboardCards.begin(),
+                    g_quickDrawKeyboardCards.end(), [&](const QuickDrawKeyboardCard& card) {
+                        return card.hotkey == key.key && card.removeT < 0.62f &&
+                            card.filterT > 0.08f;
+                    });
+                const bool hasBoundItem = key.key != 0 &&
+                    boundCard != g_quickDrawKeyboardCards.end();
+                const bool keyHovered = hasBoundItem && PointInQuickDrawRect(
+                    g_settingsMousePos, keyMin, keyMax);
+                float keyHoverT = 0.0f;
+                if (hasBoundItem)
+                {
+                    boundCard->keyboardHoverT = AnimateSettingsValue(
+                        boundCard->keyboardHoverT, keyHovered ? 1.0f : 0.0f, 12.0f, dt);
+                    keyHoverT = boundCard->keyboardHoverT;
+                }
+                const float keyScale = 1.0f + 0.075f * keyHoverT;
+                const ImVec2 visualHalf((keyMax.x - keyMin.x) * 0.5f * keyScale,
+                    (keyMax.y - keyMin.y) * 0.5f * keyScale);
+                const ImVec2 visualKeyMin = keyCenter - visualHalf;
+                const ImVec2 visualKeyMax = keyCenter + visualHalf;
+                const bool reservedKey = key.key != 0 && IsQuickDrawHotkeyReserved(key.key);
+                const bool systemKey = key.key != 0 && !IsSupportedWheelKey(key.key);
+                const bool unavailable = !hasBoundItem && (reservedKey || systemKey);
+                draw->AddRectFilled(visualKeyMin, visualKeyMax,
+                    FadeColor(unavailable ? IM_COL32(32, 33, 39, 205) :
+                        IM_COL32(25, 26, 32, 160), keyAlpha), 7.0f);
+                if (!unavailable)
+                {
+                    draw->AddRect(visualKeyMin, visualKeyMax,
+                        FadeColor(IM_COL32(245, 242, 232, 125), keyAlpha),
+                        7.0f, 0, 1.0f);
+                }
                 const std::string label = key.key != 0
-                    ? Config::KeyToString(key.key) : key.label;
+                    ? ResolveQuickDrawVisualKeyboardLabel(key.key, key.label)
+                    : key.label;
                 const ImVec2 labelSize = ImGui::CalcTextSize(label.c_str());
-                const ImVec2 labelPos(keyMin.x + 7.0f,
-                    keyMin.y + 5.0f);
+                const ImVec2 labelPos(visualKeyMin.x + 7.0f,
+                    visualKeyMin.y + 5.0f);
                 draw->AddText(labelPos + ImVec2(1.0f, 1.0f),
-                    FadeColor(IM_COL32(0, 0, 0, 185), alpha), label.c_str());
+                    FadeColor(IM_COL32(0, 0, 0, 185), keyAlpha), label.c_str());
                 draw->AddText(labelPos,
-                    FadeColor(IM_COL32(245, 242, 232, 185), alpha), label.c_str());
+                    FadeColor(unavailable ? IM_COL32(180, 180, 187, 132) :
+                        IM_COL32(245, 242, 232, 185), keyAlpha), label.c_str());
+
+                if (unavailable)
+                {
+                    std::string reason = ResolveQuickDrawUnavailableReason(key.key);
+                    if (key.key == Config::g_toggleKey)
+                        reason = Language::Get("first_key");
+                    else if (key.key == Config::g_secondaryKey)
+                        reason = Language::Get("second_key");
+                    else if (key.key == Config::g_altConfigKey)
+                        reason = Language::Get("alt_config_key");
+                    const ImVec2 reasonSize = ImGui::CalcTextSize(reason.c_str());
+                    const ImVec2 reasonPos(keyCenter.x - reasonSize.x * 0.5f,
+                        keyCenter.y - reasonSize.y * 0.5f);
+                    draw->AddText(reasonPos + ImVec2(1.0f, 1.0f),
+                        FadeColor(IM_COL32(0, 0, 0, 145), keyAlpha), reason.c_str());
+                    draw->AddText(reasonPos,
+                        FadeColor(IM_COL32(190, 190, 196, 105), keyAlpha), reason.c_str());
+                }
 
                 if (key.key != 0)
                 {
@@ -16459,63 +16740,357 @@ namespace Menu
                         cardIndex < g_quickDrawKeyboardCards.size(); ++cardIndex)
                     {
                         auto& card = g_quickDrawKeyboardCards[cardIndex];
-                        if (card.hotkey != key.key || card.removeT >= 0.0f ||
+                        if (card.hotkey != key.key || card.removeT >= 0.62f ||
                             card.filterT <= 0.08f)
                             continue;
-                        const bool hovered = IsSettingsCircleHovered(g_settingsMousePos,
-                            keyCenter, 26.0f);
+                        const float removeAlpha = card.removeT < 0.0f ? 1.0f :
+                            std::clamp(1.0f - card.removeT / 0.62f, 0.0f, 1.0f);
+                        // Usa exatamente o mesmo hover retangular que anima a
+                        // tecla. Antes este teste circular desligava o alvo no
+                        // meio do crescimento, produzindo a tremida.
+                        const bool hovered = keyHovered;
                         if (hovered)
                             g_quickDrawKeyboardHoveredCard = static_cast<int>(cardIndex);
-                        card.clearHoverT = AnimateSettingsValue(card.clearHoverT,
-                            hovered ? 1.0f : 0.0f, 12.0f, dt);
-                        const float miniRadius = 17.0f + 14.0f * card.clearHoverT;
+                        // Dentro do teclado o bind é só o ícone. Não há
+                        // cartão, física ou zoom do recipiente — somente o
+                        // ícone cresce suavemente no hover.
+                        const float iconRadius = 12.0f + 13.0f * card.keyboardHoverT;
                         card.keyboardMiniCenter = keyCenter;
-                        card.keyboardRemoveCenter = keyCenter +
-                            ImVec2(miniRadius * 0.76f, -miniRadius * 0.76f);
-                        draw->AddCircleFilled(keyCenter, miniRadius,
-                            FadeColor(IM_COL32(20, 20, 25, 195), alpha), 28);
-                        draw->AddCircle(keyCenter, miniRadius,
-                            FadeColor(IM_COL32(245, 242, 232,
-                                hovered ? 210 : 120), alpha), 28, hovered ? 1.6f : 1.0f);
+                        card.keyboardRemoveCenter = keyCenter;
                         RadialItem item{};
                         if (BuildQuickDrawHotkeyPreviewItem(card.key, item))
                         {
                             if (auto* icon = ItemIcon::Get(item.form))
                             {
-                                const float iconRadius = miniRadius * 0.70f;
                                 draw->AddImage(reinterpret_cast<ImTextureID>(icon),
                                     keyCenter - ImVec2(iconRadius, iconRadius),
                                     keyCenter + ImVec2(iconRadius, iconRadius),
                                     ImVec2(0, 0), ImVec2(1, 1), MakeGameplayIconColor(item,
-                                        static_cast<int>(178.0f * alpha), 1.0f, false,
+                                        static_cast<int>(178.0f * keyAlpha * removeAlpha), 1.0f, false,
                                         RadialSide::Left));
+                            }
+                            if (hovered)
+                            {
+                                g_quickDrawKeyboardVisualPreviewItem = item;
+                                g_quickDrawKeyboardVisualPreviewWanted = true;
                             }
                             if (hovered && !item.name.empty())
                             {
                                 const ImVec2 nameSize = ImGui::CalcTextSize(item.name.c_str());
                                 const ImVec2 namePos(keyCenter.x - nameSize.x * 0.5f,
                                     keyMax.y + 7.0f);
-                                draw->AddText(namePos + ImVec2(1, 1),
-                                    FadeColor(IM_COL32(0, 0, 0, 210), alpha), item.name.c_str());
-                                draw->AddText(namePos,
-                                    FadeColor(IM_COL32(245, 242, 232, 230), alpha), item.name.c_str());
+                                hoveredItemNames.emplace_back(namePos, item.name);
                             }
                         }
-                        const float xRadius = 7.0f;
-                        draw->AddCircleFilled(card.keyboardRemoveCenter, xRadius,
-                            FadeColor(IM_COL32(35, 36, 42, 225), alpha), 16);
-                        draw->AddCircle(card.keyboardRemoveCenter, xRadius,
-                            FadeColor(IM_COL32(245, 242, 232, 155), alpha), 16, 1.0f);
-                        draw->AddLine(card.keyboardRemoveCenter - ImVec2(2.2f, 2.2f),
-                            card.keyboardRemoveCenter + ImVec2(2.2f, 2.2f),
-                            FadeColor(IM_COL32(245, 242, 232, 210), alpha), 1.0f);
-                        draw->AddLine(card.keyboardRemoveCenter + ImVec2(2.2f, -2.2f),
-                            card.keyboardRemoveCenter + ImVec2(-2.2f, 2.2f),
-                            FadeColor(IM_COL32(245, 242, 232, 210), alpha), 1.0f);
+                        if (hovered)
+                        {
+                            constexpr float xRadius = 14.0f;
+                            draw->AddCircleFilled(card.keyboardRemoveCenter, xRadius,
+                                FadeColor(IM_COL32(35, 36, 42, 112), keyAlpha * removeAlpha), 20);
+                            draw->AddLine(card.keyboardRemoveCenter - ImVec2(4.4f, 4.4f),
+                                card.keyboardRemoveCenter + ImVec2(4.4f, 4.4f),
+                                FadeColor(IM_COL32(245, 242, 232, 210), keyAlpha * removeAlpha), 1.3f);
+                            draw->AddLine(card.keyboardRemoveCenter + ImVec2(4.4f, -4.4f),
+                                card.keyboardRemoveCenter + ImVec2(-4.4f, 4.4f),
+                                FadeColor(IM_COL32(245, 242, 232, 210), keyAlpha * removeAlpha), 1.3f);
+                        }
                         break;
                     }
                 }
                 x += width + keyGap;
+            }
+        }
+
+        // Legendas depois de todas as teclas: uma linha seguinte não pode
+        // mais cobrir o nome do item que está sob o cursor.
+        for (const auto& [namePos, name] : hoveredItemNames)
+        {
+            const ImVec2 nameSize = ImGui::CalcTextSize(name.c_str());
+            // Máscara de texto com bordas suaves: camadas externas de alpha
+            // baixo eliminam o recorte visível do antigo retângulo sólido.
+            for (int layer = 5; layer >= 1; --layer)
+            {
+                const float expand = 7.0f + static_cast<float>(layer) * 6.0f;
+                const ImVec2 backgroundMin = namePos - ImVec2(expand, expand * 0.58f);
+                const ImVec2 backgroundMax = namePos + nameSize +
+                    ImVec2(expand, expand * 0.58f);
+                draw->AddRectFilled(backgroundMin, backgroundMax,
+                    FadeColor(IM_COL32(14, 15, 19, 7 + (5 - layer) * 9), alpha),
+                    9.0f + expand);
+            }
+            const ImVec2 backgroundMin = namePos - ImVec2(8.0f, 4.0f);
+            const ImVec2 backgroundMax = namePos + nameSize + ImVec2(8.0f, 4.0f);
+            draw->AddRectFilled(backgroundMin, backgroundMax,
+                FadeColor(IM_COL32(14, 15, 19, 76), alpha), 7.0f);
+            draw->AddText(namePos + ImVec2(1, 1),
+                FadeColor(IM_COL32(0, 0, 0, 210), alpha), name.c_str());
+            draw->AddText(namePos,
+                FadeColor(IM_COL32(245, 242, 232, 230), alpha), name.c_str());
+        }
+        return keyboardMax.y;
+    }
+
+    static void DrawQuickDrawKeyboardSourceConstellation(ImDrawList* draw,
+        const ImVec2& screen, float keyboardBottom, float alpha)
+    {
+        if (!draw || alpha <= 0.002f)
+            return;
+
+        g_quickDrawKeyboardSourceItems.clear();
+        const auto collect = [](const std::vector<RadialItem>& items,
+            std::vector<QuickDrawKeyboardSourceItem>& target, std::uint64_t sourceTag) {
+            for (std::size_t index = 0; index < items.size(); ++index)
+            {
+                const auto& item = items[index];
+                if (item.form)
+                {
+                    const std::uint64_t key =
+                        (static_cast<std::uint64_t>(item.form->GetFormID()) << 32) ^
+                        (static_cast<std::uint64_t>(item.uniqueID) << 12) ^
+                        (sourceTag << 8) ^ static_cast<std::uint64_t>(index);
+                    const auto* gesture = FindQuickDrawGesture(item);
+                    const bool bound = gesture && gesture->hotkey != 0;
+                    target.push_back({ item, {}, 19.0f, key, bound });
+                }
+            }
+        };
+        collect(g_topItems, g_quickDrawKeyboardSourceItems, 1);
+        collect(g_bottomItems, g_quickDrawKeyboardSourceItems, 2);
+        collect(g_sideItems, g_quickDrawKeyboardSourceItems, 3);
+        collect(g_bagItems, g_quickDrawKeyboardSourceItems, 4);
+
+        const float freeTop = keyboardBottom + 26.0f;
+        const float freeBottom = screen.y - 48.0f;
+        if (freeBottom <= freeTop || g_quickDrawKeyboardSourceItems.empty())
+            return;
+
+        // A constelação nasce no centro do espaço abaixo do teclado. Seus
+        // anéis usam somente o semicírculo inferior; quando a área fica
+        // curta, cada camada se abre para os lados, nunca invade o teclado.
+        const ImVec2 anchor(screen.x * 0.5f,
+            freeTop + (freeBottom - freeTop) * 0.34f);
+        const float time = static_cast<float>(ImGui::GetTime());
+        const float dt = std::clamp(ImGui::GetIO().DeltaTime, 0.0f, 0.05f);
+        std::vector<ImVec2> targets(g_quickDrawKeyboardSourceItems.size());
+        int ordinal = 0;
+        for (std::size_t index = 0; index < g_quickDrawKeyboardSourceItems.size(); ++index)
+        {
+            auto& entry = g_quickDrawKeyboardSourceItems[index];
+            int ring = 1;
+            int inRing = ordinal;
+            while (inRing >= ring * 6)
+            {
+                inRing -= ring * 6;
+                ++ring;
+            }
+            const int slots = ring * 6;
+            // 15°..165°: sempre abaixo da âncora. Nas camadas maiores a
+            // distribuição tende às laterais para respeitar o teclado acima.
+            const float angle = 0.261799f + 2.617994f *
+                static_cast<float>(inRing) / std::max(1, slots - 1);
+            const float radius = 36.0f + 40.0f * static_cast<float>(ring - 1);
+            ImVec2 target = anchor + ImVec2(std::cos(angle) * radius,
+                std::sin(angle) * radius);
+            target.x = std::clamp(target.x, 28.0f, screen.x - 28.0f);
+            target.y = std::clamp(target.y, freeTop + 18.0f, freeBottom);
+            targets[index] = target;
+            auto& visual = g_quickDrawKeyboardSourceVisuals[entry.visualKey];
+            if (!visual.initialized)
+            {
+                visual.position = anchor;
+                visual.velocity = (target - anchor) * 1.2f;
+                visual.initialized = true;
+            }
+            const bool sourceVisibleByFilter = entry.item.form &&
+                g_quickDrawKeyboardFilters[static_cast<std::size_t>(
+                    GetQuickDrawKeyboardFilterForForm(entry.item.form))];
+            const bool sourceVisible = !entry.keyboardBound && sourceVisibleByFilter;
+            visual.alpha = g_quickDrawKeyboardVisualMode
+                ? (sourceVisible ? 1.0f : 0.0f)
+                : AnimateSettingsValue(visual.alpha,
+                    sourceVisible ? 1.0f : 0.0f, 7.0f, dt);
+            if (!sourceVisible)
+            {
+                targets[index] = visual.position;
+                continue;
+            }
+            ++ordinal;
+        }
+
+        int hoveredSourceIndex = -1;
+        for (std::size_t i = 0; i < g_quickDrawKeyboardSourceItems.size(); ++i)
+        {
+            const auto& entry = g_quickDrawKeyboardSourceItems[i];
+            auto& visual = g_quickDrawKeyboardSourceVisuals[entry.visualKey];
+            const ImVec2 delta = g_settingsMousePos - visual.position;
+            const bool hovered = !entry.keyboardBound && visual.alpha > 0.05f &&
+                delta.x * delta.x + delta.y * delta.y <= 23.0f * 23.0f;
+            visual.hoverT = AnimateSettingsValue(visual.hoverT,
+                hovered ? 1.0f : 0.0f, 10.0f, dt);
+            if (hovered)
+                hoveredSourceIndex = static_cast<int>(i);
+        }
+
+        // Física independente da bolsa, mas com o mesmo princípio: cada
+        // ícone busca sua âncora, flutua livremente e repele os demais.
+        for (std::size_t i = 0; i < g_quickDrawKeyboardSourceItems.size(); ++i)
+        {
+            if (g_quickDrawKeyboardSourceItems[i].keyboardBound &&
+                g_quickDrawKeyboardSourceVisuals[
+                    g_quickDrawKeyboardSourceItems[i].visualKey].alpha <= 0.02f)
+                continue;
+            auto& a = g_quickDrawKeyboardSourceVisuals[
+                g_quickDrawKeyboardSourceItems[i].visualKey];
+            ImVec2 force = (targets[i] - a.position) * 7.0f;
+            for (std::size_t j = i + 1; j < g_quickDrawKeyboardSourceItems.size(); ++j)
+            {
+                if (g_quickDrawKeyboardSourceItems[j].keyboardBound &&
+                    g_quickDrawKeyboardSourceVisuals[
+                        g_quickDrawKeyboardSourceItems[j].visualKey].alpha <= 0.02f)
+                    continue;
+                auto& b = g_quickDrawKeyboardSourceVisuals[
+                    g_quickDrawKeyboardSourceItems[j].visualKey];
+                ImVec2 delta = b.position - a.position;
+                float distance = std::sqrt(delta.x * delta.x + delta.y * delta.y);
+                if (distance < 0.01f)
+                {
+                    delta = ImVec2(1.0f, 0.0f);
+                    distance = 1.0f;
+                }
+                constexpr float minimumDistance = 52.0f;
+                if (distance < minimumDistance)
+                {
+                    const ImVec2 direction = delta / distance;
+                    const float push = (minimumDistance - distance) * 21.0f;
+                    force -= direction * push;
+                    b.velocity += direction * push * dt;
+                }
+            }
+            if (hoveredSourceIndex >= 0 &&
+                static_cast<int>(i) != hoveredSourceIndex)
+            {
+                const auto& hoveredEntry = g_quickDrawKeyboardSourceItems[
+                    static_cast<std::size_t>(hoveredSourceIndex)];
+                const auto& hoveredVisual = g_quickDrawKeyboardSourceVisuals[
+                    hoveredEntry.visualKey];
+                ImVec2 delta = a.position - hoveredVisual.position;
+                float distance = std::sqrt(delta.x * delta.x + delta.y * delta.y);
+                if (distance < 0.01f)
+                    delta = ImVec2(1.0f, 0.0f), distance = 1.0f;
+                constexpr float hoverRange = 112.0f;
+                if (distance < hoverRange)
+                    force += (delta / distance) *
+                        ((hoverRange - distance) * 16.0f);
+            }
+            a.velocity += force * dt;
+            a.velocity *= std::exp(-6.5f * dt);
+            a.position += a.velocity * dt;
+            a.position.x = std::clamp(a.position.x, 25.0f, screen.x - 25.0f);
+            a.position.y = std::clamp(a.position.y, freeTop + 15.0f, freeBottom);
+        }
+
+        ordinal = 0;
+        for (auto& entry : g_quickDrawKeyboardSourceItems)
+        {
+            auto& visual = g_quickDrawKeyboardSourceVisuals[entry.visualKey];
+            const float itemAlpha = alpha * visual.alpha;
+            if (itemAlpha <= 0.002f)
+            {
+                ++ordinal;
+                continue;
+            }
+            const float phase = static_cast<float>(ordinal) * 0.73f;
+            const ImVec2 position = visual.position + ImVec2(
+                std::sin(time * 0.72f + phase) * 2.0f,
+                std::cos(time * 0.88f + phase * 1.4f) * 2.5f);
+            const float maskedItemAlpha = itemAlpha *
+                GetQuickDrawKeyboardPreviewOcclusion(position);
+            entry.center = position;
+            entry.radius = 19.0f;
+            const bool hovered = visual.hoverT > 0.02f;
+            if (hovered)
+            {
+                g_quickDrawKeyboardVisualPreviewItem = entry.item;
+                g_quickDrawKeyboardVisualPreviewWanted = true;
+            }
+            // Hover dobra o conjunto inteiro (fundo, contorno e ícone), não
+            // apenas o símbolo interno.
+            const float drawRadius = entry.radius * (1.0f + visual.hoverT);
+            if (hovered)
+            {
+                // A sombra e a legenda seguem a mesma curva de hover do
+                // ícone. A constelação fica deliberadamente mais leve que os
+                // comandos do editor, para não pesar o fundo do teclado.
+                const float hoverAlpha = visual.hoverT;
+                for (int ring = 4; ring >= 1; --ring)
+                {
+                    draw->AddCircleFilled(position, drawRadius + 5.0f + ring * 4.5f,
+                        FadeColor(IM_COL32(14, 15, 19,
+                            10 + (4 - ring) * 7), maskedItemAlpha * hoverAlpha), 28);
+                }
+                draw->AddCircleFilled(position, drawRadius + 6.0f,
+                    FadeColor(IM_COL32(14, 15, 19, 62), maskedItemAlpha * hoverAlpha), 28);
+            }
+            draw->AddCircleFilled(position, drawRadius,
+                FadeColor(IM_COL32(20, 20, 25, 168), maskedItemAlpha), 24);
+            const float borderHoverAlpha = 95.0f + 100.0f * visual.hoverT;
+            draw->AddCircle(position, drawRadius,
+                FadeColor(IM_COL32(245, 242, 232, borderHoverAlpha), maskedItemAlpha),
+                24, 1.0f + 0.5f * visual.hoverT);
+            if (auto* icon = ItemIcon::Get(entry.item.form))
+            {
+                // Ícone-base 20% menor; a escala de hover continua sendo a
+                // mesma do recipiente circular.
+                const float iconRadius = drawRadius * 0.584f;
+                draw->AddImage(reinterpret_cast<ImTextureID>(icon),
+                    position - ImVec2(iconRadius, iconRadius),
+                    position + ImVec2(iconRadius, iconRadius), ImVec2(0, 0),
+                    ImVec2(1, 1), MakeGameplayIconColor(entry.item,
+                        static_cast<int>(205.0f * maskedItemAlpha), 1.0f, false,
+                        RadialSide::Left));
+            }
+            if (hovered && !entry.item.name.empty())
+            {
+                const ImVec2 nameSize = ImGui::CalcTextSize(entry.item.name.c_str());
+                const ImVec2 namePos(position.x - nameSize.x * 0.5f,
+                    position.y - drawRadius - 7.0f - nameSize.y);
+                draw->AddText(namePos + ImVec2(1.0f, 1.0f),
+                    FadeColor(IM_COL32(0, 0, 0, 220), maskedItemAlpha * visual.hoverT),
+                    entry.item.name.c_str());
+                draw->AddText(namePos,
+                    FadeColor(IM_COL32(245, 242, 232, 235), maskedItemAlpha * visual.hoverT),
+                    entry.item.name.c_str());
+            }
+            ++ordinal;
+        }
+
+        if (g_quickDrawKeyboardItemDragActive && g_quickDrawKeyboardDraggedItem.form)
+        {
+            const ImVec2 cursor = g_settingsMousePos;
+            constexpr float radius = 27.0f;
+            draw->AddCircleFilled(cursor, radius,
+                FadeColor(IM_COL32(20, 20, 25, 205), alpha), 24);
+            if (auto* icon = ItemIcon::Get(g_quickDrawKeyboardDraggedItem.form))
+            {
+                draw->AddImage(reinterpret_cast<ImTextureID>(icon),
+                    cursor - ImVec2(radius * 0.72f, radius * 0.72f),
+                    cursor + ImVec2(radius * 0.72f, radius * 0.72f), ImVec2(0, 0),
+                    ImVec2(1, 1), MakeGameplayIconColor(g_quickDrawKeyboardDraggedItem,
+                        static_cast<int>(230.0f * alpha), 1.0f, false,
+                        RadialSide::Left));
+            }
+            if (!g_quickDrawKeyboardDraggedItem.name.empty())
+            {
+                const ImVec2 nameSize = ImGui::CalcTextSize(
+                    g_quickDrawKeyboardDraggedItem.name.c_str());
+                const ImVec2 namePos(cursor.x - nameSize.x * 0.5f,
+                    cursor.y - radius - 8.0f - nameSize.y);
+                draw->AddText(namePos + ImVec2(1.0f, 1.0f),
+                    FadeColor(IM_COL32(0, 0, 0, 225), alpha),
+                    g_quickDrawKeyboardDraggedItem.name.c_str());
+                draw->AddText(namePos,
+                    FadeColor(IM_COL32(245, 242, 232, 240), alpha),
+                    g_quickDrawKeyboardDraggedItem.name.c_str());
             }
         }
     }
@@ -16529,6 +17104,10 @@ namespace Menu
         const ImVec2 center(screen.x * 0.5f, screen.y * 0.5f);
         const float time = static_cast<float>(ImGui::GetTime());
         const float dt = std::clamp(ImGui::GetIO().DeltaTime, 0.0f, 0.05f);
+        g_quickDrawKeyboardVisualModeT = AnimateSettingsValue(
+            g_quickDrawKeyboardVisualModeT,
+            g_quickDrawKeyboardVisualMode ? 1.0f : 0.0f, 4.8f, dt);
+        const float radialCardsAlpha = 1.0f - g_quickDrawKeyboardVisualModeT;
         g_quickDrawKeyboardReflowCooldown = std::max(0.0f,
             g_quickDrawKeyboardReflowCooldown - dt);
         // O envelope continua retangular para a física/reflow da grade, mas
@@ -16549,8 +17128,10 @@ namespace Menu
             filterTargetVisible[i] = visibleByFilter && card.removeT < 0.0f;
             if (filterTargetVisible[i])
                 ++radialCardCount;
-            card.filterT = AnimateSettingsValue(card.filterT,
-                visibleByFilter ? 1.0f : 0.0f, 4.5f, dt);
+            card.filterT = g_quickDrawKeyboardVisualMode
+                ? (visibleByFilter ? 1.0f : 0.0f)
+                : AnimateSettingsValue(card.filterT,
+                    visibleByFilter ? 1.0f : 0.0f, 4.5f, dt);
         }
 
         // Calcula a área da formação para preservar o scroll simétrico quando
@@ -16650,7 +17231,8 @@ namespace Menu
         // um cartão próximo roubava o hover do outro/X.
         g_quickDrawKeyboardHoveredCard = -1;
         int hoveredDeleteCard = -1;
-        if (g_quickDrawKeyboardReflowCooldown <= 0.0f)
+        if (g_quickDrawKeyboardReflowCooldown <= 0.0f &&
+            g_quickDrawKeyboardVisualModeT < 0.02f)
         {
             for (std::size_t i = 0; i < g_quickDrawKeyboardCards.size(); ++i)
             {
@@ -16674,7 +17256,8 @@ namespace Menu
             // preview do item sem deixar um vizinho roubar o hover.
             g_quickDrawKeyboardHoveredCard = hoveredDeleteCard;
         }
-        else if (g_quickDrawKeyboardReflowCooldown <= 0.0f)
+        else if (g_quickDrawKeyboardReflowCooldown <= 0.0f &&
+            g_quickDrawKeyboardVisualModeT < 0.02f)
         {
             for (std::size_t i = 0; i < g_quickDrawKeyboardCards.size(); ++i)
             {
@@ -16740,7 +17323,8 @@ namespace Menu
             forces[i] = offset * -springForce -
                 card.simulationVelocity * velocityDamping;
 
-            if (hasHoveredItem && g_quickDrawKeyboardReflowCooldown <= 0.0f)
+            if (hasHoveredItem && g_quickDrawKeyboardReflowCooldown <= 0.0f &&
+                g_quickDrawKeyboardVisualModeT < 0.02f)
             {
                 const ImVec2 delta = visualCenters[i] - center;
                 const float distance = std::sqrt(delta.x * delta.x + delta.y * delta.y);
@@ -16759,6 +17343,7 @@ namespace Menu
             }
 
             if (g_quickDrawKeyboardReflowCooldown <= 0.0f &&
+                g_quickDrawKeyboardVisualModeT < 0.02f &&
                 g_quickDrawKeyboardHoveredCard >= 0 &&
                 static_cast<int>(i) != g_quickDrawKeyboardHoveredCard)
             {
@@ -17084,14 +17669,6 @@ namespace Menu
             kQuickDrawKeyboardToggleRadius,
             FadeColor(IM_COL32(245, 242, 232,
                 g_quickDrawKeyboardVisualMode ? 225 : 125), alpha), 18, 1.0f);
-        // Ícone mínimo de teclado: três traços de teclas, sem competir com
-        // os filtros maiores.
-        for (int row = -1; row <= 1; ++row)
-        {
-            draw->AddLine(g_quickDrawKeyboardToggleCenter + ImVec2(-3.5f, row * 2.3f),
-                g_quickDrawKeyboardToggleCenter + ImVec2(3.5f, row * 2.3f),
-                FadeColor(IM_COL32(245, 242, 232, 190), alpha), 1.0f);
-        }
         if (keyboardToggleHovered)
         {
             const std::string& label = Language::Get("show_keyboard");
@@ -17103,8 +17680,11 @@ namespace Menu
                     alpha * g_quickDrawKeyboardToggleHoverT), label.c_str());
         }
 
-        DrawQuickDrawVisualKeyboard(draw, screen,
+        g_quickDrawKeyboardVisualPreviewWanted = false;
+        const float visualKeyboardBottom = DrawQuickDrawVisualKeyboard(draw, screen,
             alpha * g_quickDrawKeyboardVisualModeT, dt);
+        DrawQuickDrawKeyboardSourceConstellation(draw, screen, visualKeyboardBottom,
+            alpha * g_quickDrawKeyboardVisualModeT);
 
         // Mesmo ponto inferior usado pelo círculo dourado que fecha o Hub.
         const bool closeHovered = IsSettingsCircleHovered(g_settingsMousePos,
@@ -17117,9 +17697,100 @@ namespace Menu
             g_quickDrawKeyboardCloseRadius,
             FadeColor(IM_COL32(245, 242, 232, closeHovered ? 230 : 105), alpha), 32, 1.0f);
 
-        // O browser substitui o editor, mas o cartão sob o mouse usa o mesmo
-        // preview 3D central do WheelSettings, com nome abaixo dele.
-        if (g_quickDrawKeyboardVisualModeT <= 0.02f && hasHoveredItem && hoveredItem.form)
+        // No modo teclado, o preview fica independente da grade radial:
+        // menor, preso à diagonal superior-direita do cursor e preservado
+        // enquanto seu alpha fecha suavemente.
+        const bool hasVisualKeyboardPreview =
+            g_quickDrawKeyboardVisualPreviewWanted &&
+            g_quickDrawKeyboardVisualPreviewItem.form != nullptr;
+        g_quickDrawKeyboardVisualPreviewAlpha = AnimateSettingsValue(
+            g_quickDrawKeyboardVisualPreviewAlpha,
+            hasVisualKeyboardPreview ? 1.0f : 0.0f, 10.0f, dt);
+        if (g_quickDrawKeyboardVisualModeT > 0.02f &&
+            g_quickDrawKeyboardVisualPreviewAlpha > 0.002f &&
+            g_quickDrawKeyboardVisualPreviewItem.form)
+        {
+            constexpr float previewRadius = 74.0f;
+            constexpr float ropeRadius = 198.0f;
+            constexpr float ropeSafetyRadius = 226.0f;
+            const ImVec2 ropeAnchor = g_settingsMousePos;
+
+            // A mola retorna para a linha da corda (uma circunferência), não
+            // para uma coordenada fixa. Portanto o ângulo adquirido pelo
+            // preview permanece livre: ele pode ficar acima, abaixo ou nos
+            // lados do cursor, enquanto só a distância volta suavemente.
+            if (!g_quickDrawKeyboardVisualPreviewRopeInitialized)
+            {
+                g_quickDrawKeyboardVisualPreviewRopePosition = ropeAnchor +
+                    ImVec2(0.7071f * ropeRadius, -0.7071f * ropeRadius);
+                g_quickDrawKeyboardVisualPreviewRopePosition.x = std::clamp(
+                    g_quickDrawKeyboardVisualPreviewRopePosition.x, previewRadius,
+                    screen.x - previewRadius);
+                g_quickDrawKeyboardVisualPreviewRopePosition.y = std::clamp(
+                    g_quickDrawKeyboardVisualPreviewRopePosition.y, previewRadius,
+                    screen.y - previewRadius);
+                g_quickDrawKeyboardVisualPreviewRopeVelocity = {};
+                g_quickDrawKeyboardVisualPreviewRopeInitialized = true;
+            }
+            const float simulationDt = std::clamp(dt, 0.0f, 0.05f);
+            ImVec2 tether = g_quickDrawKeyboardVisualPreviewRopePosition - ropeAnchor;
+            float tetherLength = std::sqrt(tether.x * tether.x + tether.y * tether.y);
+            const ImVec2 radialDirection = tetherLength > 0.001f
+                ? ImVec2(tether.x / tetherLength, tether.y / tetherLength)
+                : ImVec2(0.7071f, -0.7071f);
+            const ImVec2 restPosition = ropeAnchor + radialDirection * ropeRadius;
+            const ImVec2 returnDelta = restPosition -
+                g_quickDrawKeyboardVisualPreviewRopePosition;
+            g_quickDrawKeyboardVisualPreviewRopeVelocity.x +=
+                returnDelta.x * 9.0f * simulationDt;
+            g_quickDrawKeyboardVisualPreviewRopeVelocity.y +=
+                returnDelta.y * 9.0f * simulationDt;
+            const float damping = std::exp(-5.2f * simulationDt);
+            g_quickDrawKeyboardVisualPreviewRopeVelocity.x *= damping;
+            g_quickDrawKeyboardVisualPreviewRopeVelocity.y *= damping;
+            g_quickDrawKeyboardVisualPreviewRopePosition.x +=
+                g_quickDrawKeyboardVisualPreviewRopeVelocity.x * simulationDt;
+            g_quickDrawKeyboardVisualPreviewRopePosition.y +=
+                g_quickDrawKeyboardVisualPreviewRopeVelocity.y * simulationDt;
+
+            tether = g_quickDrawKeyboardVisualPreviewRopePosition - ropeAnchor;
+            tetherLength = std::sqrt(tether.x * tether.x + tether.y * tether.y);
+            if (tetherLength > ropeSafetyRadius && tetherLength > 0.001f)
+            {
+                const ImVec2 tetherDirection(tether.x / tetherLength,
+                    tether.y / tetherLength);
+                g_quickDrawKeyboardVisualPreviewRopePosition = ropeAnchor +
+                    tetherDirection * ropeSafetyRadius;
+                const float outwardVelocity =
+                    g_quickDrawKeyboardVisualPreviewRopeVelocity.x * tetherDirection.x +
+                    g_quickDrawKeyboardVisualPreviewRopeVelocity.y * tetherDirection.y;
+                if (outwardVelocity > 0.0f)
+                    g_quickDrawKeyboardVisualPreviewRopeVelocity -=
+                        tetherDirection * outwardVelocity;
+            }
+
+            g_quickDrawKeyboardVisualPreviewRopePosition.x = std::clamp(
+                g_quickDrawKeyboardVisualPreviewRopePosition.x, previewRadius,
+                screen.x - previewRadius);
+            g_quickDrawKeyboardVisualPreviewRopePosition.y = std::clamp(
+                g_quickDrawKeyboardVisualPreviewRopePosition.y, previewRadius,
+                screen.y - previewRadius);
+            const ImVec2 previewPosition = g_quickDrawKeyboardVisualPreviewRopePosition;
+            g_quickDrawKeyboardVisualPreviewMaskCenter = previewPosition;
+
+            // A máscara é aplicada aos ícones/teclas durante o próprio draw
+            // (GetQuickDrawKeyboardPreviewOcclusion). Não desenhamos um
+            // overlay aqui: ele ficaria por cima do preview 3D.
+            ItemPreview::SetHudPosition(previewPosition);
+            ItemPreview::SetSizeScale(0.5f);
+            ItemPreview::SilentPreviewMenu::Open();
+            ItemPreview::Show(g_quickDrawKeyboardVisualPreviewItem.form,
+                g_quickDrawKeyboardVisualPreviewItem.uniqueID,
+                g_quickDrawKeyboardVisualPreviewItem.hasUniqueID);
+            ItemPreview::SetOpacity(alpha * g_quickDrawKeyboardVisualPreviewAlpha);
+        }
+        // O browser radial continua usando o preview central original.
+        else if (g_quickDrawKeyboardVisualModeT <= 0.02f && hasHoveredItem && hoveredItem.form)
         {
             ItemPreview::SetHudPosition(center);
             ItemPreview::SetSizeScale(1.0f);
@@ -17135,6 +17806,11 @@ namespace Menu
         else
         {
             ItemPreview::Hide();
+            if (!hasVisualKeyboardPreview)
+            {
+                g_quickDrawKeyboardVisualPreviewRopeInitialized = false;
+                g_quickDrawKeyboardVisualPreviewRopeVelocity = {};
+            }
         }
         DrawSettingsCursor();
     }
@@ -18653,7 +19329,47 @@ namespace Menu
         if (g_quickDrawKeyboardOpen)
         {
             if (!pressed)
+            {
+                if (button == 0 && g_quickDrawKeyboardItemDragActive)
+                {
+                    // Soltar uma estrela da constelação diretamente sobre
+                    // uma tecla cria/substitui o atalho daquela tecla, sem
+                    // removê-la do radial ou da bolsa de origem.
+                    for (const auto& slot : g_quickDrawKeyboardVisualSlots)
+                    {
+                        if (!PointInQuickDrawRect(g_settingsMousePos,
+                                slot.min, slot.max) ||
+                            IsQuickDrawHotkeyReserved(slot.key) ||
+                            !IsSupportedWheelKey(slot.key))
+                            continue;
+                        for (auto& gesture : g_quickDrawGestures)
+                        {
+                            if (gesture.hotkey == slot.key)
+                                gesture.hotkey = 0;
+                        }
+                        SetQuickDrawHotkey(g_quickDrawKeyboardDraggedItem, slot.key);
+                        auto existing = std::find_if(g_quickDrawKeyboardCards.begin(),
+                            g_quickDrawKeyboardCards.end(),
+                            [&](const QuickDrawKeyboardCard& card) {
+                                return card.hotkey == slot.key;
+                            });
+                        if (existing != g_quickDrawKeyboardCards.end())
+                        {
+                            existing->key = MakeQuickDrawKey(g_quickDrawKeyboardDraggedItem);
+                            existing->removeT = -1.0f;
+                        }
+                        else
+                        {
+                            g_quickDrawKeyboardCards.push_back({
+                                MakeQuickDrawKey(g_quickDrawKeyboardDraggedItem), slot.key });
+                        }
+                        break;
+                    }
+                    g_quickDrawKeyboardItemDragActive = false;
+                    g_quickDrawKeyboardDraggedItem = {};
+                }
                 return true;
+            }
 
             // Qualquer clique fora da lista — esquerdo ou direito — volta ao
             // editor. Dentro de um cartão só o X remove o bind.
@@ -18693,9 +19409,47 @@ namespace Menu
                         CloseQuickDrawKeyboardBrowser();
                         return true;
                     }
-                    for (const auto& card : g_quickDrawKeyboardCards)
+                    for (const auto& source : g_quickDrawKeyboardSourceItems)
                     {
-                        if (card.removeT < 0.0f &&
+                        if (!source.keyboardBound && IsSettingsCircleHovered(g_settingsMousePos,
+                                source.center, source.radius + 5.0f))
+                        {
+                            g_quickDrawKeyboardDraggedItem = source.item;
+                            g_quickDrawKeyboardItemDragActive = true;
+                            return true;
+                        }
+                    }
+                    for (auto& card : g_quickDrawKeyboardCards)
+                    {
+                        if (card.removeT >= 0.0f)
+                            continue;
+                        if (IsSettingsCircleHovered(g_settingsMousePos,
+                                card.keyboardRemoveCenter, 10.0f))
+                        {
+                            // Mantém a mesma remoção/fade do browser radial;
+                            // aqui o cartão mini desaparece dentro da tecla.
+                            for (auto& gesture : g_quickDrawGestures)
+                            {
+                                if (SameQuickDrawKey(gesture.key, card.key))
+                                {
+                                    gesture.hotkey = 0;
+                                    break;
+                                }
+                            }
+                            for (auto& other : g_quickDrawKeyboardCards)
+                            {
+                                if (&other == &card)
+                                    continue;
+                                other.reflowPreservedCenter = other.hasLastVisualCenter
+                                    ? other.lastVisualCenter
+                                    : ImVec2((other.min.x + other.max.x) * 0.5f,
+                                          (other.min.y + other.max.y) * 0.5f);
+                                other.preserveReflowPosition = true;
+                            }
+                            card.removeT = 0.0f;
+                            return true;
+                        }
+                        if (
                             IsSettingsCircleHovered(g_settingsMousePos,
                                 card.keyboardMiniCenter, 34.0f))
                             return true;
