@@ -633,11 +633,18 @@ namespace Menu
         ImVec2 min{};
         ImVec2 max{};
         ImVec2 clearCenter{};
+        float clearHoverT = 0.0f;
+        float clearClickFlash = 0.0f;
         // Estado físico leve do cartão. A posição-base é dada pela grade;
         // este offset e a velocidade recebem forças de atração/repulsão.
         ImVec2 simulationOffset{};
         ImVec2 simulationVelocity{};
         bool simulationInitialized = false;
+        // Última posição realmente exibida. É usada ao recalcular os anéis
+        // depois de um filtro, evitando trocar a âncora e teletransportar o
+        // cartão no mesmo frame.
+        ImVec2 lastVisualCenter{};
+        bool hasLastVisualCenter = false;
         // Posição preservada por um frame quando outro cartão some. Ela evita
         // que a troca de índice da grade cause teleporte antes da mola levar
         // o cartão ao novo destino.
@@ -675,6 +682,7 @@ namespace Menu
     static std::array<float, static_cast<std::size_t>(QuickDrawKeyboardFilter::Count)>
         g_quickDrawKeyboardFilterHoverT{};
     static constexpr float kQuickDrawKeyboardFilterRadius = 15.5f;
+    static bool g_quickDrawKeyboardRadialLayoutDirty = false;
     static ImVec2 g_settingsHotkeyButtonCenter{};
     static float g_settingsHotkeyButtonHoverT = 0.0f;
     static constexpr float kSettingsHotkeyButtonBaseRadius = 24.0f;
@@ -16314,6 +16322,7 @@ namespace Menu
         g_quickDrawKeyboardHoveredCard = -1;
         g_quickDrawKeyboardFilters.fill(true);
         g_quickDrawKeyboardFilterHoverT.fill(0.0f);
+        g_quickDrawKeyboardRadialLayoutDirty = false;
         g_quickDrawEditorWaitingHotkey = false;
         g_quickDrawSettingsExpanded = false;
     }
@@ -16341,41 +16350,99 @@ namespace Menu
         // agora contém um núcleo circular e duas luas independentes.
         constexpr float cardWidth = 178.0f;
         constexpr float cardHeight = 158.0f;
-        constexpr float gapX = 20.0f;
-        constexpr float gapY = 18.0f;
         constexpr float edgeMargin = 30.0f;
-        const int columns = std::max(1, static_cast<int>(std::floor(
-            (screen.x - edgeMargin * 2.0f + gapX) / (cardWidth + gapX))));
-        const int visibleCount = static_cast<int>(g_quickDrawKeyboardCards.size());
-        const int rows = std::max(1, (visibleCount + columns - 1) / columns);
-        const float totalWidth = columns * cardWidth + (columns - 1) * gapX;
-        const float totalHeight = rows * cardHeight + (rows - 1) * gapY;
-        // A lista nasce no centro. Quando é maior que a tela, o scroll pode
-        // revelar as linhas acima e abaixo sem alterar a distribuição em X.
-        // A origem fica centrada. Por isso o scroll é simétrico: há o mesmo
-        // espaço para deslocar a grade para cima ou para baixo.
-        g_quickDrawKeyboardMaxScroll = std::max(0.0f,
-            (totalHeight + edgeMargin * 2.0f - screen.y) * 0.5f);
-        g_quickDrawKeyboardScroll = std::clamp(g_quickDrawKeyboardScroll,
-            -g_quickDrawKeyboardMaxScroll, g_quickDrawKeyboardMaxScroll);
-        const ImVec2 gridMin(center.x - totalWidth * 0.5f,
-            center.y - totalHeight * 0.5f - g_quickDrawKeyboardScroll);
 
-        // Monta as âncoras da grade. A simulação abaixo usa essas âncoras
-        // como mola de retorno, sem prender os cartões nelas.
-        std::vector<ImVec2> baseCenters(g_quickDrawKeyboardCards.size());
-        std::vector<ImVec2> visualCenters(g_quickDrawKeyboardCards.size());
+        // Primeiro anima a visibilidade e identifica o conjunto que recebe
+        // posições radiais. Filtros e remoções apenas mudam este conjunto;
+        // não existe mais a grade esquerda→direita como posição-base.
+        std::vector<bool> filterTargetVisible(g_quickDrawKeyboardCards.size(), false);
+        int radialCardCount = 0;
         for (std::size_t i = 0; i < g_quickDrawKeyboardCards.size(); ++i)
         {
             auto& card = g_quickDrawKeyboardCards[i];
-            const int column = static_cast<int>(i) % columns;
-            const int row = static_cast<int>(i) / columns;
+            const bool visibleByFilter = IsQuickDrawKeyboardCardFilterVisible(card);
+            filterTargetVisible[i] = visibleByFilter && card.removeT < 0.0f;
+            if (filterTargetVisible[i])
+                ++radialCardCount;
+            card.filterT = AnimateSettingsValue(card.filterT,
+                visibleByFilter ? 1.0f : 0.0f, 4.5f, dt);
+        }
+
+        // Calcula a área da formação para preservar o scroll simétrico quando
+        // os anéis excedem a altura da tela.
+        constexpr float clusterRingSpacing = 142.0f;
+        int maxRing = 0;
+        int ringCapacity = 0;
+        while (ringCapacity < radialCardCount)
+        {
+            ++maxRing;
+            ringCapacity += maxRing * 4;
+        }
+        const float outerRadius = maxRing > 0
+            ? clusterRingSpacing * (0.75f + 0.78f * static_cast<float>(maxRing - 1)) + 61.0f
+            : 0.0f;
+        g_quickDrawKeyboardMaxScroll = std::max(0.0f,
+            outerRadius + edgeMargin - screen.y * 0.5f);
+        g_quickDrawKeyboardScroll = std::clamp(g_quickDrawKeyboardScroll,
+            -g_quickDrawKeyboardMaxScroll, g_quickDrawKeyboardMaxScroll);
+        const ImVec2 formationCenter(center.x, center.y - g_quickDrawKeyboardScroll);
+
+        // Os anéis não têm cartão no núcleo: o primeiro possui quatro pontos
+        // diagonais e os seguintes sempre ficam entre os eixos. O vazio em
+        // cruz no centro permanece livre para o preview e para a abertura.
+        std::vector<ImVec2> radialCenters(g_quickDrawKeyboardCards.size(), formationCenter);
+        int clusterOrdinal = 0;
+        for (std::size_t i = 0; i < g_quickDrawKeyboardCards.size(); ++i)
+        {
+            if (!filterTargetVisible[i])
+                continue;
+
+            int ring = 1;
+            int ordinalInRing = clusterOrdinal;
+            while (ordinalInRing >= ring * 4)
+            {
+                ordinalInRing -= ring * 4;
+                ++ring;
+            }
+            const int slotsInRing = ring * 4;
+            // O meio-espaço entre os eixos impede cartões sobre as linhas
+            // vertical/horizontal centrais — a cruz fica vazia em todas as
+            // camadas, não apenas no primeiro frame.
+            const float angle = 3.14159265359f / static_cast<float>(slotsInRing) +
+                6.28318530718f * static_cast<float>(ordinalInRing) /
+                    static_cast<float>(slotsInRing);
+            const float ringRadius = clusterRingSpacing *
+                (0.75f + 0.78f * static_cast<float>(ring - 1));
+            radialCenters[i] = formationCenter + ImVec2(
+                std::cos(angle) * ringRadius,
+                std::sin(angle) * ringRadius);
+            ++clusterOrdinal;
+        }
+
+        // As âncoras são inteiramente radiais. A simulação usa uma mola para
+        // elas, preservando a repulsão, a flutuação e a transição suave após
+        // excluir ou filtrar um cartão.
+        std::vector<ImVec2> baseCenters(g_quickDrawKeyboardCards.size());
+        std::vector<ImVec2> visualCenters(g_quickDrawKeyboardCards.size());
+        const bool preserveFilterTransition = g_quickDrawKeyboardRadialLayoutDirty;
+        for (std::size_t i = 0; i < g_quickDrawKeyboardCards.size(); ++i)
+        {
+            auto& card = g_quickDrawKeyboardCards[i];
             const float phase = static_cast<float>(card.hotkey % 19) * 0.42f;
             const ImVec2 floatOffset(std::sin(time * 0.70f + phase) * 2.2f,
                 std::cos(time * 0.82f + phase * 1.4f) * 2.0f);
-            const ImVec2 baseMin = ImVec2(gridMin.x + column * (cardWidth + gapX),
-                gridMin.y + row * (cardHeight + gapY)) + floatOffset;
-            baseCenters[i] = baseMin + ImVec2(cardWidth, cardHeight) * 0.5f;
+            baseCenters[i] = (filterTargetVisible[i] ? radialCenters[i] : formationCenter) +
+                floatOffset;
+            if (preserveFilterTransition && card.removeT < 0.0f &&
+                card.hasLastVisualCenter)
+            {
+                // A formação mudou, mas a posição de partida permanece a que
+                // o jogador viu no frame anterior. A mola fará a transição
+                // até o novo anel, sem salto.
+                card.simulationOffset = card.lastVisualCenter - baseCenters[i];
+                card.simulationVelocity = {};
+                card.simulationInitialized = true;
+            }
             if (card.preserveReflowPosition)
             {
                 // A grade mudou após uma remoção: começa exatamente da
@@ -16389,15 +16456,7 @@ namespace Menu
             visualCenters[i] = baseCenters[i] +
                 (card.simulationInitialized ? card.simulationOffset : ImVec2{});
         }
-
-        // O filtro é visual: o cartão conserva seu bind e sua posição física
-        // enquanto desaparece ou reaparece suavemente.
-        for (auto& card : g_quickDrawKeyboardCards)
-        {
-            card.filterT = AnimateSettingsValue(card.filterT,
-                IsQuickDrawKeyboardCardFilterVisible(card) ? 1.0f : 0.0f,
-                9.0f, dt);
-        }
+        g_quickDrawKeyboardRadialLayoutDirty = false;
 
         // O hit-test usa a posição física do frame anterior, e não a grade
         // rígida. Assim um cartão continua coerente enquanto flutua.
@@ -16440,6 +16499,11 @@ namespace Menu
         constexpr float springForce = 7.5f;
         constexpr float velocityDamping = 5.5f;
         constexpr float previewForce = 3800.0f;
+        // O cartão sob o cursor cria uma bolha de espaço própria. Ela é
+        // independente do preview central e só empurra os vizinhos, para que
+        // o foco possa crescer/ser lido sem ficar coberto por outro cartão.
+        constexpr float hoveredCardForce = 5200.0f;
+        constexpr float hoveredCardRange = 248.0f;
         const float cardRadius = 0.5f * std::sqrt(
             cardWidth * cardWidth + cardHeight * cardHeight);
         const float previewRange = previewClearRadius + cardRadius + 42.0f;
@@ -16447,7 +16511,7 @@ namespace Menu
         for (std::size_t i = 0; i < g_quickDrawKeyboardCards.size(); ++i)
         {
             const auto& card = g_quickDrawKeyboardCards[i];
-            if (card.removeT >= 0.0f)
+            if (!filterTargetVisible[i] || card.removeT >= 0.0f || card.filterT <= 0.08f)
                 continue;
 
             const ImVec2 offset = card.simulationInitialized
@@ -16472,15 +16536,37 @@ namespace Menu
                     forces[i] += direction * (previewForce * falloff * hoverFactor);
                 }
             }
+
+            if (g_quickDrawKeyboardHoveredCard >= 0 &&
+                static_cast<int>(i) != g_quickDrawKeyboardHoveredCard)
+            {
+                const ImVec2 hoveredCenter = visualCenters[
+                    static_cast<std::size_t>(g_quickDrawKeyboardHoveredCard)];
+                const ImVec2 delta = visualCenters[i] - hoveredCenter;
+                const float distance = std::sqrt(delta.x * delta.x + delta.y * delta.y);
+                if (distance < hoveredCardRange)
+                {
+                    const ImVec2 direction = distance > 0.01f
+                        ? delta * (1.0f / distance)
+                        : ImVec2((i & 1) ? 1.0f : -1.0f,
+                            (i & 2) ? 0.7f : -0.7f);
+                    const float falloff = (hoveredCardRange - distance) /
+                        hoveredCardRange;
+                    forces[i] += direction * (hoveredCardForce *
+                        falloff * falloff);
+                }
+            }
         }
 
         for (std::size_t i = 0; i < g_quickDrawKeyboardCards.size(); ++i)
         {
-            if (g_quickDrawKeyboardCards[i].removeT >= 0.0f)
+            if (!filterTargetVisible[i] || g_quickDrawKeyboardCards[i].removeT >= 0.0f ||
+                g_quickDrawKeyboardCards[i].filterT <= 0.08f)
                 continue;
             for (std::size_t j = i + 1; j < g_quickDrawKeyboardCards.size(); ++j)
             {
-                if (g_quickDrawKeyboardCards[j].removeT >= 0.0f)
+                if (!filterTargetVisible[j] || g_quickDrawKeyboardCards[j].removeT >= 0.0f ||
+                    g_quickDrawKeyboardCards[j].filterT <= 0.08f)
                     continue;
                 const ImVec2 delta = visualCenters[i] - visualCenters[j];
                 const float distanceSq = delta.x * delta.x + delta.y * delta.y;
@@ -16511,6 +16597,8 @@ namespace Menu
         for (std::size_t i = 0; i < g_quickDrawKeyboardCards.size(); ++i)
         {
             auto& card = g_quickDrawKeyboardCards[i];
+            if (!filterTargetVisible[i])
+                continue;
             if (!card.simulationInitialized)
                 card.simulationInitialized = true;
             card.simulationVelocity += forces[i] * dt;
@@ -16520,6 +16608,8 @@ namespace Menu
                 card.simulationVelocity *= 620.0f / speed;
             card.simulationOffset += card.simulationVelocity * dt;
             visualCenters[i] = baseCenters[i] + card.simulationOffset;
+            card.lastVisualCenter = visualCenters[i];
+            card.hasLastVisualCenter = true;
         }
 
         for (std::size_t i = 0; i < g_quickDrawKeyboardCards.size();)
@@ -16550,6 +16640,12 @@ namespace Menu
 
             if (card.removeT >= 0.0f)
                 card.removeT += dt;
+            const bool clearHovered = IsSettingsCircleHovered(g_settingsMousePos,
+                card.clearCenter, clearMoonRadius + 3.0f);
+            card.clearHoverT = AnimateSettingsValue(card.clearHoverT,
+                clearHovered ? 1.0f : 0.0f, 15.0f, dt);
+            card.clearClickFlash = std::max(0.0f,
+                card.clearClickFlash - dt * 7.0f);
             const float iconAlpha = card.removeT < 0.0f ? 1.0f :
                 std::clamp(1.0f - card.removeT / 0.20f, 0.0f, 1.0f);
             const float cardAlpha = card.removeT < 0.20f ? 1.0f :
@@ -16601,14 +16697,31 @@ namespace Menu
 
             draw->AddCircleFilled(card.clearCenter, clearMoonRadius,
                 FadeColor(IM_COL32(35, 36, 42, 240), alpha * filteredCardAlpha), 20);
+            // Hover deixa a lua do X branca/opaca; o clique acrescenta um
+            // pulso branco curto e mais intenso, sem mudar sua geometria.
+            const float clearWhite = 112.0f * card.clearHoverT +
+                118.0f * card.clearClickFlash;
+            if (clearWhite > 0.5f)
+            {
+                draw->AddCircleFilled(card.clearCenter, clearMoonRadius,
+                    FadeColor(IM_COL32(245, 242, 232,
+                        static_cast<int>(std::min(clearWhite, 220.0f))),
+                        alpha * filteredCardAlpha), 20);
+            }
             draw->AddCircle(card.clearCenter, clearMoonRadius,
-                FadeColor(IM_COL32(245, 242, 232, 150), alpha * filteredCardAlpha), 20, 1.0f);
+                FadeColor(IM_COL32(245, 242, 232,
+                    static_cast<int>(150.0f + 75.0f * card.clearHoverT +
+                        30.0f * card.clearClickFlash)), alpha * filteredCardAlpha), 20, 1.0f);
             draw->AddLine(card.clearCenter - ImVec2(3.6f, 3.6f),
                 card.clearCenter + ImVec2(3.6f, 3.6f),
-                FadeColor(IM_COL32(245, 242, 232, 220), alpha * filteredCardAlpha), 1.1f);
+                FadeColor(IM_COL32(255, 255, 255,
+                    static_cast<int>(220.0f + 35.0f * card.clearHoverT)),
+                    alpha * filteredCardAlpha), 1.1f);
             draw->AddLine(card.clearCenter + ImVec2(3.6f, -3.6f),
                 card.clearCenter + ImVec2(-3.6f, 3.6f),
-                FadeColor(IM_COL32(245, 242, 232, 220), alpha * filteredCardAlpha), 1.1f);
+                FadeColor(IM_COL32(255, 255, 255,
+                    static_cast<int>(220.0f + 35.0f * card.clearHoverT)),
+                    alpha * filteredCardAlpha), 1.1f);
 
             if (card.removeT >= 0.62f)
             {
@@ -18247,6 +18360,7 @@ namespace Menu
                     {
                         g_quickDrawKeyboardFilters[index] =
                             !g_quickDrawKeyboardFilters[index];
+                        g_quickDrawKeyboardRadialLayoutDirty = true;
                         return true;
                     }
                 }
@@ -18265,6 +18379,7 @@ namespace Menu
                                 break;
                             }
                         }
+                        card.clearClickFlash = 1.0f;
                         card.removeT = 0.0f;
                         return true;
                     }
