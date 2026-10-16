@@ -148,7 +148,8 @@ namespace Config
     extern float g_drawMarkDistance;
     extern bool g_drawEffectsGameplay;
     extern bool g_drawEffectsEditor;
-    extern bool g_itemPreviewDuringShortcuts;
+    // 0 = nada; 1 = preview do item; 2 = HUD compacto; 3 = ícone compacto.
+    extern int g_shortcutFeedbackStyle;
     extern int g_drawEdgeEffectStyle;
     extern float g_drawEdgeEffectSize;
     extern float g_drawEdgeEffectOpacity;

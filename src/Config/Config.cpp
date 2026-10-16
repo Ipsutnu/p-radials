@@ -100,7 +100,7 @@ namespace Config
     float g_drawMarkDistance = kDefaultDrawMarkDistance;
     bool g_drawEffectsGameplay = false;
     bool g_drawEffectsEditor = true;
-    bool g_itemPreviewDuringShortcuts = true;
+    int g_shortcutFeedbackStyle = 1;
     int g_drawEdgeEffectStyle = 0;
     float g_drawEdgeEffectSize = kDefaultDrawEdgeEffectSize;
     float g_drawEdgeEffectOpacity = kDefaultDrawEdgeEffectOpacity;
@@ -545,7 +545,14 @@ namespace Config
         if (key == "StardustEnabled") { g_stardustEnabled = ParseEnabled(value); return true; }
         if (key == "DrawEffectsGameplay") { g_drawEffectsGameplay = ParseEnabled(value); return true; }
         if (key == "DrawEffectsEditor") { g_drawEffectsEditor = ParseEnabled(value); return true; }
-        if (key == "ItemPreviewDuringShortcuts") { g_itemPreviewDuringShortcuts = ParseEnabled(value); return true; }
+        // Compatibilidade com INIs anteriores ao slider de feedback.
+        if (key == "ItemPreviewDuringShortcuts") { g_shortcutFeedbackStyle = ParseEnabled(value) ? 1 : 0; return true; }
+        if (key == "ShortcutFeedbackStyle")
+        {
+            try { g_shortcutFeedbackStyle = std::clamp(std::stoi(value), 0, 3); }
+            catch (...) { return false; }
+            return true;
+        }
         if (key == "DrawEdgeEffectStyle")
         {
             try { g_drawEdgeEffectStyle = std::clamp(std::stoi(value), 0, 10); }
@@ -799,7 +806,7 @@ namespace Config
         write("StardustEnabled", g_stardustEnabled ? 1 : 0);
         write("DrawEffectsGameplay", g_drawEffectsGameplay ? 1 : 0);
         write("DrawEffectsEditor", g_drawEffectsEditor ? 1 : 0);
-        write("ItemPreviewDuringShortcuts", g_itemPreviewDuringShortcuts ? 1 : 0);
+        write("ShortcutFeedbackStyle", g_shortcutFeedbackStyle);
         write("DrawEdgeEffectStyle", g_drawEdgeEffectStyle);
         write("DrawEdgeEffectSize", g_drawEdgeEffectSize);
         write("DrawEdgeEffectOpacity", g_drawEdgeEffectOpacity);
@@ -1212,12 +1219,17 @@ namespace Config
                     const bool enabled = ParseEnabled(value);
                     if (key == "DrawEffectsGameplay") g_drawEffectsGameplay = enabled;
                     else if (key == "DrawEffectsEditor") g_drawEffectsEditor = enabled;
-                    else if (key == "ItemPreviewDuringShortcuts") g_itemPreviewDuringShortcuts = enabled;
+                    else if (key == "ItemPreviewDuringShortcuts") g_shortcutFeedbackStyle = enabled ? 1 : 0;
                     else { g_showDrawMark = enabled; g_drawMarkStyle = enabled ? 1 : 0; }
                 }
                 else if (key == "DrawMarkStyle")
                 {
                     try { g_drawMarkStyle = std::clamp(std::stoi(value), 0, 6); }
+                    catch (...) {}
+                }
+                else if (key == "ShortcutFeedbackStyle")
+                {
+                    try { g_shortcutFeedbackStyle = std::clamp(std::stoi(value), 0, 3); }
                     catch (...) {}
                 }
                 else if (key == "DrawEdgeEffectStyle")
@@ -1549,7 +1561,7 @@ namespace Config
         g_drawMarkDistance = kDefaultDrawMarkDistance;
         g_drawEffectsGameplay = false;
         g_drawEffectsEditor = true;
-        g_itemPreviewDuringShortcuts = true;
+        g_shortcutFeedbackStyle = 1;
         g_drawEdgeEffectStyle = 0;
         g_drawEdgeEffectSize = kDefaultDrawEdgeEffectSize;
         g_drawEdgeEffectOpacity = kDefaultDrawEdgeEffectOpacity;
@@ -1723,7 +1735,7 @@ namespace Config
         SetIniValue(lines, "Layout", "DrawMarkDistance", std::to_string(g_drawMarkDistance));
         SetIniValue(lines, "Layout", "DrawEffectsGameplay", g_drawEffectsGameplay ? "1" : "0");
         SetIniValue(lines, "Layout", "DrawEffectsEditor", g_drawEffectsEditor ? "1" : "0");
-        SetIniValue(lines, "Layout", "ItemPreviewDuringShortcuts", g_itemPreviewDuringShortcuts ? "1" : "0");
+        SetIniValue(lines, "Layout", "ShortcutFeedbackStyle", std::to_string(g_shortcutFeedbackStyle));
         SetIniValue(lines, "Layout", "DrawEdgeEffectStyle", std::to_string(g_drawEdgeEffectStyle));
         SetIniValue(lines, "Layout", "DrawEdgeEffectSize", std::to_string(g_drawEdgeEffectSize));
         SetIniValue(lines, "Layout", "DrawEdgeEffectOpacity", std::to_string(g_drawEdgeEffectOpacity));

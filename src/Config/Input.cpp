@@ -672,6 +672,26 @@ RE::BSEventNotifyControl InputHandler::ProcessEvent(
         g_settingsOwnsRightClick = false;
     }
 
+    // Hotkeys do Quick Draw vivem fora do radial normal. Esta captura precisa
+    // acontecer antes do retorno antecipado abaixo, que é comum durante o
+    // preview direto. Assim a roda nunca alcança os controles do Skyrim
+    // enquanto a tecla do atalho continua pressionada.
+    for (auto* event = *a_event; event; event = event->next)
+    {
+        auto* button = event ? event->AsButtonEvent() : nullptr;
+        if (!button || button->GetDevice() != RE::INPUT_DEVICE::kMouse)
+            continue;
+
+        const int mouseButton = static_cast<int>(button->GetIDCode());
+        if ((mouseButton == 8 || mouseButton == 9) &&
+            button->GetRuntimeData().value != 0.0f)
+        {
+            const int direction = mouseButton == 8 ? 1 : -1;
+            if (Menu::ScrollQuickDrawHotkeyHud(direction))
+                consumeButton(button);
+        }
+    }
+
     // A escolha de mão iniciada por um atalho é modal mesmo sem radial
     // aberto: o primeiro movimento horizontal ou clique pertence ao Wheel.
     if (Menu::IsQuickDrawHotkeyHandSelectionActive())
@@ -691,15 +711,33 @@ RE::BSEventNotifyControl InputHandler::ProcessEvent(
             auto* button = event ? event->AsButtonEvent() : nullptr;
             if (!button || button->GetDevice() != RE::INPUT_DEVICE::kMouse)
                 continue;
+            const int mouseButton = static_cast<int>(button->GetIDCode());
+            // Este caminho é modal enquanto a tecla do atalho está pressionada,
+            // inclusive quando não há nenhum menu aberto. Interceptar a roda
+            // aqui impede que o Skyrim receba o scroll antes do HUD.
+            if ((mouseButton == 8 || mouseButton == 9) &&
+                button->GetRuntimeData().value != 0.0f)
+            {
+                const int direction = mouseButton == 8 ? 1 : -1;
+                if (Menu::ScrollQuickDrawHotkeyHud(direction))
+                {
+                    consumeButton(button);
+                    continue;
+                }
+            }
             const bool firstPress = button->IsDown() &&
                 button->GetRuntimeData().heldDownSecs <= 0.0f;
             if (Menu::HandleQuickDrawHotkeyHandMouseButton(
-                    static_cast<int>(button->GetIDCode()), firstPress))
+                    mouseButton, firstPress))
                 consumeButton(button);
         }
     }
 
-    if (!g_showWindow && !settingsOpen)
+    // O HUD de hotkeys é uma interface do Wheel no gameplay, apesar de não
+    // abrir uma janela/radial. Mantê-lo neste fluxo também permite que o
+    // PrintScreen seja capturado pelo nosso sistema enquanto ele está visível.
+    const bool hotkeyHudVisible = Menu::IsQuickDrawHotkeyHudVisible();
+    if (!g_showWindow && !settingsOpen && !hotkeyHudVisible)
     {
         return RE::BSEventNotifyControl::kContinue;
     }
@@ -1100,6 +1138,20 @@ RE::BSEventNotifyControl InputHandler::ProcessEvent(
             // ========================================================
             // SETTINGS - SCROLL INDEPENDENTE
             // ========================================================
+
+            // Enquanto uma hotkey está pressionada no modo HUD, a roda troca
+            // somente a seleção temporária do próprio HUD. Consumimos o
+            // notch aqui, antes de qualquer caminho do Skyrim ou dos radiais.
+            if ((mouseButton == 8 || mouseButton == 9) &&
+                buttonEvent->GetRuntimeData().value != 0.0f)
+            {
+                const int direction = (mouseButton == 8) ? 1 : -1;
+                if (Menu::ScrollQuickDrawHotkeyHud(direction))
+                {
+                    consumeButton(buttonEvent);
+                    continue;
+                }
+            }
 
             if (settingsOpen &&
                 (mouseButton == 8 || mouseButton == 9))

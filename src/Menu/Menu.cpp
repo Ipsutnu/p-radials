@@ -238,6 +238,13 @@ namespace Menu
         panelMax = ImVec2(panelMin.x + panelWidth, panelMin.y + panelHeight);
     }
 
+    static ImVec2 GetSettingsCloseButtonDefaultTarget(const WheelLayout& layout)
+    {
+        const float height = layout.max.y - layout.min.y;
+        const float baseY = layout.min.y + height * 0.93f;
+        return ImVec2(layout.center.x, baseY);
+    }
+
     static ImVec2 GetSettingsCloseButtonTarget(const WheelLayout& layout)
     {
         const float height = layout.max.y - layout.min.y;
@@ -635,6 +642,16 @@ namespace Menu
         ImVec2 clearCenter{};
         float clearHoverT = 0.0f;
         float clearClickFlash = 0.0f;
+        // Toggle de Auto-Use do cartão radial do Hub. Compartilha a mesma
+        // configuração persistente do Quick Draw e do teclado visual.
+        ImVec2 autoUseCenter{};
+        float autoUseHoverT = 0.0f;
+        float autoUseClickFlash = 0.0f;
+        // Mesmo toggle "Require Wheel Key" do Quick Draw Editor, exposto
+        // também nos dois layouts do Keyboard Hub.
+        ImVec2 requireActivationCenter{};
+        float requireActivationHoverT = 0.0f;
+        float requireActivationClickFlash = 0.0f;
         // Estado físico leve do cartão. A posição-base é dada pela grade;
         // este offset e a velocidade recebem forças de atração/repulsão.
         ImVec2 simulationOffset{};
@@ -650,6 +667,10 @@ namespace Menu
         // o cartão ao novo destino.
         ImVec2 reflowPreservedCenter{};
         bool preserveReflowPosition = false;
+        // Reflow disparado só após o fade de remoção: começa da posição
+        // exibida e interpola até a nova malha, sem depender do índice novo.
+        ImVec2 removalReflowStartCenter{};
+        float removalReflowT = -1.0f;
         // Um cartão em remoção não entra novamente na formação central. Ele
         // fica exatamente onde estava até o fim do seu fade.
         ImVec2 removalFrozenCenter{};
@@ -657,7 +678,16 @@ namespace Menu
         // Centro usado pela representação mini dentro do teclado visual.
         ImVec2 keyboardMiniCenter{};
         ImVec2 keyboardRemoveCenter{};
+        ImVec2 keyboardAutoUseCenter{};
+        ImVec2 keyboardRequireActivationCenter{};
         float keyboardHoverT = 0.0f;
+        float keyboardAutoUseHoverT = 0.0f;
+        float keyboardAutoUseClickFlash = 0.0f;
+        float keyboardRequireActivationHoverT = 0.0f;
+        float keyboardRequireActivationClickFlash = 0.0f;
+        // Cartão criado apenas para o teste de carga visual. Nunca toca em
+        // serialização, binds ou remoção de atalhos reais.
+        bool testOnly = false;
     };
     static bool g_quickDrawKeyboardOpen = false;
     enum class QuickDrawKeyboardReturnTarget
@@ -668,15 +698,25 @@ namespace Menu
     static QuickDrawKeyboardReturnTarget g_quickDrawKeyboardReturnTarget =
         QuickDrawKeyboardReturnTarget::QuickDrawEditor;
     static std::vector<QuickDrawKeyboardCard> g_quickDrawKeyboardCards;
+    static bool g_quickDrawKeyboardConstellationDense = false;
+    static float g_quickDrawKeyboardConstellationScrollX = 0.0f;
+    static float g_quickDrawKeyboardConstellationMaxScrollX = 0.0f;
     static ImVec2 g_quickDrawKeyboardCloseCenter{};
     static float g_quickDrawKeyboardCloseRadius = 22.0f;
+    // Hover no botão de fechar apenas pré-visualiza o HUD; não seleciona nem
+    // executa uma hotkey.
+    static bool g_quickDrawKeyboardCloseHudPreviewWanted = false;
     static float g_quickDrawKeyboardScroll = 0.0f;
+    // Posição visual suavizada: o alvo muda com a roda, mas a formação
+    // atravessa o centro como uma lista contínua, sem saltar 72 px por vez.
+    static float g_quickDrawKeyboardAnimatedScroll = 0.0f;
     static float g_quickDrawKeyboardMaxScroll = 0.0f;
     static int g_quickDrawKeyboardHoveredCard = -1;
     // O preview do cartão removido só começa a fechar depois que o próprio
     // cartão terminou seu fade visual.
     static RadialItem g_quickDrawKeyboardRemovingPreviewItem{};
     static bool g_quickDrawKeyboardRemovingPreviewActive = false;
+    static float g_quickDrawKeyboardRemovingPreviewNameAlpha = 0.0f;
     // Pequena janela após remover um cartão: preserva a posição visual dos
     // sobreviventes antes de reativar as forças de hover/preview.
     static float g_quickDrawKeyboardReflowCooldown = 0.0f;
@@ -700,6 +740,7 @@ namespace Menu
     static constexpr float kQuickDrawKeyboardToggleRadius =
         kQuickDrawKeyboardFilterRadius;
     static ImVec2 g_quickDrawKeyboardToggleCenter{};
+    static bool g_quickDrawKeyboardToggleCenterInitialized = false;
     static float g_quickDrawKeyboardToggleHoverT = 0.0f;
     static bool g_quickDrawKeyboardVisualMode = false;
     static float g_quickDrawKeyboardVisualModeT = 0.0f;
@@ -730,6 +771,10 @@ namespace Menu
     {
         ImVec2 position{};
         ImVec2 velocity{};
+        // Desvio local temporário usado pela fita densa quando um item está
+        // em hover. Não altera a posição-base nem cria uma nova animação de
+        // entrada no scroll horizontal.
+        ImVec2 denseHoverOffset{};
         float hoverT = 0.0f;
         float alpha = 0.0f;
         bool initialized = false;
@@ -740,6 +785,17 @@ namespace Menu
         g_quickDrawKeyboardSourceVisuals;
     static bool g_quickDrawKeyboardItemDragActive = false;
     static RadialItem g_quickDrawKeyboardDraggedItem{};
+    // Uma estrela arrastada sai temporariamente da constelação. A chave
+    // visual preserva sua posição física para ela poder reaparecer com fade
+    // no mesmo ponto caso o drop não atinja uma tecla válida.
+    static std::uint64_t g_quickDrawKeyboardDragSourceVisualKey = 0;
+    static bool g_quickDrawKeyboardDragSourceReturning = false;
+    // Segurar o X de uma tecla promove o bind para arraste; soltar antes do
+    // limiar preserva exatamente a remoção curta já existente.
+    static bool g_quickDrawKeyboardPendingKeyRemove = false;
+    static int g_quickDrawKeyboardPendingRemoveHotkey = 0;
+    static double g_quickDrawKeyboardPendingRemoveStart = 0.0;
+    static int g_quickDrawKeyboardDragSourceHotkey = 0;
     static bool g_quickDrawKeyboardRadialLayoutDirty = false;
     static ImVec2 g_settingsHotkeyButtonCenter{};
     static float g_settingsHotkeyButtonHoverT = 0.0f;
@@ -785,8 +841,8 @@ namespace Menu
     static float g_quickDrawSettingsScroll = 0.0f;
     static float g_quickDrawSettingsMaxScroll = 0.0f;
     static bool g_quickDrawSettingsScrollbarDragging = false;
-    static std::array<ImVec2, 3> g_quickDrawSettingsToggleCenters{};
-    static std::array<float, 3> g_quickDrawSettingsToggleRadii{};
+    static std::array<ImVec2, 2> g_quickDrawSettingsToggleCenters{};
+    static std::array<float, 2> g_quickDrawSettingsToggleRadii{};
     static ImVec2 g_quickDrawSettingsStyleMin{};
     static ImVec2 g_quickDrawSettingsStyleMax{};
     static ImVec2 g_quickDrawSettingsSizeMin{};
@@ -894,12 +950,15 @@ namespace Menu
         g_settingsPreviewFadeFrame = -1;
     }
 
+    static void ResetQuickDrawHotkeyHudVisualState();
+
     // O WheelSettings conserva o preview durante seu fade de saída. Se outra
     // abertura ocorrer antes do settle terminar, esse preview antigo não pode
     // atravessar para o novo radial/Hub e surgir por uma frame. Esta limpeza
     // é intencionalmente imediata e só é chamada ao iniciar outro menu.
     static void FinishResidualPreviewBeforeMenuOpen()
     {
+        ResetQuickDrawHotkeyHudVisualState();
         g_settingsPreviewFadeOut = false;
         g_settingsPreviewFadeAlpha = 1.0f;
         g_settingsPreviewFadeFrame = -1;
@@ -1108,14 +1167,36 @@ namespace Menu
     static bool g_quickDrawHotkeyHandSelectionActive = false;
     static bool g_quickDrawHotkeyDirectPreviewActive = false;
     static float g_quickDrawHotkeyDirectPreviewAlpha = 0.0f;
+    // Variante "Icon" do feedback: independente do preview 3D, para que
+    // possa nascer/finalizar com o mesmo fluxo de um item de hotkey.
+    static RadialItem g_quickDrawHotkeyIconPreviewItem{};
+    static float g_quickDrawHotkeyIconPreviewAlpha = 0.0f;
+    static bool g_quickDrawHotkeyIconPreviewFadingOut = false;
     static RadialItem g_quickDrawHotkeyPendingItem{};
     static int g_quickDrawHotkeyPendingKey = 0;
+    // Tecla física que abriu o seletor. Ela não muda quando a roda escolhe
+    // outro bind; assim soltar, por exemplo, 5 ainda confirma o item 6.
+    static int g_quickDrawHotkeyHeldKey = 0;
     static bool g_quickDrawHotkeyPreviewExitActive = false;
     static float g_quickDrawHotkeyPreviewExitT = 0.0f;
     static bool g_quickDrawHotkeyPreviewExitLeft = false;
     // Mantém o badge de quantidade visível durante o fade final do preview
     // disparado por hotkey, mesmo depois que o item pendente é consumido.
     static RadialItem g_quickDrawHotkeyQuantityPreviewItem{};
+    // HUD compacto exibido durante a pressão de um atalho. O alpha próprio
+    // permite que ele termine o fade mesmo depois da soltura da tecla.
+    static float g_quickDrawHotkeyHudAlpha = 0.0f;
+    static int g_quickDrawHotkeyHudHighlightedKey = 0;
+
+    static void ResetQuickDrawHotkeyHudVisualState()
+    {
+        g_quickDrawKeyboardCloseHudPreviewWanted = false;
+        g_quickDrawHotkeyHudAlpha = 0.0f;
+        g_quickDrawHotkeyHudHighlightedKey = 0;
+        g_quickDrawHotkeyIconPreviewItem = {};
+        g_quickDrawHotkeyIconPreviewAlpha = 0.0f;
+        g_quickDrawHotkeyIconPreviewFadingOut = false;
+    }
     static constexpr float QUICK_DRAW_EDITOR_RADIUS = RADIAL_DEADZONE * 5.0f;
     static constexpr float QUICK_DRAW_MATCH_THRESHOLD = 0.50f;
 
@@ -1157,6 +1238,7 @@ namespace Menu
         QuantityBadgeDirection directionMode);
     static ImVec2 GetSettingsBagCenter();
     static float GetSettingsBagExpandedRadius();
+    static bool IsInventoryDragVisualActive();
 
     // Eventos recebidos pelo InputSink.
     // Serão processados dentro do DrawSettingsMenu().
@@ -1166,6 +1248,11 @@ namespace Menu
     static bool FinishQuickDrawGameplay();
     static void CancelQuickDrawGameplay();
     static bool IsQuickDrawAutoUseEligible(const RE::TESForm* form);
+    static bool IsShortcutItemPreviewEnabled();
+    static bool IsShortcutIconPreviewEnabled();
+    static void DrawQuickDrawHotkeyHud(float deltaTime);
+    static void DrawQuickDrawHotkeyIconPreview(float deltaTime);
+    static void BeginQuickDrawHotkeyIconFadeOut(float initialAlpha = 1.0f);
     static void ConfirmQuickDrawEditor();
     void UseSelectedRadialItem();
     void DrawSettingsCursor();
@@ -1689,6 +1776,8 @@ namespace Menu
     static ImVec2 g_slowTimeSliderMax{ 0.0f, 0.0f };
     static LayoutSliderHitbox g_slowTimeResetHitbox{};
     static bool g_slowTimeSliderDragging = false;
+    static LayoutSliderHitbox g_shortcutFeedbackStyleHitbox{};
+    static bool g_shortcutFeedbackStyleDragging = false;
     static std::array<ImVec2, 4> g_slowTimeScopeCenters{};
     static float g_slowTimeScopeRadius = 0.0f;
     static std::array<ImVec2, 4> g_blurScopeCenters{};
@@ -3210,6 +3299,10 @@ namespace Menu
     static bool g_settingsBagRadiusInitialized = false;
     static bool g_settingsBagMoving = false;
     static ImVec2 g_settingsBagMoveOffset{};
+    // A bolsa também existe como destino de drop no Inventory. Ela não deve
+    // reutilizar o estado do Hub: cada contexto tem o seu próprio fade para
+    // não abrir instantaneamente depois de alternar entre os dois menus.
+    static float g_inventoryBagExpandT = 0.0f;
 
     struct PendingNormalWeaponEquip
     {
@@ -4923,12 +5016,14 @@ namespace Menu
 
         if (g_radialShapeSliderDragging ||
             g_radialAnimationSliderDragging ||
-            g_slowTimeSliderDragging || g_drawEdgeEffectStyleDragging ||
+            g_slowTimeSliderDragging || g_shortcutFeedbackStyleDragging ||
+            g_drawEdgeEffectStyleDragging ||
             g_drawMarkStyleDragging)
         {
             g_radialShapeSliderDragging = false;
             g_radialAnimationSliderDragging = false;
             g_slowTimeSliderDragging = false;
+            g_shortcutFeedbackStyleDragging = false;
             g_drawEdgeEffectStyleDragging = false;
             g_drawMarkStyleDragging = false;
             Config::SaveConfig();
@@ -7809,7 +7904,7 @@ namespace Menu
         }
     }
 
-    static void DrawInventoryItemBag(float alpha)
+    static void DrawInventoryItemBag(float alpha, float deltaTime)
     {
         ImDrawList* draw = ImGui::GetForegroundDrawList();
         if (!draw)
@@ -7817,16 +7912,26 @@ namespace Menu
         const ImVec2 center = GetSettingsBagCenter();
         const float dx = g_inventoryDraggedPosition.x - center.x;
         const float dy = g_inventoryDraggedPosition.y - center.y;
-        const bool nearby = dx * dx + dy * dy <=
-            GetSettingsBagExpandedRadius() * GetSettingsBagExpandedRadius();
-        const float radius = nearby ? GetSettingsBagExpandedRadius() : 23.0f;
+        const float expandedRadius = GetSettingsBagExpandedRadius();
+        const bool nearby = IsInventoryDragVisualActive() &&
+            dx * dx + dy * dy <= expandedRadius * expandedRadius;
+
+        // Mesmo timing do hover do WheelSettings: o círculo abre/fecha com
+        // easing, e os itens só aparecem enquanto a abertura progride.
+        g_inventoryBagExpandT = AnimateSettingsValue(g_inventoryBagExpandT,
+            nearby ? 1.0f : 0.0f, 7.5f, deltaTime);
+        constexpr float collapsedRadius = 23.0f;
+        const float radius = collapsedRadius +
+            (expandedRadius - collapsedRadius) * g_inventoryBagExpandT;
         draw->AddCircle(center, radius,
-            FadeColor(IM_COL32(255, 255, 255, nearby ? 135 : 76), alpha), 56,
-            nearby ? 1.8f : 1.3f);
-        if (!nearby)
+            FadeColor(IM_COL32(255, 255, 255,
+                static_cast<int>(76.0f + 59.0f * g_inventoryBagExpandT)), alpha),
+            56, 1.3f + g_inventoryBagExpandT * 0.5f);
+        if (g_inventoryBagExpandT <= 0.002f)
             return;
 
         const float orbit = std::max(12.0f, radius - 28.0f);
+        const float itemAlpha = alpha * g_inventoryBagExpandT;
         const int count = static_cast<int>(g_bagItems.size());
         for (int i = 0; i < count; ++i)
         {
@@ -7836,15 +7941,18 @@ namespace Menu
                 std::max(count, 1)) + static_cast<float>(ImGui::GetTime()) * 0.20f;
             const ImVec2 pos(center.x + std::cos(angle) * orbit * 0.55f,
                 center.y + std::sin(angle) * orbit * 0.55f);
-            draw->AddCircle(pos, 14.0f,
-                FadeColor(IM_COL32(235, 230, 215, 170), alpha), 24, 1.1f);
+            const float itemRadius = 14.0f * g_inventoryBagExpandT;
+            draw->AddCircle(pos, itemRadius,
+                FadeColor(IM_COL32(235, 230, 215, 170), itemAlpha), 24,
+                1.1f * g_inventoryBagExpandT);
             if (auto* icon = ItemIcon::Get(item.form))
             {
+                const float iconRadius = 8.0f * g_inventoryBagExpandT;
                 draw->AddImage(reinterpret_cast<ImTextureID>(icon),
-                    ImVec2(pos.x - 8.0f, pos.y - 8.0f),
-                    ImVec2(pos.x + 8.0f, pos.y + 8.0f),
+                    ImVec2(pos.x - iconRadius, pos.y - iconRadius),
+                    ImVec2(pos.x + iconRadius, pos.y + iconRadius),
                     ImVec2(0.0f, 0.0f), ImVec2(1.0f, 1.0f),
-                    FadeColor(MakeGameplayIconColor(item, 220), alpha));
+                    FadeColor(MakeGameplayIconColor(item, 220), itemAlpha));
             }
         }
     }
@@ -15432,6 +15540,10 @@ namespace Menu
         g_inventoryItemReleased = false;
         g_inventoryItemWasPlaced = false;
         g_inventoryOverflowMorphActive = true;
+        // Uma abertura de Inventory sempre parte da bolsa fechada. Assim o
+        // hover seguinte reproduz a animação completa, sem herdar o frame
+        // aberto de um drag anterior.
+        g_inventoryBagExpandT = 0.0f;
 
         //g_draggedInventoryItem = GetSelectedInventoryItem();
         const auto selected =
@@ -16137,6 +16249,18 @@ namespace Menu
         return nullptr;
     }
 
+    static QuickDrawGesture* FindQuickDrawGesture(const QuickDrawKey& key)
+    {
+        if (!key.formID)
+            return nullptr;
+        for (auto& gesture : g_quickDrawGestures)
+        {
+            if (SameQuickDrawKey(gesture.key, key))
+                return &gesture;
+        }
+        return nullptr;
+    }
+
     static std::vector<ImVec2>* FindQuickDrawStroke(const RadialItem& item)
     {
         if (auto* gesture = FindQuickDrawGesture(item))
@@ -16332,6 +16456,198 @@ namespace Menu
         return true;
     }
 
+    static bool IsShortcutItemPreviewEnabled()
+    {
+        return Config::g_shortcutFeedbackStyle == 1;
+    }
+
+    static int GetQuickDrawHotkeyHudOrder(int virtualKey)
+    {
+        // A sequência segue a leitura física do teclado: function keys,
+        // números e as três fileiras alfabéticas. Teclas restantes entram no
+        // fim de forma estável, sem criar espaços vazios no HUD.
+        static constexpr std::array<int, 50> orderedKeys{
+            VK_F1, VK_F2, VK_F3, VK_F4, VK_F5, VK_F6, VK_F7, VK_F8,
+            VK_F9, VK_F10, VK_F11, VK_F12, VK_F13, VK_F14, VK_F15, VK_F16,
+            VK_F17, VK_F18, VK_F19, VK_F20, VK_F21, VK_F22, VK_F23, VK_F24,
+            '1', '2', '3', '4', '5', '6', '7', '8', '9', '0',
+            'Q', 'W', 'E', 'R', 'T', 'Y', 'U', 'I', 'O', 'P',
+            'A', 'S', 'D', 'F', 'G', 'H'
+        };
+        for (std::size_t i = 0; i < orderedKeys.size(); ++i)
+            if (orderedKeys[i] == virtualKey)
+                return static_cast<int>(i);
+
+        static constexpr std::array<int, 13> trailingKeys{
+            'J', 'K', 'L', 'Z', 'X', 'C', 'V', 'B', 'N', 'M',
+            VK_OEM_COMMA, VK_OEM_PERIOD, VK_OEM_2
+        };
+        for (std::size_t i = 0; i < trailingKeys.size(); ++i)
+            if (trailingKeys[i] == virtualKey)
+                return 100 + static_cast<int>(i);
+        return 1000 + virtualKey;
+    }
+
+    static void DrawQuickDrawHotkeyHud(float deltaTime)
+    {
+        // O Hub pode ser alcançado pelo editor ou pelo WheelSettings. Nos
+        // dois caminhos ele encontra o render global no mesmo frame; não
+        // desenhar duas vezes evita dobrar a opacidade do preview no hover.
+        static int lastDrawFrame = -1;
+        // O hover do fechar do Hub inicia um HUD deslocado. Guardamos o
+        // contexto até o fim do fade para que ele não salte 50px para baixo
+        // no primeiro frame depois de o cursor sair do botão.
+        static bool hubClosePreviewFadeActive = false;
+        const int frame = ImGui::GetFrameCount();
+        if (lastDrawFrame == frame)
+            return;
+        lastDrawFrame = frame;
+
+        const bool hotkeyActive = Config::g_shortcutFeedbackStyle == 2 &&
+            (g_quickDrawHotkeyDirectPreviewActive ||
+                g_quickDrawHotkeyHandSelectionActive);
+        const bool previewActive = g_quickDrawKeyboardCloseHudPreviewWanted;
+        if (previewActive)
+            hubClosePreviewFadeActive = true;
+        const bool active = hotkeyActive || previewActive;
+        if (hotkeyActive && g_quickDrawHotkeyPendingKey != 0)
+            g_quickDrawHotkeyHudHighlightedKey = g_quickDrawHotkeyPendingKey;
+        else if (previewActive)
+            g_quickDrawHotkeyHudHighlightedKey = 0;
+
+        g_quickDrawHotkeyHudAlpha = AnimateSettingsValue(
+            g_quickDrawHotkeyHudAlpha, active ? 1.0f : 0.0f,
+            active ? 9.0f : 6.0f, deltaTime);
+        if (g_quickDrawHotkeyHudAlpha <= 0.002f)
+        {
+            g_quickDrawHotkeyHudHighlightedKey = 0;
+            hubClosePreviewFadeActive = false;
+            return;
+        }
+
+        struct HudEntry
+        {
+            int hotkey = 0;
+            RadialItem item{};
+        };
+        std::vector<HudEntry> entries;
+        entries.reserve(g_quickDrawGestures.size());
+        for (const auto& gesture : g_quickDrawGestures)
+        {
+            if (gesture.hotkey == 0)
+                continue;
+            RadialItem item{};
+            if (BuildQuickDrawHotkeyPreviewItem(gesture.key, item))
+                entries.push_back({ gesture.hotkey, item });
+        }
+        std::sort(entries.begin(), entries.end(), [](const HudEntry& left,
+            const HudEntry& right) {
+            const int leftOrder = GetQuickDrawHotkeyHudOrder(left.hotkey);
+            const int rightOrder = GetQuickDrawHotkeyHudOrder(right.hotkey);
+            return leftOrder == rightOrder ? left.hotkey < right.hotkey :
+                leftOrder < rightOrder;
+        });
+        entries.erase(std::unique(entries.begin(), entries.end(),
+            [](const HudEntry& left, const HudEntry& right) {
+                return left.hotkey == right.hotkey;
+            }), entries.end());
+        if (entries.empty())
+            return;
+
+        ImDrawList* draw = ImGui::GetForegroundDrawList();
+        if (!draw)
+            return;
+        const ImVec2 screen = ImGui::GetIO().DisplaySize;
+        const int perRow = entries.size() > 30 ? 20 : 10;
+        const int rowCount = static_cast<int>((entries.size() + perRow - 1) / perRow);
+        // O HUD é 30% maior que a primeira versão: núcleo, ícone, badge e
+        // os próprios vãos crescem juntos para preservar a leitura.
+        constexpr float radius = 23.4f;
+        constexpr float columnGap = 10.4f;
+        constexpr float rowGap = 10.4f;
+        const float cell = radius * 2.0f + columnGap;
+        const float rowStep = radius * 2.0f + rowGap;
+        const float slideT = g_quickDrawHotkeyHudAlpha *
+            g_quickDrawHotkeyHudAlpha * (3.0f - 2.0f * g_quickDrawHotkeyHudAlpha);
+        const float slideY = (1.0f - slideT) * 54.0f;
+        // No hover do botão de fechar do Hub, o HUD conserva a entrada pela
+        // borda inferior, mas termina 50px mais alto para não disputar espaço
+        // com o próprio botão. Em gameplay o ponto final permanece intacto.
+        const float hubPreviewLift = hubClosePreviewFadeActive ? 50.0f : 0.0f;
+        const float firstY = screen.y - 35.0f - hubPreviewLift -
+            (static_cast<float>(rowCount) - 1.0f) * rowStep + slideY;
+        // A referência permanece uma malha de vinte colunas centrada. Com
+        // 30 ou menos binds, cada linha ocupa apenas as primeiras dez casas
+        // (lado esquerdo); ao ultrapassar 30 ela passa a preencher as vinte e
+        // o conjunto completo fica naturalmente centralizado.
+        constexpr int fullHudColumns = 20;
+        const float baseFirstX = screen.x * 0.5f -
+            (static_cast<float>(fullHudColumns) - 1.0f) * cell * 0.5f;
+        const float time = static_cast<float>(ImGui::GetTime());
+
+        for (std::size_t index = 0; index < entries.size(); ++index)
+        {
+            const int row = static_cast<int>(index) / perRow;
+            const int column = static_cast<int>(index) % perRow;
+            // Cada linha nasce no meio do primeiro e segundo item da linha
+            // anterior. O deslocamento acumulado cria a escadinha suave
+            // pedida, sem alterar a ordem global das hotkeys.
+            const float firstX = baseFirstX + static_cast<float>(row) * cell * 0.5f;
+            const float phase = static_cast<float>(entries[index].hotkey % 37) * 0.37f;
+            const ImVec2 floatOffset(std::sin(time * 0.83f + phase) * 1.4f,
+                std::cos(time * 0.69f + phase * 1.71f) * 1.8f);
+            const bool highlighted = entries[index].hotkey ==
+                g_quickDrawHotkeyHudHighlightedKey;
+            const float highlightT = highlighted ? 1.0f : 0.0f;
+            const float itemRadius = radius * (1.0f + highlightT * 0.18f);
+            const ImVec2 center(firstX + static_cast<float>(column) * cell,
+                firstY + static_cast<float>(row) * rowStep);
+            const ImVec2 visualCenter = center + floatOffset;
+            const float alpha = g_quickDrawHotkeyHudAlpha;
+
+            draw->AddCircleFilled(visualCenter, itemRadius,
+                FadeColor(IM_COL32(20, 20, 25, 180), alpha), 28);
+            if (highlighted)
+                draw->AddCircleFilled(visualCenter, itemRadius,
+                    FadeColor(IM_COL32(245, 242, 232, 80), alpha), 28);
+            //draw->AddCircle(visualCenter, itemRadius,
+            //    FadeColor(IM_COL32(245, 242, 232, highlighted ? 235 : 118), alpha),
+            //    28, highlighted ? 1.7f : 1.0f);
+
+            if (auto* icon = ItemIcon::Get(entries[index].item.form))
+            {
+                const float iconRadius = itemRadius * 0.62f;
+                draw->AddImage(reinterpret_cast<ImTextureID>(icon),
+                    visualCenter - ImVec2(iconRadius, iconRadius),
+                    visualCenter + ImVec2(iconRadius, iconRadius),
+                    ImVec2(0, 0), ImVec2(1, 1), MakeGameplayIconColor(
+                        entries[index].item, static_cast<int>(176.0f * alpha),
+                        1.0f, false, RadialSide::Left));
+            }
+
+            const ImVec2 badgeCenter = visualCenter +
+                ImVec2(itemRadius * 0.68f, -itemRadius * 0.68f);
+            constexpr float badgeRadius = 11.7f;
+            draw->AddCircleFilled(badgeCenter, badgeRadius,
+                FadeColor(IM_COL32(35, 36, 42, 235), alpha), 18);
+            //draw->AddCircle(badgeCenter, badgeRadius,
+            //    FadeColor(IM_COL32(255, 230, 220, 185), alpha), 18, 1.0f);
+            const std::string keyText = Config::KeyToString(entries[index].hotkey);
+            float keyFontSize = ImGui::GetFontSize() * 0.91f;
+            ImVec2 keySize = ImGui::GetFont()->CalcTextSizeA(keyFontSize,
+                FLT_MAX, 0.0f, keyText.c_str());
+            if (keySize.x > badgeRadius * 1.55f)
+            {
+                keyFontSize *= badgeRadius * 1.55f / keySize.x;
+                keySize = ImGui::GetFont()->CalcTextSizeA(keyFontSize,
+                    FLT_MAX, 0.0f, keyText.c_str());
+            }
+            draw->AddText(ImGui::GetFont(), keyFontSize,
+                badgeCenter - keySize * 0.5f,
+                FadeColor(IM_COL32(255, 245, 240, 245), alpha), keyText.c_str());
+        }
+    }
+
     static QuickDrawKeyboardFilter GetQuickDrawKeyboardFilterForForm(
         const RE::TESForm* form)
     {
@@ -16376,24 +16692,40 @@ namespace Menu
         g_quickDrawKeyboardOpen = true;
         g_quickDrawKeyboardReturnTarget = returnTarget;
         g_quickDrawKeyboardScroll = 0.0f;
+        g_quickDrawKeyboardAnimatedScroll = 0.0f;
         g_quickDrawKeyboardMaxScroll = 0.0f;
+        g_quickDrawKeyboardConstellationDense = false;
+        g_quickDrawKeyboardConstellationScrollX = 0.0f;
+        g_quickDrawKeyboardConstellationMaxScrollX = 0.0f;
         g_quickDrawKeyboardHoveredCard = -1;
         g_quickDrawKeyboardRemovingPreviewActive = false;
         g_quickDrawKeyboardRemovingPreviewItem = {};
+        g_quickDrawKeyboardRemovingPreviewNameAlpha = 0.0f;
         g_quickDrawKeyboardReflowCooldown = 0.0f;
         g_quickDrawKeyboardFilters.fill(true);
         g_quickDrawKeyboardFilterHoverT.fill(0.0f);
         g_quickDrawKeyboardVisualMode =
             returnTarget == QuickDrawKeyboardReturnTarget::WheelSettings;
-        g_quickDrawKeyboardVisualModeT = 0.0f;
+        // Quando o Hub abre o navegador diretamente pelo WheelSettings, o
+        // teclado visual já é a tela inicial. Começar o interpolador em zero
+        // deixava um frame dos cartões radiais aparecer antes do fade para o
+        // teclado. No Quick Draw normal ele continua nascendo em zero.
+        g_quickDrawKeyboardVisualModeT = g_quickDrawKeyboardVisualMode ? 1.0f : 0.0f;
         g_quickDrawKeyboardVisualPreviewItem = {};
         g_quickDrawKeyboardVisualPreviewWanted = false;
         g_quickDrawKeyboardVisualPreviewAlpha = 0.0f;
         g_quickDrawKeyboardVisualPreviewRopeInitialized = false;
         g_quickDrawKeyboardVisualPreviewRopeVelocity = {};
         g_quickDrawKeyboardToggleHoverT = 0.0f;
+        g_quickDrawKeyboardToggleCenterInitialized = false;
         g_quickDrawKeyboardItemDragActive = false;
         g_quickDrawKeyboardDraggedItem = {};
+        g_quickDrawKeyboardDragSourceVisualKey = 0;
+        g_quickDrawKeyboardDragSourceReturning = false;
+        g_quickDrawKeyboardPendingKeyRemove = false;
+        g_quickDrawKeyboardPendingRemoveHotkey = 0;
+        g_quickDrawKeyboardDragSourceHotkey = 0;
+        g_quickDrawKeyboardCloseHudPreviewWanted = false;
         g_quickDrawKeyboardRadialLayoutDirty = false;
         g_quickDrawEditorWaitingHotkey = false;
         g_quickDrawSettingsExpanded = false;
@@ -16404,10 +16736,15 @@ namespace Menu
         g_quickDrawKeyboardOpen = false;
         g_quickDrawKeyboardCards.clear();
         g_quickDrawKeyboardScroll = 0.0f;
+        g_quickDrawKeyboardAnimatedScroll = 0.0f;
         g_quickDrawKeyboardMaxScroll = 0.0f;
+        g_quickDrawKeyboardConstellationDense = false;
+        g_quickDrawKeyboardConstellationScrollX = 0.0f;
+        g_quickDrawKeyboardConstellationMaxScrollX = 0.0f;
         g_quickDrawKeyboardHoveredCard = -1;
         g_quickDrawKeyboardRemovingPreviewActive = false;
         g_quickDrawKeyboardRemovingPreviewItem = {};
+        g_quickDrawKeyboardRemovingPreviewNameAlpha = 0.0f;
         g_quickDrawKeyboardVisualMode = false;
         g_quickDrawKeyboardVisualModeT = 0.0f;
         g_quickDrawKeyboardVisualPreviewItem = {};
@@ -16415,10 +16752,17 @@ namespace Menu
         g_quickDrawKeyboardVisualPreviewAlpha = 0.0f;
         g_quickDrawKeyboardVisualPreviewRopeInitialized = false;
         g_quickDrawKeyboardVisualPreviewRopeVelocity = {};
+        g_quickDrawKeyboardToggleCenterInitialized = false;
         g_quickDrawKeyboardVisualSlots.clear();
         g_quickDrawKeyboardSourceItems.clear();
         g_quickDrawKeyboardItemDragActive = false;
         g_quickDrawKeyboardDraggedItem = {};
+        g_quickDrawKeyboardDragSourceVisualKey = 0;
+        g_quickDrawKeyboardDragSourceReturning = false;
+        g_quickDrawKeyboardPendingKeyRemove = false;
+        g_quickDrawKeyboardPendingRemoveHotkey = 0;
+        g_quickDrawKeyboardDragSourceHotkey = 0;
+        g_quickDrawKeyboardCloseHudPreviewWanted = false;
         g_quickDrawKeyboardReturnTarget = QuickDrawKeyboardReturnTarget::QuickDrawEditor;
     }
 
@@ -16433,23 +16777,104 @@ namespace Menu
         float rowSpan = 1.0f;
     };
 
+    static bool IsQuickDrawVisualKeyboardTextKey(int virtualKey)
+    {
+        // Somente teclas que representam texto dependem do layout ativo.
+        // Controles (Esc, F1..F12, setas, modificadores, Enter etc.) mantêm
+        // sempre o rótulo físico definido pelo template do teclado.
+        if ((virtualKey >= '0' && virtualKey <= '9') ||
+            (virtualKey >= 'A' && virtualKey <= 'Z'))
+            return true;
+
+        switch (virtualKey)
+        {
+        case VK_OEM_1:
+        case VK_OEM_PLUS:
+        case VK_OEM_COMMA:
+        case VK_OEM_MINUS:
+        case VK_OEM_PERIOD:
+        case VK_OEM_2:
+        case VK_OEM_3:
+        case VK_OEM_4:
+        case VK_OEM_5:
+        case VK_OEM_6:
+        case VK_OEM_7:
+        case VK_OEM_8:
+        case VK_OEM_102:
+            return true;
+        default:
+            return false;
+        }
+    }
+
+    static bool DoesQuickDrawFontSupportText(const std::string& utf8)
+    {
+        ImFont* font = ImGui::GetFont();
+        if (!font || utf8.empty())
+            return false;
+
+        // FindGlyphNoFallback força a consulta do glyph real. Portanto um
+        // caractere ausente não pode cair silenciosamente no fallback '?' do
+        // ImGui e substituir o rótulo fixo da tecla.
+        ImFontBaked* baked = font->GetFontBaked(ImGui::GetFontSize());
+        if (!baked)
+            return false;
+
+        const char* current = utf8.data();
+        const char* const end = current + utf8.size();
+        while (current < end)
+        {
+            unsigned int codepoint = 0;
+            const int bytes = ImTextCharFromUtf8(&codepoint, current, end);
+            if (bytes <= 0 || codepoint < 0x20u ||
+                codepoint > IM_UNICODE_CODEPOINT_MAX ||
+                !font->IsGlyphInFont(static_cast<ImWchar>(codepoint)) ||
+                !baked->FindGlyphNoFallback(static_cast<ImWchar>(codepoint)))
+                return false;
+            current += bytes;
+        }
+        return true;
+    }
+
     static std::string ResolveQuickDrawVisualKeyboardLabel(int virtualKey,
         const char* fallback)
     {
-        // Os nomes de teclas especiais são parte do desenho físico; não
-        // deixe KeyToString trocar PgUp/PgDn/Del por rótulos longos.
-        if (virtualKey == VK_PRIOR || virtualKey == VK_NEXT ||
-            virtualKey == VK_DELETE)
+        // Controles nunca passam pela conversão de layout. Isso preserva os
+        // nomes e símbolos definidos pelo desenho, inclusive ESC e as setas.
+        if (!IsQuickDrawVisualKeyboardTextKey(virtualKey))
             return fallback;
+
         // A disposição é consultada a cada desenho para acompanhar troca de
         // idioma/layout feita pelo Windows sem precisar reiniciar o jogo.
+        // ToUnicodeEx entrega o caractere real do layout (inclusive cirílico,
+        // kana etc.) em UTF-16; convertê-lo para UTF-8 permite que o atlas de
+        // fontes Unicode já usado pelo mod o desenhe diretamente.
         const HKL layout = GetKeyboardLayout(0);
-        const UINT mapped = MapVirtualKeyExA(static_cast<UINT>(virtualKey),
-            MAPVK_VK_TO_CHAR, layout) & 0x7FFFFFFFu;
-        if (mapped >= 0x20u && mapped <= 0x7Eu)
-            return std::string(1, static_cast<char>(mapped));
-        const std::string configured = Config::KeyToString(virtualKey);
-        return configured.empty() ? std::string(fallback) : configured;
+        const UINT scanCode = MapVirtualKeyExW(static_cast<UINT>(virtualKey),
+            MAPVK_VK_TO_VSC, layout);
+        std::array<BYTE, 256> keyboardState{};
+        std::array<wchar_t, 8> unicodeCharacters{};
+        // Bit 2 impede que teclas mortas alterem o estado do teclado enquanto
+        // o menu apenas consulta seu rótulo (Windows 10+).
+        const int characterCount = ToUnicodeEx(static_cast<UINT>(virtualKey),
+            scanCode, keyboardState.data(), unicodeCharacters.data(),
+            static_cast<int>(unicodeCharacters.size()), 0x4u, layout);
+        if (characterCount > 0)
+        {
+            const int utf8Length = WideCharToMultiByte(CP_UTF8, 0,
+                unicodeCharacters.data(), characterCount, nullptr, 0, nullptr, nullptr);
+            if (utf8Length > 0)
+            {
+                std::string utf8(static_cast<std::size_t>(utf8Length), '\0');
+                WideCharToMultiByte(CP_UTF8, 0, unicodeCharacters.data(),
+                    characterCount, utf8.data(), utf8Length, nullptr, nullptr);
+                if (DoesQuickDrawFontSupportText(utf8))
+                    return utf8;
+            }
+        }
+        // Para uma tecla física de texto sem glyph disponível, preservar o
+        // rótulo do template é preferível a renderizar o quadrado/'?'.
+        return fallback;
     }
 
     static float GetQuickDrawKeyboardPreviewOcclusion(const ImVec2& position)
@@ -16578,8 +17003,15 @@ namespace Menu
             32.0f, 67.0f);
         const float keyboardHeight = rowHeight * 6.0f + keyGap * 5.0f +
             verticalPadding * 2.0f;
+        // O vão entre a base do teclado e o primeiro ícone da lista fica
+        // centrado no equador da tela. A lista começa 20 px abaixo do
+        // teclado e sua primeira linha reserva mais 25 px de segurança.
+        constexpr float constellationTopGap = 20.0f;
+        constexpr float constellationFirstRowInset = 25.0f;
+        const float desiredKeyboardBottom = screen.y * 0.5f -
+            (constellationTopGap + constellationFirstRowInset) * 0.5f + 80.0f;
         const ImVec2 keyboardMin(marginX, std::max(18.0f,
-            (screen.y - keyboardHeight) * 0.5f - 130.0f));
+            desiredKeyboardBottom - keyboardHeight));
         const ImVec2 keyboardMax(screen.x - marginX, keyboardMin.y + keyboardHeight);
         const float innerWidth = keyboardWidth - sidePadding * 2.0f;
         // O corpo e o bloco lateral dividem a mesma altura. Isso mantém o
@@ -16673,7 +17105,7 @@ namespace Menu
 
                 auto boundCard = std::find_if(g_quickDrawKeyboardCards.begin(),
                     g_quickDrawKeyboardCards.end(), [&](const QuickDrawKeyboardCard& card) {
-                        return card.hotkey == key.key && card.removeT < 0.62f &&
+                        return !card.testOnly && card.hotkey == key.key && card.removeT < 0.62f &&
                             card.filterT > 0.08f;
                     });
                 const bool hasBoundItem = key.key != 0 &&
@@ -16757,6 +17189,13 @@ namespace Menu
                         const float iconRadius = 12.0f + 13.0f * card.keyboardHoverT;
                         card.keyboardMiniCenter = keyCenter;
                         card.keyboardRemoveCenter = keyCenter;
+                        // O toggle fica no canto inferior-direito da tecla,
+                        // separado do X central que remove o bind.
+                        card.keyboardAutoUseCenter = keyMax - ImVec2(14.0f, 14.0f);
+                        // Require Wheel Key espelha o espaçamento do Auto-Use
+                        // no canto superior-direito da mesma tecla.
+                        card.keyboardRequireActivationCenter =
+                            ImVec2(keyMax.x - 14.0f, keyMin.y + 14.0f);
                         RadialItem item{};
                         if (BuildQuickDrawHotkeyPreviewItem(card.key, item))
                         {
@@ -16780,6 +17219,89 @@ namespace Menu
                                 const ImVec2 namePos(keyCenter.x - nameSize.x * 0.5f,
                                     keyMax.y + 7.0f);
                                 hoveredItemNames.emplace_back(namePos, item.name);
+                            }
+
+                            if (IsQuickDrawAutoUseEligible(item.form))
+                            {
+                                constexpr float autoUseRadius = 7.0f;
+                                const bool autoUseEnabled =
+                                    IsQuickDrawAutoUseEnabled(item);
+                                const bool autoUseHovered =
+                                    IsSettingsCircleHovered(g_settingsMousePos,
+                                        card.keyboardAutoUseCenter,
+                                        autoUseRadius + 3.0f);
+                                card.keyboardAutoUseHoverT = AnimateSettingsValue(
+                                    card.keyboardAutoUseHoverT,
+                                    autoUseHovered ? 1.0f : 0.0f, 14.0f, dt);
+                                card.keyboardAutoUseClickFlash = std::max(0.0f,
+                                    card.keyboardAutoUseClickFlash - dt * 7.0f);
+
+                                draw->AddCircleFilled(card.keyboardAutoUseCenter,
+                                    autoUseRadius,
+                                    FadeColor(IM_COL32(35, 36, 42, 230),
+                                        keyAlpha * removeAlpha), 18);
+                                const float whiteStrength = autoUseEnabled
+                                    ? 0.82f
+                                    : std::max(0.38f * card.keyboardAutoUseHoverT,
+                                        card.keyboardAutoUseClickFlash);
+                                if (whiteStrength > 0.002f)
+                                {
+                                    draw->AddCircleFilled(card.keyboardAutoUseCenter,
+                                        autoUseRadius,
+                                        FadeColor(IM_COL32(245, 242, 232,
+                                            static_cast<int>(165.0f * whiteStrength)),
+                                            keyAlpha * removeAlpha), 18);
+                                }
+                                // A mesma cor usada no contorno das teclas.
+                                draw->AddCircle(card.keyboardAutoUseCenter,
+                                    autoUseRadius,
+                                    FadeColor(IM_COL32(245, 242, 232,
+                                        autoUseEnabled ? 220 : static_cast<int>(125.0f +
+                                            80.0f * card.keyboardAutoUseHoverT)),
+                                        keyAlpha * removeAlpha), 18, 1.0f);
+                            }
+                            else
+                            {
+                                card.keyboardAutoUseCenter = {};
+                                card.keyboardAutoUseHoverT = 0.0f;
+                            }
+
+                            if (QuickDrawGesture* gesture = FindQuickDrawGesture(card.key))
+                            {
+                                constexpr float requireRadius = 7.0f;
+                                const bool requireHovered = IsSettingsCircleHovered(
+                                    g_settingsMousePos,
+                                    card.keyboardRequireActivationCenter,
+                                    requireRadius + 3.0f);
+                                card.keyboardRequireActivationHoverT = AnimateSettingsValue(
+                                    card.keyboardRequireActivationHoverT,
+                                    requireHovered ? 1.0f : 0.0f, 14.0f, dt);
+                                card.keyboardRequireActivationClickFlash = std::max(0.0f,
+                                    card.keyboardRequireActivationClickFlash - dt * 7.0f);
+                                const bool enabled = gesture->hotkeyRequiresActivation;
+                                draw->AddCircleFilled(card.keyboardRequireActivationCenter,
+                                    requireRadius, FadeColor(IM_COL32(20, 20, 24, 235),
+                                        keyAlpha * removeAlpha), 18);
+                                const float redStrength = enabled ? 1.0f :
+                                    std::max(0.30f * card.keyboardRequireActivationHoverT,
+                                        card.keyboardRequireActivationClickFlash);
+                                if (redStrength > 0.002f)
+                                {
+                                    draw->AddCircleFilled(card.keyboardRequireActivationCenter,
+                                        requireRadius, FadeColor(IM_COL32(220, 62, 62,
+                                            static_cast<int>(190.0f * redStrength)),
+                                            keyAlpha * removeAlpha), 18);
+                                }
+                                draw->AddCircle(card.keyboardRequireActivationCenter,
+                                    requireRadius, FadeColor(IM_COL32(185, 185, 190,
+                                        enabled ? 220 : static_cast<int>(100.0f +
+                                            75.0f * card.keyboardRequireActivationHoverT)),
+                                        keyAlpha * removeAlpha), 18, 1.0f);
+                            }
+                            else
+                            {
+                                card.keyboardRequireActivationCenter = {};
+                                card.keyboardRequireActivationHoverT = 0.0f;
                             }
                         }
                         if (hovered)
@@ -16859,10 +17381,56 @@ namespace Menu
         collect(g_sideItems, g_quickDrawKeyboardSourceItems, 3);
         collect(g_bagItems, g_quickDrawKeyboardSourceItems, 4);
 
-        const float freeTop = keyboardBottom + 26.0f;
-        const float freeBottom = screen.y - 48.0f;
-        if (freeBottom <= freeTop || g_quickDrawKeyboardSourceItems.empty())
+        const float freeTop = keyboardBottom + 20.0f;
+        const float freeBottom = screen.y - 20.0f;
+        if (g_quickDrawKeyboardSourceItems.empty())
             return;
+
+        // Poucas estrelas ficam na constelação radial original. Em alta
+        // densidade, a malha ocupa exclusivamente a faixa sob o teclado e o
+        // excesso vira conteúdo horizontalmente rolável.
+        const bool denseLayout = g_quickDrawKeyboardSourceItems.size() >= 80;
+        const float layoutTop = freeTop;
+        if (freeBottom <= layoutTop)
+            return;
+        const float layoutLeft = 28.0f;
+        const float layoutRight = screen.x - 28.0f;
+        const float layoutWidth = std::max(1.0f, layoutRight - layoutLeft);
+        const float layoutHeight = std::max(1.0f, freeBottom - layoutTop);
+        // A faixa densa não encosta nos seus limites: o raio do ícone e sua
+        // flutuação ficam sempre inteiramente abaixo do teclado e acima da
+        // borda inferior.
+        constexpr float denseBoundaryPadding = 25.0f;
+        const float denseUsableHeight = std::max(1.0f,
+            layoutHeight - denseBoundaryPadding * 2.0f);
+        const int denseRows = denseLayout ? std::max(1,
+            static_cast<int>(std::floor(denseUsableHeight / 46.0f)) + 1) : 1;
+        const int denseColumns = denseLayout ? std::max(1,
+            static_cast<int>((g_quickDrawKeyboardSourceItems.size() +
+                static_cast<std::size_t>(denseRows) - 1) /
+                static_cast<std::size_t>(denseRows))) : 1;
+        const float denseStepX = denseLayout ? 46.0f : layoutWidth;
+        const float denseStepY = denseRows > 1
+            ? denseUsableHeight / static_cast<float>(denseRows - 1) : 0.0f;
+        // A largura inclui a última coluna: o scroll passa a ser cíclico,
+        // como uma fita lateral infinita, sem fim/começo visível.
+        const float denseVirtualWidth = denseLayout
+            ? denseStepX * static_cast<float>(denseColumns) : 0.0f;
+        g_quickDrawKeyboardConstellationDense = denseLayout;
+        g_quickDrawKeyboardConstellationMaxScrollX = denseLayout
+            ? denseVirtualWidth : 0.0f;
+        if (denseLayout && g_quickDrawKeyboardConstellationMaxScrollX > 0.0f)
+        {
+            g_quickDrawKeyboardConstellationScrollX = std::fmod(
+                g_quickDrawKeyboardConstellationScrollX,
+                g_quickDrawKeyboardConstellationMaxScrollX);
+            if (g_quickDrawKeyboardConstellationScrollX < 0.0f)
+                g_quickDrawKeyboardConstellationScrollX +=
+                    g_quickDrawKeyboardConstellationMaxScrollX;
+        }
+        const float sourceMinimumDistance = denseLayout
+            ? std::clamp(std::min(denseStepX, denseStepY) * 0.90f, 36.0f, 52.0f)
+            : 52.0f;
 
         // A constelação nasce no centro do espaço abaixo do teclado. Seus
         // anéis usam somente o semicírculo inferior; quando a área fica
@@ -16876,42 +17444,101 @@ namespace Menu
         for (std::size_t index = 0; index < g_quickDrawKeyboardSourceItems.size(); ++index)
         {
             auto& entry = g_quickDrawKeyboardSourceItems[index];
-            int ring = 1;
-            int inRing = ordinal;
-            while (inRing >= ring * 6)
+            ImVec2 target{};
+            const int layoutOrdinal = denseLayout
+                ? static_cast<int>(index) : ordinal;
+            if (denseLayout)
             {
-                inRing -= ring * 6;
-                ++ring;
+                const int column = layoutOrdinal % denseColumns;
+                const int row = layoutOrdinal / denseColumns;
+                // Meio passo alternado cria uma distribuição hexagonal e
+                // evita linhas rígidas de itens idênticos. A coordenada X é
+                // circular: ao sair à direita, o mesmo fluxo retorna à
+                // esquerda, sem criar novas ondas de entrada.
+                const float stagger = (row & 1) ? denseStepX * 0.5f : 0.0f;
+                float loopX = std::fmod(static_cast<float>(column) * denseStepX +
+                        stagger + g_quickDrawKeyboardConstellationScrollX,
+                    denseVirtualWidth);
+                if (loopX < 0.0f)
+                    loopX += denseVirtualWidth;
+                target = ImVec2(layoutLeft + loopX,
+                    layoutTop + denseBoundaryPadding +
+                        static_cast<float>(row) * denseStepY);
             }
-            const int slots = ring * 6;
-            // 15°..165°: sempre abaixo da âncora. Nas camadas maiores a
-            // distribuição tende às laterais para respeitar o teclado acima.
-            const float angle = 0.261799f + 2.617994f *
-                static_cast<float>(inRing) / std::max(1, slots - 1);
-            const float radius = 36.0f + 40.0f * static_cast<float>(ring - 1);
-            ImVec2 target = anchor + ImVec2(std::cos(angle) * radius,
-                std::sin(angle) * radius);
-            target.x = std::clamp(target.x, 28.0f, screen.x - 28.0f);
-            target.y = std::clamp(target.y, freeTop + 18.0f, freeBottom);
+            else
+            {
+                int ring = 1;
+                int inRing = ordinal;
+                while (inRing >= ring * 6)
+                {
+                    inRing -= ring * 6;
+                    ++ring;
+                }
+                const int slots = ring * 6;
+                // 15°..165°: sempre abaixo da âncora. Nas camadas maiores a
+                // distribuição tende às laterais para respeitar o teclado acima.
+                const float angle = 0.261799f + 2.617994f *
+                    static_cast<float>(inRing) / std::max(1, slots - 1);
+                const float radius = 36.0f + 40.0f * static_cast<float>(ring - 1);
+                target = anchor + ImVec2(std::cos(angle) * radius,
+                    std::sin(angle) * radius);
+                target.x = std::clamp(target.x, 28.0f, screen.x - 28.0f);
+                target.y = std::clamp(target.y, freeTop + 18.0f, freeBottom);
+            }
             targets[index] = target;
             auto& visual = g_quickDrawKeyboardSourceVisuals[entry.visualKey];
             if (!visual.initialized)
             {
-                visual.position = anchor;
-                visual.velocity = (target - anchor) * 1.2f;
+                // Mil itens partindo do mesmo ponto demorariam muitos frames
+                // para se separar sob o limite de velocidade. A malha densa
+                // nasce diretamente nos alvos e preserva a física depois.
+                visual.position = denseLayout ? target : anchor;
+                visual.velocity = denseLayout ? ImVec2{} : (target - anchor) * 1.2f;
                 visual.initialized = true;
             }
             const bool sourceVisibleByFilter = entry.item.form &&
                 g_quickDrawKeyboardFilters[static_cast<std::size_t>(
                     GetQuickDrawKeyboardFilterForForm(entry.item.form))];
-            const bool sourceVisible = !entry.keyboardBound && sourceVisibleByFilter;
-            visual.alpha = g_quickDrawKeyboardVisualMode
-                ? (sourceVisible ? 1.0f : 0.0f)
-                : AnimateSettingsValue(visual.alpha,
-                    sourceVisible ? 1.0f : 0.0f, 7.0f, dt);
+            const bool insideHorizontalViewport = !denseLayout ||
+                (target.x >= layoutLeft - 56.0f && target.x <= layoutRight + 56.0f);
+            const bool isDraggedSource = g_quickDrawKeyboardItemDragActive &&
+                entry.visualKey == g_quickDrawKeyboardDragSourceVisualKey;
+            const bool isReturningSource = g_quickDrawKeyboardDragSourceReturning &&
+                entry.visualKey == g_quickDrawKeyboardDragSourceVisualKey;
+            const bool sourceVisible = !entry.keyboardBound && sourceVisibleByFilter &&
+                insideHorizontalViewport && !isDraggedSource;
+            // A fita de alta densidade não tem animação de entrada. Cada
+            // item simplesmente já ocupa sua célula ao cruzar a borda, o que
+            // impede os flashes e pilhas temporárias de ícones.
+            if (isDraggedSource)
+            {
+                // O objeto foi pego: ele não deve continuar como cópia sob
+                // o cursor. A posição/velocidade ficam guardadas no visual.
+                visual.alpha = 0.0f;
+                visual.hoverT = 0.0f;
+            }
+            else
+            {
+                visual.alpha = (denseLayout && !isReturningSource)
+                    ? (sourceVisible ? 1.0f : 0.0f)
+                    : AnimateSettingsValue(visual.alpha,
+                        sourceVisible ? 1.0f : 0.0f,
+                        isReturningSource ? 7.0f : 9.0f, dt);
+                if (isReturningSource && visual.alpha >= 0.995f)
+                {
+                    g_quickDrawKeyboardDragSourceReturning = false;
+                    g_quickDrawKeyboardDragSourceVisualKey = 0;
+                }
+            }
+            if (denseLayout)
+            {
+                visual.position = target;
+                visual.velocity = {};
+            }
             if (!sourceVisible)
             {
-                targets[index] = visual.position;
+                if (!denseLayout)
+                    targets[index] = visual.position;
                 continue;
             }
             ++ordinal;
@@ -16931,25 +17558,60 @@ namespace Menu
                 hoveredSourceIndex = static_cast<int>(i);
         }
 
+        if (denseLayout)
+        {
+            // A fita continua reta durante o scroll, mas o item sob o cursor
+            // abre uma bolha local: seus vizinhos cedem suavemente e voltam
+            // ao próprio slot quando o hover acaba.
+            constexpr float denseHoverRange = 118.0f;
+            constexpr float denseHoverMaxOffset = 48.0f;
+            const float response = 1.0f - std::exp(-11.0f * dt);
+            ImVec2 hoveredPosition{};
+            if (hoveredSourceIndex >= 0)
+                hoveredPosition = g_quickDrawKeyboardSourceVisuals[
+                    g_quickDrawKeyboardSourceItems[
+                        static_cast<std::size_t>(hoveredSourceIndex)].visualKey].position;
+            for (std::size_t i = 0; i < g_quickDrawKeyboardSourceItems.size(); ++i)
+            {
+                const auto& entry = g_quickDrawKeyboardSourceItems[i];
+                auto& visual = g_quickDrawKeyboardSourceVisuals[entry.visualKey];
+                ImVec2 desiredOffset{};
+                if (hoveredSourceIndex >= 0 &&
+                    static_cast<int>(i) != hoveredSourceIndex && visual.alpha > 0.02f)
+                {
+                    ImVec2 delta = targets[i] - hoveredPosition;
+                    float distance = std::sqrt(delta.x * delta.x + delta.y * delta.y);
+                    if (distance < 0.01f)
+                        delta = ImVec2((i & 1) ? 1.0f : -1.0f,
+                            (i & 2) ? 0.65f : -0.65f), distance = 1.0f;
+                    if (distance < denseHoverRange)
+                    {
+                        const float amount = std::min(denseHoverMaxOffset,
+                            (denseHoverRange - distance) * 0.72f);
+                        desiredOffset = delta * (amount / distance);
+                    }
+                }
+                visual.denseHoverOffset += (desiredOffset - visual.denseHoverOffset) * response;
+                visual.position = targets[i] + visual.denseHoverOffset;
+            }
+        }
+
         // Física independente da bolsa, mas com o mesmo princípio: cada
         // ícone busca sua âncora, flutua livremente e repele os demais.
-        for (std::size_t i = 0; i < g_quickDrawKeyboardSourceItems.size(); ++i)
+        for (std::size_t i = 0; !denseLayout &&
+            i < g_quickDrawKeyboardSourceItems.size(); ++i)
         {
-            if (g_quickDrawKeyboardSourceItems[i].keyboardBound &&
-                g_quickDrawKeyboardSourceVisuals[
-                    g_quickDrawKeyboardSourceItems[i].visualKey].alpha <= 0.02f)
-                continue;
             auto& a = g_quickDrawKeyboardSourceVisuals[
                 g_quickDrawKeyboardSourceItems[i].visualKey];
+            if (a.alpha <= 0.02f)
+                continue;
             ImVec2 force = (targets[i] - a.position) * 7.0f;
             for (std::size_t j = i + 1; j < g_quickDrawKeyboardSourceItems.size(); ++j)
             {
-                if (g_quickDrawKeyboardSourceItems[j].keyboardBound &&
-                    g_quickDrawKeyboardSourceVisuals[
-                        g_quickDrawKeyboardSourceItems[j].visualKey].alpha <= 0.02f)
-                    continue;
                 auto& b = g_quickDrawKeyboardSourceVisuals[
                     g_quickDrawKeyboardSourceItems[j].visualKey];
+                if (b.alpha <= 0.02f)
+                    continue;
                 ImVec2 delta = b.position - a.position;
                 float distance = std::sqrt(delta.x * delta.x + delta.y * delta.y);
                 if (distance < 0.01f)
@@ -16957,11 +17619,10 @@ namespace Menu
                     delta = ImVec2(1.0f, 0.0f);
                     distance = 1.0f;
                 }
-                constexpr float minimumDistance = 52.0f;
-                if (distance < minimumDistance)
+                if (distance < sourceMinimumDistance)
                 {
                     const ImVec2 direction = delta / distance;
-                    const float push = (minimumDistance - distance) * 21.0f;
+                    const float push = (sourceMinimumDistance - distance) * 21.0f;
                     force -= direction * push;
                     b.velocity += direction * push * dt;
                 }
@@ -16985,15 +17646,32 @@ namespace Menu
             a.velocity += force * dt;
             a.velocity *= std::exp(-6.5f * dt);
             a.position += a.velocity * dt;
-            a.position.x = std::clamp(a.position.x, 25.0f, screen.x - 25.0f);
-            a.position.y = std::clamp(a.position.y, freeTop + 15.0f, freeBottom);
+            if (!denseLayout)
+                a.position.x = std::clamp(a.position.x, 25.0f, screen.x - 25.0f);
+            a.position.y = std::clamp(a.position.y, layoutTop + 15.0f, freeBottom);
         }
 
         ordinal = 0;
         for (auto& entry : g_quickDrawKeyboardSourceItems)
         {
             auto& visual = g_quickDrawKeyboardSourceVisuals[entry.visualKey];
-            const float itemAlpha = alpha * visual.alpha;
+            // Máscara fixa nas laterais da fita densa: os itens parecem
+            // surgir de dentro das bordas, sem alterar a posição, o scroll
+            // cíclico ou a física local de hover. Aproximadamente 5 cm em
+            // resolução virtual formam a transição inteira.
+            float horizontalEdgeFade = 1.0f;
+            if (denseLayout)
+            {
+                constexpr float edgeFadeWidth = 190.0f;
+                const float left = std::clamp(visual.position.x / edgeFadeWidth,
+                    0.0f, 1.0f);
+                const float right = std::clamp((screen.x - visual.position.x) /
+                    edgeFadeWidth, 0.0f, 1.0f);
+                const float edge = std::min(left, right);
+                // Smoothstep deixa tanto a entrada quanto a saída sem degrau.
+                horizontalEdgeFade = edge * edge * (3.0f - 2.0f * edge);
+            }
+            const float itemAlpha = alpha * visual.alpha * horizontalEdgeFade;
             if (itemAlpha <= 0.002f)
             {
                 ++ordinal;
@@ -17104,6 +17782,30 @@ namespace Menu
         const ImVec2 center(screen.x * 0.5f, screen.y * 0.5f);
         const float time = static_cast<float>(ImGui::GetTime());
         const float dt = std::clamp(ImGui::GetIO().DeltaTime, 0.0f, 0.05f);
+        // Segurar o X transforma o bind em um ícone arrastável. O clique
+        // curto não entra aqui: ele continua aguardando a soltura para
+        // remover como sempre.
+        if (g_quickDrawKeyboardPendingKeyRemove &&
+            !g_quickDrawKeyboardItemDragActive &&
+            ImGui::GetTime() - g_quickDrawKeyboardPendingRemoveStart >= 0.32)
+        {
+            const auto card = std::find_if(g_quickDrawKeyboardCards.begin(),
+                g_quickDrawKeyboardCards.end(), [](const QuickDrawKeyboardCard& value) {
+                    return value.hotkey == g_quickDrawKeyboardPendingRemoveHotkey &&
+                        value.removeT < 0.0f;
+                });
+            RadialItem item{};
+            if (card != g_quickDrawKeyboardCards.end() &&
+                BuildQuickDrawHotkeyPreviewItem(card->key, item))
+            {
+                g_quickDrawKeyboardDraggedItem = item;
+                g_quickDrawKeyboardItemDragActive = true;
+                g_quickDrawKeyboardDragSourceHotkey =
+                    g_quickDrawKeyboardPendingRemoveHotkey;
+            }
+            g_quickDrawKeyboardPendingKeyRemove = false;
+            g_quickDrawKeyboardPendingRemoveHotkey = 0;
+        }
         g_quickDrawKeyboardVisualModeT = AnimateSettingsValue(
             g_quickDrawKeyboardVisualModeT,
             g_quickDrawKeyboardVisualMode ? 1.0f : 0.0f, 4.8f, dt);
@@ -17115,6 +17817,9 @@ namespace Menu
         constexpr float cardWidth = 178.0f;
         constexpr float cardHeight = 158.0f;
         constexpr float edgeMargin = 30.0f;
+        // Inclui o disco principal e as duas luas auxiliares; assim nenhum
+        // cartão consegue atravessar as bordas laterais, mesmo sob repulsão.
+        constexpr float horizontalCardMargin = 78.0f;
 
         // Primeiro anima a visibilidade e identifica o conjunto que recebe
         // posições radiais. Filtros e remoções apenas mudam este conjunto;
@@ -17125,7 +17830,10 @@ namespace Menu
         {
             auto& card = g_quickDrawKeyboardCards[i];
             const bool visibleByFilter = IsQuickDrawKeyboardCardFilterVisible(card);
-            filterTargetVisible[i] = visibleByFilter && card.removeT < 0.0f;
+            // Durante o fade de remoção o cartão ainda reserva o próprio
+            // slot. Assim os sobreviventes não recebem seus novos destinos
+            // antes de ele terminar de desaparecer.
+            filterTargetVisible[i] = visibleByFilter && card.removeT < 0.62f;
             if (filterTargetVisible[i])
                 ++radialCardCount;
             card.filterT = g_quickDrawKeyboardVisualMode
@@ -17134,28 +17842,53 @@ namespace Menu
                     visibleByFilter ? 1.0f : 0.0f, 4.5f, dt);
         }
 
-        // Calcula a área da formação para preservar o scroll simétrico quando
-        // os anéis excedem a altura da tela.
-        constexpr float clusterRingSpacing = 142.0f;
-        int maxRing = 0;
-        int ringCapacity = 0;
-        while (ringCapacity < radialCardCount)
+        // A lista usa exatamente oito cartões por fileira: quatro de cada
+        // lado e um corredor central largo para o preview. Em vez de uma
+        // malha quadrada comprimida, as fileiras formam duas colunas abertas
+        // em torno do losango central.
+        constexpr int cardsPerRow = 8;
+        const int gridRowCount = std::max(1,
+            (radialCardCount + cardsPerRow - 1) / cardsPerRow);
+        const float horizontalLimit = screen.x * 0.5f - horizontalCardMargin;
+        constexpr float requestedCenterHalfGap = 220.0f;
+        const float centerHalfGap = std::min(requestedCenterHalfGap,
+            std::max(125.0f, horizontalLimit * 0.42f));
+        const float gridStepX = std::max(95.0f, std::min(170.0f,
+            (horizontalLimit - centerHalfGap) / 3.0f));
+        constexpr float gridStepY = 150.0f;
+        std::vector<ImVec2> radialGridSlots;
+        radialGridSlots.reserve(static_cast<std::size_t>(radialCardCount));
+        const float rowMidpoint = (static_cast<float>(gridRowCount) - 1.0f) * 0.5f;
+        for (int row = 0; row < gridRowCount; ++row)
         {
-            ++maxRing;
-            ringCapacity += maxRing * 4;
+            for (int column = 0; column < cardsPerRow &&
+                radialGridSlots.size() < static_cast<std::size_t>(radialCardCount);
+                ++column)
+            {
+                const bool left = column < cardsPerRow / 2;
+                const int sideColumn = left ? (cardsPerRow / 2 - 1 - column)
+                    : (column - cardsPerRow / 2);
+                const float x = (left ? -1.0f : 1.0f) *
+                    (centerHalfGap + static_cast<float>(sideColumn) * gridStepX);
+                const float y = (static_cast<float>(row) - rowMidpoint) * gridStepY;
+                radialGridSlots.emplace_back(x, y);
+            }
         }
-        const float outerRadius = maxRing > 0
-            ? clusterRingSpacing * (0.75f + 0.78f * static_cast<float>(maxRing - 1)) + 61.0f
+        const float outerRadius = gridRowCount > 0
+            ? rowMidpoint * gridStepY + 61.0f
             : 0.0f;
         g_quickDrawKeyboardMaxScroll = std::max(0.0f,
             outerRadius + edgeMargin - screen.y * 0.5f);
         g_quickDrawKeyboardScroll = std::clamp(g_quickDrawKeyboardScroll,
             -g_quickDrawKeyboardMaxScroll, g_quickDrawKeyboardMaxScroll);
-        const ImVec2 formationCenter(center.x, center.y - g_quickDrawKeyboardScroll);
+        g_quickDrawKeyboardAnimatedScroll = AnimateSettingsValue(
+            g_quickDrawKeyboardAnimatedScroll, g_quickDrawKeyboardScroll,
+            9.0f, dt);
+        const ImVec2 formationCenter(center.x,
+            center.y - g_quickDrawKeyboardAnimatedScroll);
 
-        // Os anéis não têm cartão no núcleo: o primeiro possui quatro pontos
-        // diagonais e os seguintes sempre ficam entre os eixos. O vazio em
-        // cruz no centro permanece livre para o preview e para a abertura.
+        // A ordem dos cartões visíveis é mapeada diretamente para os slots
+        // da malha; filtros apenas compactam a formação sem mudar seu padrão.
         std::vector<ImVec2> radialCenters(g_quickDrawKeyboardCards.size(), formationCenter);
         int clusterOrdinal = 0;
         for (std::size_t i = 0; i < g_quickDrawKeyboardCards.size(); ++i)
@@ -17163,25 +17896,22 @@ namespace Menu
             if (!filterTargetVisible[i])
                 continue;
 
-            int ring = 1;
-            int ordinalInRing = clusterOrdinal;
-            while (ordinalInRing >= ring * 4)
+            if (clusterOrdinal < static_cast<int>(radialGridSlots.size()))
             {
-                ordinalInRing -= ring * 4;
-                ++ring;
+                ImVec2 slot = radialGridSlots[static_cast<std::size_t>(clusterOrdinal)];
+                // Quando uma fileira atravessa o equador, ela abre as duas
+                // metades de forma determinística. Não é repulsão: é parte
+                // da própria grade e retorna suavemente ao seguir o scroll.
+                const float screenY = formationCenter.y + slot.y;
+                const float centerDistance = std::abs(screenY - center.y);
+                const float approach = std::clamp(1.0f - centerDistance / 255.0f,
+                    0.0f, 1.0f);
+                const float smoothApproach = approach * approach *
+                    (3.0f - 2.0f * approach);
+                slot.x += (slot.x < 0.0f ? -1.0f : 1.0f) *
+                    (115.0f * smoothApproach);
+                radialCenters[i] = formationCenter + slot;
             }
-            const int slotsInRing = ring * 4;
-            // O meio-espaço entre os eixos impede cartões sobre as linhas
-            // vertical/horizontal centrais — a cruz fica vazia em todas as
-            // camadas, não apenas no primeiro frame.
-            const float angle = 3.14159265359f / static_cast<float>(slotsInRing) +
-                6.28318530718f * static_cast<float>(ordinalInRing) /
-                    static_cast<float>(slotsInRing);
-            const float ringRadius = clusterRingSpacing *
-                (0.75f + 0.78f * static_cast<float>(ring - 1));
-            radialCenters[i] = formationCenter + ImVec2(
-                std::cos(angle) * ringRadius,
-                std::sin(angle) * ringRadius);
             ++clusterOrdinal;
         }
 
@@ -17199,6 +17929,28 @@ namespace Menu
                 std::cos(time * 0.82f + phase * 1.4f) * 2.0f);
             baseCenters[i] = (filterTargetVisible[i] ? radialCenters[i] : formationCenter) +
                 floatOffset;
+            if (card.removalReflowT >= 0.0f)
+            {
+                // A remoção já acabou: esta é uma transição visual explícita
+                // entre a posição preservada e a formação compactada. Ela
+                // também funciona para grades grandes, que não usam a física
+                // de repulsão normal.
+                card.removalReflowT = std::min(1.0f,
+                    card.removalReflowT + dt / 0.55f);
+                const float t = card.removalReflowT * card.removalReflowT *
+                    (3.0f - 2.0f * card.removalReflowT);
+                visualCenters[i] = card.removalReflowStartCenter +
+                    (baseCenters[i] - card.removalReflowStartCenter) * t;
+                card.lastVisualCenter = visualCenters[i];
+                card.hasLastVisualCenter = true;
+                if (card.removalReflowT < 1.0f)
+                    continue;
+
+                card.removalReflowT = -1.0f;
+                card.simulationOffset = {};
+                card.simulationVelocity = {};
+                card.simulationInitialized = true;
+            }
             if (preserveFilterTransition && card.removeT < 0.0f &&
                 card.hasLastVisualCenter)
             {
@@ -17225,6 +17977,26 @@ namespace Menu
                     (card.simulationInitialized ? card.simulationOffset : ImVec2{});
         }
         g_quickDrawKeyboardRadialLayoutDirty = false;
+
+        // Uma coleção grande preserva a malha fixa, com espaço central
+        // permanente para preview, sem forças que deformem suas fileiras.
+        const bool useFixedRadialGrid =
+            radialCardCount >= 80;
+        if (useFixedRadialGrid)
+        {
+            for (std::size_t i = 0; i < g_quickDrawKeyboardCards.size(); ++i)
+            {
+                auto& card = g_quickDrawKeyboardCards[i];
+                if (card.removalReflowT >= 0.0f)
+                    continue;
+                card.simulationOffset = {};
+                card.simulationVelocity = {};
+                card.simulationInitialized = true;
+                visualCenters[i] = baseCenters[i];
+                card.lastVisualCenter = visualCenters[i];
+                card.hasLastVisualCenter = true;
+            }
+        }
 
         // O hit-test usa o disco real de cada cartão, não mais o envelope
         // retangular. Antes, os envelopes dos cantos internos se cruzavam e
@@ -17285,7 +18057,7 @@ namespace Menu
             hoveredItem = g_quickDrawKeyboardRemovingPreviewItem;
             hasHoveredItem = hoveredItem.form != nullptr;
         }
-        constexpr float previewClearRadius = 150.0f;
+        constexpr float previewClearRadius = 215.0f;
 
         // Simulação: mola para a posição-base + repulsão de todos os
         // vizinhos + repulsão radial do preview central. O alcance maior que
@@ -17297,10 +18069,13 @@ namespace Menu
         // grade já acomodada; nas colunas externas faltava a reação do lado
         // de fora e os primeiros cartões à esquerda ficavam presos fora do
         // lugar. A margem pequena mantém um espaço vivo, mas neutro no slot.
-        constexpr float neighborSafeGap = 12.0f;
+        // Os cartões do navegador radial precisam respirar mais entre si.
+        // Além do diâmetro circular, esta reserva cria 35 px extras de
+        // separação antes que a força de repulsão comece a ceder.
+        constexpr float neighborSafeGap = 47.0f;
         constexpr float neighborForce = 3400.0f;
         const float springForce = g_quickDrawKeyboardReflowCooldown > 0.0f
-            ? 3.2f : 7.5f;
+            ? 5.0f : 15.0f;
         constexpr float velocityDamping = 5.5f;
         constexpr float previewForce = 3800.0f;
         // O cartão sob o cursor cria uma bolha de espaço própria. Ela é
@@ -17312,10 +18087,12 @@ namespace Menu
             cardWidth * cardWidth + cardHeight * cardHeight);
         const float previewRange = previewClearRadius + cardRadius + 42.0f;
 
-        for (std::size_t i = 0; i < g_quickDrawKeyboardCards.size(); ++i)
+        for (std::size_t i = 0; !useFixedRadialGrid &&
+            i < g_quickDrawKeyboardCards.size(); ++i)
         {
             const auto& card = g_quickDrawKeyboardCards[i];
-            if (!filterTargetVisible[i] || card.removeT >= 0.0f || card.filterT <= 0.08f)
+            if (!filterTargetVisible[i] || card.removeT >= 0.0f ||
+                card.removalReflowT >= 0.0f || card.filterT <= 0.08f)
                 continue;
 
             const ImVec2 offset = card.simulationInitialized
@@ -17365,14 +18142,17 @@ namespace Menu
             }
         }
 
-        for (std::size_t i = 0; i < g_quickDrawKeyboardCards.size(); ++i)
+        for (std::size_t i = 0; !useFixedRadialGrid &&
+            i < g_quickDrawKeyboardCards.size(); ++i)
         {
             if (!filterTargetVisible[i] || g_quickDrawKeyboardCards[i].removeT >= 0.0f ||
+                g_quickDrawKeyboardCards[i].removalReflowT >= 0.0f ||
                 g_quickDrawKeyboardCards[i].filterT <= 0.08f)
                 continue;
             for (std::size_t j = i + 1; j < g_quickDrawKeyboardCards.size(); ++j)
             {
                 if (!filterTargetVisible[j] || g_quickDrawKeyboardCards[j].removeT >= 0.0f ||
+                    g_quickDrawKeyboardCards[j].removalReflowT >= 0.0f ||
                     g_quickDrawKeyboardCards[j].filterT <= 0.08f)
                     continue;
                 const ImVec2 delta = visualCenters[i] - visualCenters[j];
@@ -17428,10 +18208,11 @@ namespace Menu
             }
         }
 
-        for (std::size_t i = 0; i < g_quickDrawKeyboardCards.size(); ++i)
+        for (std::size_t i = 0; !useFixedRadialGrid &&
+            i < g_quickDrawKeyboardCards.size(); ++i)
         {
             auto& card = g_quickDrawKeyboardCards[i];
-            if (!filterTargetVisible[i])
+            if (!filterTargetVisible[i] || card.removalReflowT >= 0.0f)
                 continue;
             if (!card.simulationInitialized)
                 card.simulationInitialized = true;
@@ -17441,7 +18222,35 @@ namespace Menu
             if (speed > 620.0f)
                 card.simulationVelocity *= 620.0f / speed;
             card.simulationOffset += card.simulationVelocity * dt;
+            // A repulsão mantém o respiro pedido, mas não pode dissolver a
+            // estrutura polar em uma nuvem irregular. Este teto conserva o
+            // desenho de anéis e a cruz central, deixando apenas o ajuste
+            // local necessário quando dois cartões se aproximam.
+            constexpr float maxRadialLayoutDeviation = 42.0f;
+            const float offsetLength = std::sqrt(
+                card.simulationOffset.x * card.simulationOffset.x +
+                card.simulationOffset.y * card.simulationOffset.y);
+            if (offsetLength > maxRadialLayoutDeviation)
+            {
+                const float correction = maxRadialLayoutDeviation / offsetLength;
+                card.simulationOffset *= correction;
+                card.simulationVelocity *= 0.48f;
+            }
             visualCenters[i] = baseCenters[i] + card.simulationOffset;
+            const float constrainedX = std::clamp(visualCenters[i].x,
+                horizontalCardMargin, screen.x - horizontalCardMargin);
+            if (constrainedX != visualCenters[i].x)
+            {
+                // O limite é físico, não apenas de desenho: remove a
+                // velocidade que tenta vazar e preserva o ponto para a mola.
+                card.simulationOffset.x = constrainedX - baseCenters[i].x;
+                if ((constrainedX <= horizontalCardMargin &&
+                        card.simulationVelocity.x < 0.0f) ||
+                    (constrainedX >= screen.x - horizontalCardMargin &&
+                        card.simulationVelocity.x > 0.0f))
+                    card.simulationVelocity.x = 0.0f;
+                visualCenters[i].x = constrainedX;
+            }
             card.lastVisualCenter = visualCenters[i];
             card.hasLastVisualCenter = true;
         }
@@ -17466,8 +18275,17 @@ namespace Menu
                 ImVec2(-mainRadius * 0.80f, mainRadius * 0.78f) + keyMoonFloat;
             card.clearCenter = cardCenter +
                 ImVec2(mainRadius * 0.80f, -mainRadius * 0.78f) + clearMoonFloat;
+            card.autoUseCenter = cardCenter +
+                ImVec2(mainRadius * 0.80f, mainRadius * 0.78f);
+            // O X já ocupa o canto superior-direito. O Require Wheel Key
+            // fica no canto oposto para os dois controles nunca dividirem o
+            // mesmo hitbox.
+            card.requireActivationCenter = cardCenter +
+                ImVec2(-mainRadius * 0.80f, -mainRadius * 0.78f);
             constexpr float keyMoonRadius = 20.0f;
             constexpr float clearMoonRadius = 13.0f;
+            constexpr float autoUseRadius = 11.0f;
+            constexpr float requireActivationRadius = 11.0f;
             // Mantém o hitbox/envelope usado pela física e pelo click fora.
             card.min = cardCenter - ImVec2(cardWidth, cardHeight) * 0.5f;
             card.max = cardCenter + ImVec2(cardWidth, cardHeight) * 0.5f;
@@ -17509,8 +18327,10 @@ namespace Menu
                 FadeColor(IM_COL32(235, 230, 215, 230), alpha * filteredCardAlpha), keyText.c_str());
 
             RadialItem item{};
+            bool canToggleAutoUse = false;
             if (BuildQuickDrawHotkeyPreviewItem(card.key, item))
             {
+                canToggleAutoUse = IsQuickDrawAutoUseEligible(item.form);
                 if (auto* icon = ItemIcon::Get(item.form))
                 {
                     const ImVec2 iconCenter = cardCenter;
@@ -17529,6 +18349,72 @@ namespace Menu
                         ImVec2(0.0f, 0.0f), ImVec2(1.0f, 1.0f),
                         iconColor);
                 }
+            }
+
+            if (canToggleAutoUse)
+            {
+                const bool autoUseHovered = IsSettingsCircleHovered(g_settingsMousePos,
+                    card.autoUseCenter, autoUseRadius + 3.0f);
+                card.autoUseHoverT = AnimateSettingsValue(card.autoUseHoverT,
+                    autoUseHovered ? 1.0f : 0.0f, 14.0f, dt);
+                card.autoUseClickFlash = std::max(0.0f,
+                    card.autoUseClickFlash - dt * 7.0f);
+                const bool autoUseEnabled = IsQuickDrawAutoUseEnabled(item);
+                draw->AddCircleFilled(card.autoUseCenter, autoUseRadius,
+                    FadeColor(IM_COL32(35, 36, 42, 240), alpha * filteredCardAlpha), 20);
+                const float whiteStrength = autoUseEnabled ? 1.0f :
+                    std::max(0.38f * card.autoUseHoverT, card.autoUseClickFlash);
+                if (whiteStrength > 0.002f)
+                {
+                    draw->AddCircleFilled(card.autoUseCenter, autoUseRadius,
+                        FadeColor(IM_COL32(245, 242, 232,
+                            static_cast<int>(165.0f * whiteStrength)),
+                            alpha * filteredCardAlpha), 20);
+                }
+                draw->AddCircle(card.autoUseCenter, autoUseRadius,
+                    FadeColor(IM_COL32(245, 242, 232,
+                        autoUseEnabled ? 220 : static_cast<int>(125.0f +
+                            80.0f * card.autoUseHoverT)),
+                        alpha * filteredCardAlpha), 20, 1.0f);
+            }
+            else
+            {
+                card.autoUseCenter = {};
+                card.autoUseHoverT = 0.0f;
+            }
+
+            if (QuickDrawGesture* gesture = FindQuickDrawGesture(card.key))
+            {
+                const bool requireHovered = IsSettingsCircleHovered(g_settingsMousePos,
+                    card.requireActivationCenter, requireActivationRadius + 3.0f);
+                card.requireActivationHoverT = AnimateSettingsValue(
+                    card.requireActivationHoverT, requireHovered ? 1.0f : 0.0f, 14.0f, dt);
+                card.requireActivationClickFlash = std::max(0.0f,
+                    card.requireActivationClickFlash - dt * 7.0f);
+                const bool enabled = gesture->hotkeyRequiresActivation;
+                draw->AddCircleFilled(card.requireActivationCenter,
+                    requireActivationRadius,
+                    FadeColor(IM_COL32(35, 36, 42, 240), alpha * filteredCardAlpha), 20);
+                const float redStrength = enabled ? 1.0f :
+                    std::max(0.30f * card.requireActivationHoverT,
+                        card.requireActivationClickFlash);
+                if (redStrength > 0.002f)
+                {
+                    draw->AddCircleFilled(card.requireActivationCenter,
+                        requireActivationRadius,
+                        FadeColor(IM_COL32(220, 62, 62,
+                            static_cast<int>(190.0f * redStrength)),
+                            alpha * filteredCardAlpha), 20);
+                }
+                draw->AddCircle(card.requireActivationCenter, requireActivationRadius,
+                    FadeColor(IM_COL32(185, 185, 190, enabled ? 220 :
+                        static_cast<int>(100.0f + 75.0f * card.requireActivationHoverT)),
+                        alpha * filteredCardAlpha), 20, 1.0f);
+            }
+            else
+            {
+                card.requireActivationCenter = {};
+                card.requireActivationHoverT = 0.0f;
             }
 
             draw->AddCircleFilled(card.clearCenter, clearMoonRadius,
@@ -17571,22 +18457,25 @@ namespace Menu
                     if (survivor == i)
                         continue;
                     auto& other = g_quickDrawKeyboardCards[survivor];
-                    // Normalmente a posição já foi capturada no clique do X.
-                    // Só usamos este fallback para uma remoção disparada por
-                    // outro caminho, sem reescrever o ponto inicial dela.
-                    if (!other.preserveReflowPosition)
-                    {
-                        const ImVec2 preservedCenter = other.hasLastVisualCenter
-                            ? other.lastVisualCenter : visualCenters[survivor];
-                        other.reflowPreservedCenter = preservedCenter;
-                        other.lastVisualCenter = preservedCenter;
-                        other.hasLastVisualCenter = true;
-                        other.preserveReflowPosition = true;
-                    }
+                    // Captura no instante em que o cartão removido terminou
+                    // seu fade. Só no próximo frame a formação perde um slot,
+                    // portanto esta é exatamente a posição que o jogador viu
+                    // antes de as molas conduzirem o reflow.
+                    const ImVec2 preservedCenter = other.hasLastVisualCenter
+                        ? other.lastVisualCenter : visualCenters[survivor];
+                    other.reflowPreservedCenter = preservedCenter;
+                    other.lastVisualCenter = preservedCenter;
+                    other.hasLastVisualCenter = true;
+                    other.preserveReflowPosition = false;
+                    other.removalReflowStartCenter = preservedCenter;
+                    other.removalReflowT = 0.0f;
                 }
                 g_quickDrawKeyboardHoveredCard = -1;
                 g_quickDrawKeyboardRemovingPreviewActive = false;
-                g_quickDrawKeyboardRemovingPreviewItem = {};
+                // O cartão já acabou seu próprio fade; agora o modelo e o
+                // nome fecham juntos, suavemente, antes de serem limpos.
+                g_quickDrawKeyboardRemovingPreviewNameAlpha = 1.0f;
+                BeginSettingsPreviewFadeOut();
                 g_quickDrawKeyboardReflowCooldown = 0.38f;
                 g_quickDrawKeyboardCards.erase(g_quickDrawKeyboardCards.begin() + i);
                 baseCenters.erase(baseCenters.begin() + i);
@@ -17598,8 +18487,11 @@ namespace Menu
 
         // Seis filtros no topo, espelhados verticalmente ao botão de fechar.
         // Não possuem ícone: o nome aparece como tooltip abaixo de cada um.
+        // O navegador de hotkeys usa a posição-base do círculo dourado. Ao
+        // contrário do WheelSettings, seu botão preto não acompanha o Bottom
+        // Radial; assim a fileira de filtros espelhada também fica fixa.
         g_quickDrawKeyboardCloseCenter =
-            GetSettingsCloseButtonTarget(GetWheelLayout());
+            GetSettingsCloseButtonDefaultTarget(GetWheelLayout());
         const float filtersY = screen.y - g_quickDrawKeyboardCloseCenter.y;
         constexpr std::array<const char*, 6> filterLabels{
             "keyboard_filter_spells", "keyboard_filter_weapons",
@@ -17611,10 +18503,21 @@ namespace Menu
             filterGap * static_cast<float>(filterLabels.size() - 1);
         const float firstFilterX = center.x - filterSpan * 0.5f +
             kQuickDrawKeyboardFilterRadius;
+        // Enquanto o seletor atravessa a fileira, as três bolinhas de cada
+        // lado abrem uma passagem simétrica. Como o próprio seletor já se
+        // move lentamente, esse deslocamento acompanha a animação inteira.
+        constexpr float toggleCrossingBand = 26.0f;
+        const float crossing = std::clamp(1.0f - std::abs(
+            g_quickDrawKeyboardToggleCenter.y - filtersY) / toggleCrossingBand,
+            0.0f, 1.0f);
+        const float crossingSmooth = crossing * crossing * (3.0f - 2.0f * crossing);
+        const float filterPassageOffset = 48.0f * crossingSmooth;
         for (std::size_t index = 0; index < filterLabels.size(); ++index)
         {
+            const float sideOffset = index < filterLabels.size() / 2
+                ? -filterPassageOffset : filterPassageOffset;
             const ImVec2 filterCenter(firstFilterX + static_cast<float>(index) *
-                    (kQuickDrawKeyboardFilterRadius * 2.0f + filterGap),
+                    (kQuickDrawKeyboardFilterRadius * 2.0f + filterGap) + sideOffset,
                 filtersY);
             g_quickDrawKeyboardFilterCenters[index] = filterCenter;
             const bool filterHovered = IsSettingsCircleHovered(g_settingsMousePos,
@@ -17639,19 +18542,41 @@ namespace Menu
             {
                 const std::string& label = Language::Get(filterLabels[index]);
                 const ImVec2 labelSize = ImGui::CalcTextSize(label.c_str());
+                // No modo teclado o tooltip usa a distância normal abaixo do
+                // botão. Fora dele, o texto é espelhado acima pela mesma
+                // distância.
+                const float activeBottomDistance =
+                    kQuickDrawKeyboardFilterRadius + 9.0f;
+                const float tooltipY = g_quickDrawKeyboardVisualMode
+                    ? filterCenter.y + activeBottomDistance
+                    : filterCenter.y - activeBottomDistance - labelSize.y;
                 draw->AddText(ImVec2(filterCenter.x - labelSize.x * 0.5f,
-                        filterCenter.y + kQuickDrawKeyboardFilterRadius + 9.0f),
+                        tooltipY),
                     FadeColor(IM_COL32(245, 242, 232, 245),
                         alpha * g_quickDrawKeyboardFilterHoverT[index]), label.c_str());
             }
         }
 
-        // O sétimo espaço fica deliberadamente vazio; o pequeno botão de
-        // teclado ocupa o oitavo, à direita dos filtros, como um modo visual
-        // independente da lista radial.
-        g_quickDrawKeyboardToggleCenter = ImVec2(firstFilterX +
-                7.0f * (kQuickDrawKeyboardFilterRadius * 2.0f + filterGap),
-            filtersY);
+        // O seletor de teclado usa os filtros como eixo vertical: ligado ele
+        // sobe rumo à borda superior; desligado desce a mesma distância. A
+        // posição é suavizada para que a troca de modo pareça física, sem
+        // recolocar o botão instantaneamente.
+        constexpr float keyboardToggleOffset = 35.0f;
+        const ImVec2 keyboardToggleTarget(center.x,
+            filtersY + (g_quickDrawKeyboardVisualMode
+                ? -keyboardToggleOffset : keyboardToggleOffset));
+        if (!g_quickDrawKeyboardToggleCenterInitialized)
+        {
+            g_quickDrawKeyboardToggleCenter = keyboardToggleTarget;
+            g_quickDrawKeyboardToggleCenterInitialized = true;
+        }
+        else
+        {
+            g_quickDrawKeyboardToggleCenter.x = AnimateSettingsValue(
+                g_quickDrawKeyboardToggleCenter.x, keyboardToggleTarget.x, 2.4f, dt);
+            g_quickDrawKeyboardToggleCenter.y = AnimateSettingsValue(
+                g_quickDrawKeyboardToggleCenter.y, keyboardToggleTarget.y, 2.4f, dt);
+        }
         const bool keyboardToggleHovered = IsSettingsCircleHovered(
             g_settingsMousePos, g_quickDrawKeyboardToggleCenter,
             kQuickDrawKeyboardToggleRadius + 4.0f);
@@ -17669,17 +18594,6 @@ namespace Menu
             kQuickDrawKeyboardToggleRadius,
             FadeColor(IM_COL32(245, 242, 232,
                 g_quickDrawKeyboardVisualMode ? 225 : 125), alpha), 18, 1.0f);
-        if (keyboardToggleHovered)
-        {
-            const std::string& label = Language::Get("show_keyboard");
-            const ImVec2 size = ImGui::CalcTextSize(label.c_str());
-            draw->AddText(ImVec2(g_quickDrawKeyboardToggleCenter.x - size.x * 0.5f,
-                    g_quickDrawKeyboardToggleCenter.y +
-                        kQuickDrawKeyboardToggleRadius + 9.0f),
-                FadeColor(IM_COL32(245, 242, 232, 245),
-                    alpha * g_quickDrawKeyboardToggleHoverT), label.c_str());
-        }
-
         g_quickDrawKeyboardVisualPreviewWanted = false;
         const float visualKeyboardBottom = DrawQuickDrawVisualKeyboard(draw, screen,
             alpha * g_quickDrawKeyboardVisualModeT, dt);
@@ -17689,6 +18603,9 @@ namespace Menu
         // Mesmo ponto inferior usado pelo círculo dourado que fecha o Hub.
         const bool closeHovered = IsSettingsCircleHovered(g_settingsMousePos,
             g_quickDrawKeyboardCloseCenter, g_quickDrawKeyboardCloseRadius);
+        // O botão apenas revela uma amostra do HUD existente. O próprio HUD
+        // conserva o fade de entrada/saída e fica sem item destacado.
+        g_quickDrawKeyboardCloseHudPreviewWanted = closeHovered;
         draw->AddCircleFilled(g_quickDrawKeyboardCloseCenter,
             g_quickDrawKeyboardCloseRadius,
             FadeColor(closeHovered ? IM_COL32(235, 230, 215, 175) :
@@ -17696,6 +18613,11 @@ namespace Menu
         draw->AddCircle(g_quickDrawKeyboardCloseCenter,
             g_quickDrawKeyboardCloseRadius,
             FadeColor(IM_COL32(245, 242, 232, closeHovered ? 230 : 105), alpha), 32, 1.0f);
+
+        // No Hub, este é o único ponto que pede a prévia do HUD. Chamamos o
+        // mesmo renderizador dos atalhos para preservar exatamente o slide e
+        // o fade usados durante o gameplay.
+        DrawQuickDrawHotkeyHud(dt);
 
         // No modo teclado, o preview fica independente da grade radial:
         // menor, preso à diagonal superior-direita do cursor e preservado
@@ -17799,13 +18721,36 @@ namespace Menu
                 hoveredItem.hasUniqueID);
             ItemPreview::SetOpacity(alpha);
             DrawSelectedItemName(hoveredItem, alpha,
-                std::clamp((center.y + 128.0f) / std::max(screen.y, 1.0f),
+                std::clamp((center.y + 178.0f) / std::max(screen.y, 1.0f),
                     0.0f, 1.0f), false, false,
                 Config::ItemPreviewProfile::Menu);
         }
+        else if (g_quickDrawKeyboardVisualModeT <= 0.02f &&
+            g_quickDrawKeyboardRemovingPreviewNameAlpha > 0.002f &&
+            g_quickDrawKeyboardRemovingPreviewItem.form)
+        {
+            // O preview já está sob o fade do ItemPreview. O texto tem um
+            // alpha próprio para desaparecer no mesmo intervalo, em vez de
+            // cortar no frame em que o cartão sai do vetor.
+            g_quickDrawKeyboardRemovingPreviewNameAlpha = AnimateSettingsValue(
+                g_quickDrawKeyboardRemovingPreviewNameAlpha, 0.0f, 10.0f, dt);
+            DrawSelectedItemName(g_quickDrawKeyboardRemovingPreviewItem,
+                alpha * g_quickDrawKeyboardRemovingPreviewNameAlpha,
+                std::clamp((center.y + 178.0f) / std::max(screen.y, 1.0f),
+                    0.0f, 1.0f), false, false,
+                Config::ItemPreviewProfile::Menu);
+            if (g_quickDrawKeyboardRemovingPreviewNameAlpha <= 0.002f)
+            {
+                g_quickDrawKeyboardRemovingPreviewNameAlpha = 0.0f;
+                g_quickDrawKeyboardRemovingPreviewItem = {};
+            }
+        }
         else
         {
-            ItemPreview::Hide();
+            // BeginSettingsPreviewFadeOut controla o modelo até o alpha
+            // chegar a zero. Não chamar Hide aqui evita o corte instantâneo.
+            if (!g_settingsPreviewFadeOut)
+                ItemPreview::Hide();
             if (!hasVisualKeyboardPreview)
             {
                 g_quickDrawKeyboardVisualPreviewRopeInitialized = false;
@@ -17952,13 +18897,25 @@ namespace Menu
             g_quickDrawHotkeyPendingItem = *item;
             g_quickDrawHotkeyQuantityPreviewItem = *item;
             g_quickDrawHotkeyPendingKey = virtualKey;
-            if (!QuickDrawHotkeyNeedsHand(item->form))
+            g_quickDrawHotkeyHeldKey = virtualKey;
+            if (IsShortcutIconPreviewEnabled())
+            {
+                g_quickDrawHotkeyIconPreviewItem = *item;
+                g_quickDrawHotkeyIconPreviewAlpha = 0.0f;
+                g_quickDrawHotkeyIconPreviewFadingOut = false;
+            }
+            // Luz portátil com Auto-Use não pede escolha de mão: o ramo de
+            // TESObjectLIGH já equipa/alternar a luz na mão esquerda. Sem o
+            // toggle ela mantém a seleção manual normal.
+            const bool autoUseBypassesHand = IsQuickDrawAutoUseEligible(item->form) &&
+                IsQuickDrawAutoUseEnabled(*item);
+            if (!QuickDrawHotkeyNeedsHand(item->form) || autoUseBypassesHand)
             {
                 // A ação só é entregue ao jogo na soltura: mover/clicar antes
                 // dela pode cancelar com segurança, sem desfazer equipamento.
                 g_quickDrawHotkeyDirectPreviewActive = true;
                 g_quickDrawHotkeyDirectPreviewAlpha = 0.0f;
-                if (Config::g_itemPreviewDuringShortcuts)
+                if (IsShortcutItemPreviewEnabled())
                 {
                     const ImVec2 center = Resolution::GetVirtualCenter();
                     ItemPreview::SetHudPosition(center);
@@ -17975,7 +18932,7 @@ namespace Menu
                 return true;
             }
             g_quickDrawHotkeyHandSelectionActive = true;
-            if (Config::g_itemPreviewDuringShortcuts)
+            if (IsShortcutItemPreviewEnabled())
             {
                 const ImVec2 center = Resolution::GetVirtualCenter();
                 ItemPreview::SetHudPosition(center);
@@ -17996,13 +18953,15 @@ namespace Menu
 
     bool HandleQuickDrawHotkeyRelease(int virtualKey)
     {
-        if (virtualKey != g_quickDrawHotkeyPendingKey)
+        if (virtualKey != g_quickDrawHotkeyHeldKey)
             return false;
 
         if (g_quickDrawHotkeyDirectPreviewActive)
         {
+            BeginQuickDrawHotkeyIconFadeOut(g_quickDrawHotkeyDirectPreviewAlpha);
             g_quickDrawHotkeyDirectPreviewActive = false;
             g_quickDrawHotkeyPendingKey = 0;
+            g_quickDrawHotkeyHeldKey = 0;
             ExecuteQuickDrawHotkeyItem(g_quickDrawHotkeyPendingItem, false);
             g_quickDrawHotkeyPendingItem = {};
             BeginGameplayPreviewFadeOut(g_quickDrawHotkeyDirectPreviewAlpha);
@@ -18013,11 +18972,114 @@ namespace Menu
 
         // Soltar a tecla sem selecionar uma mão cancela a operação. O preview
         // fica onde nasceu, no centro, e usa o mesmo fade suave do gameplay.
+        BeginQuickDrawHotkeyIconFadeOut();
         g_quickDrawHotkeyHandSelectionActive = false;
         g_quickDrawHotkeyPendingKey = 0;
+        g_quickDrawHotkeyHeldKey = 0;
         g_quickDrawHotkeyPendingItem = {};
         BeginGameplayPreviewFadeOut();
         return true;
+    }
+
+    bool ScrollQuickDrawHotkeyHud(int direction)
+    {
+        if (direction == 0 || g_quickDrawHotkeyHeldKey == 0 ||
+            (!g_quickDrawHotkeyDirectPreviewActive &&
+                !g_quickDrawHotkeyHandSelectionActive))
+            return false;
+
+        // A roda pertence ao atalho enquanto a tecla física estiver mantida,
+        // mesmo quando o usuário escolheu o preview 3D (ou nenhum feedback)
+        // em vez do HUD. Só o modo HUD troca a seleção; nos demais a resposta
+        // positiva existe para impedir que o Skyrim receba o notch.
+        if (Config::g_shortcutFeedbackStyle != 2)
+            return true;
+
+        struct Candidate
+        {
+            int hotkey = 0;
+            RadialItem item{};
+        };
+        std::vector<Candidate> candidates;
+        candidates.reserve(g_quickDrawGestures.size());
+        for (const auto& gesture : g_quickDrawGestures)
+        {
+            if (gesture.hotkey == 0)
+                continue;
+            RadialItem* item = FindQuickDrawHotkeyItem(gesture.key);
+            if (item && item->valid && item->form)
+                candidates.push_back({ gesture.hotkey, *item });
+        }
+        std::sort(candidates.begin(), candidates.end(), [](const Candidate& left,
+            const Candidate& right) {
+            const int leftOrder = GetQuickDrawHotkeyHudOrder(left.hotkey);
+            const int rightOrder = GetQuickDrawHotkeyHudOrder(right.hotkey);
+            return leftOrder == rightOrder ? left.hotkey < right.hotkey :
+                leftOrder < rightOrder;
+        });
+        if (candidates.empty())
+            return true;
+
+        int selected = 0;
+        for (std::size_t i = 0; i < candidates.size(); ++i)
+        {
+            if (candidates[i].hotkey == g_quickDrawHotkeyPendingKey)
+            {
+                selected = static_cast<int>(i);
+                break;
+            }
+        }
+        selected = WrapIndex(selected + (direction > 0 ? 1 : -1),
+            static_cast<int>(candidates.size()));
+        const Candidate& next = candidates[selected];
+        g_quickDrawHotkeyPendingKey = next.hotkey;
+        g_quickDrawHotkeyPendingItem = next.item;
+        g_quickDrawHotkeyQuantityPreviewItem = next.item;
+
+        // A tecla inicialmente pressionada decide apenas como o seletor
+        // nasceu. Depois do scroll, quem decide o fluxo é sempre o item que
+        // ficou pendente. Não equipamos nada aqui: apenas trocamos entre os
+        // dois estados transitórios que a soltura da tecla já sabe concluir.
+        const bool nextAutoUseBypassesHand =
+            IsQuickDrawAutoUseEligible(next.item.form) &&
+            IsQuickDrawAutoUseEnabled(next.item);
+        const bool nextNeedsHand = QuickDrawHotkeyNeedsHand(next.item.form) &&
+            !nextAutoUseBypassesHand;
+        if (nextNeedsHand && g_quickDrawHotkeyDirectPreviewActive)
+        {
+            // Direto -> mão: a soltura passa a cancelar caso o jogador não
+            // tenha escolhido esquerda/direita, igual à abertura normal de
+            // um item que exige mão.
+            g_quickDrawHotkeyDirectPreviewActive = false;
+            g_quickDrawHotkeyDirectPreviewAlpha = 0.0f;
+            g_quickDrawHotkeyHandSelectionActive = true;
+            CancelGameplayPreviewFadeOut();
+        }
+        else if (!nextNeedsHand && g_quickDrawHotkeyHandSelectionActive)
+        {
+            // Mão -> direto: não sobra uma seleção de mão do item anterior.
+            // A soltura confirma normalmente o novo item pendente.
+            g_quickDrawHotkeyHandSelectionActive = false;
+            g_quickDrawHotkeyDirectPreviewActive = true;
+            g_quickDrawHotkeyDirectPreviewAlpha = 0.0f;
+            CancelGameplayPreviewFadeOut();
+        }
+
+        // O preview "Icon" não possui estado por tecla: ele acompanha
+        // explicitamente o item pendente, assim como quantidade e HUD.
+        if (IsShortcutIconPreviewEnabled())
+        {
+            g_quickDrawHotkeyIconPreviewItem = next.item;
+            g_quickDrawHotkeyIconPreviewFadingOut = false;
+        }
+        return true;
+    }
+
+    bool IsQuickDrawHotkeyHudVisible()
+    {
+        // Alpha inclui o fade de saída; sem isso, um PrintScreen disparado
+        // nessa pequena janela voltaria ao fluxo nativo antes do HUD sumir.
+        return g_quickDrawHotkeyHudAlpha > 0.002f;
     }
 
     static void ConfirmQuickDrawHotkeyHand(bool left)
@@ -18031,6 +19093,7 @@ namespace Menu
         ExecuteQuickDrawHotkeyItem(g_quickDrawHotkeyPendingItem, left);
         g_quickDrawHotkeyHandSelectionActive = false;
         g_quickDrawHotkeyPendingKey = 0;
+        g_quickDrawHotkeyHeldKey = 0;
     }
 
     bool HandleQuickDrawHotkeyHandKey(int virtualKey, bool firstPress)
@@ -18049,8 +19112,10 @@ namespace Menu
             return false;
         if (g_quickDrawHotkeyDirectPreviewActive)
         {
+            BeginQuickDrawHotkeyIconFadeOut(g_quickDrawHotkeyDirectPreviewAlpha);
             g_quickDrawHotkeyDirectPreviewActive = false;
             g_quickDrawHotkeyPendingKey = 0;
+            g_quickDrawHotkeyHeldKey = 0;
             g_quickDrawHotkeyPendingItem = {};
             BeginGameplayPreviewFadeOut(g_quickDrawHotkeyDirectPreviewAlpha);
             return true;
@@ -18067,8 +19132,10 @@ namespace Menu
             return false;
         if (g_quickDrawHotkeyDirectPreviewActive)
         {
+            BeginQuickDrawHotkeyIconFadeOut(g_quickDrawHotkeyDirectPreviewAlpha);
             g_quickDrawHotkeyDirectPreviewActive = false;
             g_quickDrawHotkeyPendingKey = 0;
+            g_quickDrawHotkeyHeldKey = 0;
             g_quickDrawHotkeyPendingItem = {};
             BeginGameplayPreviewFadeOut(g_quickDrawHotkeyDirectPreviewAlpha);
             return true;
@@ -18231,6 +19298,11 @@ namespace Menu
             return false;
 
         if (form->As<RE::TESShout>())
+            return true;
+
+        // Tochas e lanternas portáteis usam o fluxo TESObjectLIGH já
+        // existente, que alterna o objeto equipado na mão esquerda.
+        if (form->As<RE::TESObjectLIGH>())
             return true;
 
         const auto* spell = form->As<RE::SpellItem>();
@@ -18425,12 +19497,33 @@ namespace Menu
     {
         if (g_quickDrawKeyboardOpen)
         {
-            // O navegador ocupa a tela toda; a roda desloca a grade apenas
-            // enquanto houver conteúdo para revelar acima/abaixo.
-            g_quickDrawKeyboardScroll = std::clamp(g_quickDrawKeyboardScroll -
-                static_cast<float>(direction) * 72.0f,
-                -g_quickDrawKeyboardMaxScroll,
-                g_quickDrawKeyboardMaxScroll);
+            if (g_quickDrawKeyboardVisualMode &&
+                g_quickDrawKeyboardConstellationDense)
+            {
+                // Na constelação densa, o conteúdo existe somente na faixa
+                // abaixo do teclado. A roda percorre essa faixa de forma
+                // horizontal: para cima leva os ícones à direita; para baixo,
+                // à esquerda.
+                const float cycleWidth =
+                    g_quickDrawKeyboardConstellationMaxScrollX;
+                if (cycleWidth > 0.0f)
+                {
+                    g_quickDrawKeyboardConstellationScrollX = std::fmod(
+                        g_quickDrawKeyboardConstellationScrollX +
+                            static_cast<float>(direction) * 92.0f,
+                        cycleWidth);
+                    if (g_quickDrawKeyboardConstellationScrollX < 0.0f)
+                        g_quickDrawKeyboardConstellationScrollX += cycleWidth;
+                }
+            }
+            else
+            {
+                // O navegador radial normal mantém sua rolagem vertical.
+                g_quickDrawKeyboardScroll = std::clamp(g_quickDrawKeyboardScroll -
+                    static_cast<float>(direction) * 72.0f,
+                    -g_quickDrawKeyboardMaxScroll,
+                    g_quickDrawKeyboardMaxScroll);
+            }
             return true;
         }
 
@@ -18563,7 +19656,7 @@ namespace Menu
         const float sliderBlockHeight = labelToTrack + 30.0f;
         // Reserva espaço ao fim: o scrollbar já responde à roda hoje e essa
         // área será ocupada naturalmente quando novos controles entrarem.
-        const float contentHeight = 14.0f + toggleRowHeight * 3.0f + 12.0f +
+        const float contentHeight = 14.0f + toggleRowHeight * 2.0f + 12.0f +
             sliderBlockHeight * 3.0f + 18.0f + 72.0f;
         g_quickDrawSettingsMaxScroll = std::max(0.0f, contentHeight - viewportHeight);
         g_quickDrawSettingsScroll = std::clamp(g_quickDrawSettingsScroll,
@@ -18603,11 +19696,9 @@ namespace Menu
                 fadedWhite, label, alpha);
             y += toggleRowHeight;
         };
-        drawToggle(0, Config::g_itemPreviewDuringShortcuts,
-            Language::Get("item_preview_during_shortcuts").c_str());
-        drawToggle(1, Config::g_drawEffectsGameplay,
+        drawToggle(0, Config::g_drawEffectsGameplay,
             Language::Get("draw_effects_gameplay").c_str());
-        drawToggle(2, Config::g_drawEffectsEditor,
+        drawToggle(1, Config::g_drawEffectsEditor,
             Language::Get("draw_effects_editor").c_str());
         y += 12.0f;
 
@@ -19335,6 +20426,7 @@ namespace Menu
                     // Soltar uma estrela da constelação diretamente sobre
                     // uma tecla cria/substitui o atalho daquela tecla, sem
                     // removê-la do radial ou da bolsa de origem.
+                    bool droppedOnValidKey = false;
                     for (const auto& slot : g_quickDrawKeyboardVisualSlots)
                     {
                         if (!PointInQuickDrawRect(g_settingsMousePos,
@@ -19353,20 +20445,94 @@ namespace Menu
                             [&](const QuickDrawKeyboardCard& card) {
                                 return card.hotkey == slot.key;
                             });
-                        if (existing != g_quickDrawKeyboardCards.end())
+                        const bool targetHadCard =
+                            existing != g_quickDrawKeyboardCards.end();
+                        auto source = g_quickDrawKeyboardCards.end();
+                        if (g_quickDrawKeyboardDragSourceHotkey != 0)
+                        {
+                            source = std::find_if(g_quickDrawKeyboardCards.begin(),
+                                g_quickDrawKeyboardCards.end(),
+                                [&](const QuickDrawKeyboardCard& card) {
+                                    return card.hotkey ==
+                                        g_quickDrawKeyboardDragSourceHotkey;
+                                });
+                        }
+                        if (targetHadCard)
                         {
                             existing->key = MakeQuickDrawKey(g_quickDrawKeyboardDraggedItem);
                             existing->removeT = -1.0f;
                         }
-                        else
+                        else if (source == g_quickDrawKeyboardCards.end())
                         {
                             g_quickDrawKeyboardCards.push_back({
                                 MakeQuickDrawKey(g_quickDrawKeyboardDraggedItem), slot.key });
                         }
+                        // Se o arraste começou no X de uma tecla, o cartão
+                        // original muda para o slot novo. Havendo um cartão
+                        // no destino, ele recebe o item e o antigo fecha em
+                        // fade. Itens vindos da constelação não têm origem e
+                        // preservam o fluxo de criação usual.
+                        if (source != g_quickDrawKeyboardCards.end())
+                        {
+                            if (g_quickDrawKeyboardDragSourceHotkey == slot.key)
+                            {
+                                // Soltou na própria tecla: nada muda.
+                            }
+                            else if (targetHadCard)
+                            {
+                                source->removeT = 0.0f;
+                            }
+                            else
+                            {
+                                // Não criamos uma cópia nova: o mesmo cartão
+                                // passa a representar a tecla de destino.
+                                source->hotkey = slot.key;
+                            }
+                        }
+                        droppedOnValidKey = true;
                         break;
+                    }
+                    // Soltar fora de uma tecla não cria nem remove bind. A
+                    // estrela retorna do ponto que foi preservado no clique,
+                    // reaparecendo suavemente na própria constelação.
+                    if (!droppedOnValidKey &&
+                        g_quickDrawKeyboardDragSourceVisualKey != 0)
+                    {
+                        g_quickDrawKeyboardDragSourceReturning = true;
+                    }
+                    else if (droppedOnValidKey)
+                    {
+                        g_quickDrawKeyboardDragSourceVisualKey = 0;
+                        g_quickDrawKeyboardDragSourceReturning = false;
                     }
                     g_quickDrawKeyboardItemDragActive = false;
                     g_quickDrawKeyboardDraggedItem = {};
+                    g_quickDrawKeyboardDragSourceHotkey = 0;
+                }
+                else if (button == 0 && g_quickDrawKeyboardPendingKeyRemove)
+                {
+                    // Clique curto no X: conserva a remoção atual, mas ela
+                    // só acontece na soltura para permitir detectar hold.
+                    const auto card = std::find_if(g_quickDrawKeyboardCards.begin(),
+                        g_quickDrawKeyboardCards.end(),
+                        [](const QuickDrawKeyboardCard& value) {
+                            return value.hotkey == g_quickDrawKeyboardPendingRemoveHotkey &&
+                                value.removeT < 0.0f;
+                        });
+                    if (card != g_quickDrawKeyboardCards.end())
+                    {
+                        for (auto& gesture : g_quickDrawGestures)
+                        {
+                            if (SameQuickDrawKey(gesture.key, card->key))
+                            {
+                                gesture.hotkey = 0;
+                                break;
+                            }
+                        }
+                        card->removeT = 0.0f;
+                    }
+                    g_quickDrawKeyboardPendingKeyRemove = false;
+                    g_quickDrawKeyboardPendingRemoveHotkey = 0;
                 }
                 return true;
             }
@@ -19416,6 +20582,17 @@ namespace Menu
                         {
                             g_quickDrawKeyboardDraggedItem = source.item;
                             g_quickDrawKeyboardItemDragActive = true;
+                            g_quickDrawKeyboardDragSourceVisualKey = source.visualKey;
+                            g_quickDrawKeyboardDragSourceReturning = false;
+                            // Some na própria confirmação do clique, sem
+                            // esperar o frame de rearranjo da constelação.
+                            if (auto visual = g_quickDrawKeyboardSourceVisuals.find(
+                                    source.visualKey);
+                                visual != g_quickDrawKeyboardSourceVisuals.end())
+                            {
+                                visual->second.alpha = 0.0f;
+                                visual->second.hoverT = 0.0f;
+                            }
                             return true;
                         }
                     }
@@ -19423,30 +20600,32 @@ namespace Menu
                     {
                         if (card.removeT >= 0.0f)
                             continue;
+                        if (QuickDrawGesture* gesture = FindQuickDrawGesture(card.key);
+                            gesture && IsSettingsCircleHovered(g_settingsMousePos,
+                                card.keyboardRequireActivationCenter, 10.0f))
+                        {
+                            gesture->hotkeyRequiresActivation =
+                                !gesture->hotkeyRequiresActivation;
+                            card.keyboardRequireActivationClickFlash = 1.0f;
+                            return true;
+                        }
+                        RadialItem autoUseItem{};
+                        if (BuildQuickDrawHotkeyPreviewItem(card.key, autoUseItem) &&
+                            IsQuickDrawAutoUseEligible(autoUseItem.form) &&
+                            IsSettingsCircleHovered(g_settingsMousePos,
+                                card.keyboardAutoUseCenter, 10.0f))
+                        {
+                            SetQuickDrawAutoUse(autoUseItem,
+                                !IsQuickDrawAutoUseEnabled(autoUseItem));
+                            card.keyboardAutoUseClickFlash = 1.0f;
+                            return true;
+                        }
                         if (IsSettingsCircleHovered(g_settingsMousePos,
                                 card.keyboardRemoveCenter, 10.0f))
                         {
-                            // Mantém a mesma remoção/fade do browser radial;
-                            // aqui o cartão mini desaparece dentro da tecla.
-                            for (auto& gesture : g_quickDrawGestures)
-                            {
-                                if (SameQuickDrawKey(gesture.key, card.key))
-                                {
-                                    gesture.hotkey = 0;
-                                    break;
-                                }
-                            }
-                            for (auto& other : g_quickDrawKeyboardCards)
-                            {
-                                if (&other == &card)
-                                    continue;
-                                other.reflowPreservedCenter = other.hasLastVisualCenter
-                                    ? other.lastVisualCenter
-                                    : ImVec2((other.min.x + other.max.x) * 0.5f,
-                                          (other.min.y + other.max.y) * 0.5f);
-                                other.preserveReflowPosition = true;
-                            }
-                            card.removeT = 0.0f;
+                            g_quickDrawKeyboardPendingKeyRemove = true;
+                            g_quickDrawKeyboardPendingRemoveHotkey = card.hotkey;
+                            g_quickDrawKeyboardPendingRemoveStart = ImGui::GetTime();
                             return true;
                         }
                         if (
@@ -19460,6 +20639,52 @@ namespace Menu
                 {
                     if (card.removeT >= 0.0f || card.filterT <= 0.08f)
                         continue;
+                    // Os cartões de teste não podem tocar em um bind real,
+                    // mas continuam completamente interativos: o X os
+                    // remove apenas desta sessão visual e o núcleo preserva
+                    // hover/preview normalmente. Antes o retângulo antigo
+                    // absorvia o clique, sobretudo nos F1..F12.
+                    if (card.testOnly)
+                    {
+                        if (IsSettingsCircleHovered(g_settingsMousePos,
+                                card.clearCenter, 16.0f))
+                        {
+                            card.removalFrozenCenter = card.hasLastVisualCenter
+                                ? card.lastVisualCenter
+                                : ImVec2((card.min.x + card.max.x) * 0.5f,
+                                      (card.min.y + card.max.y) * 0.5f);
+                            card.freezeRemovalPosition = true;
+                            g_quickDrawKeyboardRemovingPreviewActive =
+                                BuildQuickDrawHotkeyPreviewItem(card.key,
+                                    g_quickDrawKeyboardRemovingPreviewItem);
+                            card.clearClickFlash = 1.0f;
+                            card.removeT = 0.0f;
+                            return true;
+                        }
+                        if (IsSettingsCircleHovered(g_settingsMousePos,
+                                card.lastVisualCenter, 61.0f))
+                            return true;
+                        continue;
+                    }
+                    RadialItem autoUseItem{};
+                    if (QuickDrawGesture* gesture = FindQuickDrawGesture(card.key);
+                        gesture && IsSettingsCircleHovered(g_settingsMousePos,
+                            card.requireActivationCenter, 14.0f))
+                    {
+                        gesture->hotkeyRequiresActivation = !gesture->hotkeyRequiresActivation;
+                        card.requireActivationClickFlash = 1.0f;
+                        return true;
+                    }
+                    if (BuildQuickDrawHotkeyPreviewItem(card.key, autoUseItem) &&
+                        IsQuickDrawAutoUseEligible(autoUseItem.form) &&
+                        IsSettingsCircleHovered(g_settingsMousePos,
+                            card.autoUseCenter, 14.0f))
+                    {
+                        SetQuickDrawAutoUse(autoUseItem,
+                            !IsQuickDrawAutoUseEnabled(autoUseItem));
+                        card.autoUseClickFlash = 1.0f;
+                        return true;
+                    }
                     if (IsSettingsCircleHovered(g_settingsMousePos,
                             card.clearCenter, 13.0f))
                     {
@@ -19475,24 +20700,9 @@ namespace Menu
                         g_quickDrawKeyboardRemovingPreviewActive =
                             BuildQuickDrawHotkeyPreviewItem(card.key,
                                 g_quickDrawKeyboardRemovingPreviewItem);
-                        // Preserve a posição exibida de cada sobrevivente já
-                        // neste clique. O cartão removido deixa de participar
-                        // da formação no frame seguinte; esperar o fim do
-                        // fade trocava as âncoras antes de a mola assumir e
-                        // produzia o teleporte visual.
-                        for (auto& other : g_quickDrawKeyboardCards)
-                        {
-                            if (&other == &card)
-                                continue;
-                            const ImVec2 preservedCenter = other.hasLastVisualCenter
-                                ? other.lastVisualCenter
-                                : ImVec2((other.min.x + other.max.x) * 0.5f,
-                                      (other.min.y + other.max.y) * 0.5f);
-                            other.reflowPreservedCenter = preservedCenter;
-                            other.lastVisualCenter = preservedCenter;
-                            other.hasLastVisualCenter = true;
-                            other.preserveReflowPosition = true;
-                        }
+                        // Os sobreviventes continuam nos slots atuais até
+                        // este fade completar. A captura da posição para o
+                        // reflow acontece então, no bloco de erase.
                         for (auto& gesture : g_quickDrawGestures)
                         {
                             if (SameQuickDrawKey(gesture.key, card.key))
@@ -19588,8 +20798,6 @@ namespace Menu
                 if (dx * dx + dy * dy <= hitRadius * hitRadius)
                 {
                     if (i == 0)
-                        Config::g_itemPreviewDuringShortcuts = !Config::g_itemPreviewDuringShortcuts;
-                    else if (i == 1)
                         Config::g_drawEffectsGameplay = !Config::g_drawEffectsGameplay;
                     else
                         Config::g_drawEffectsEditor = !Config::g_drawEffectsEditor;
@@ -19893,6 +21101,7 @@ namespace Menu
         g_quickDrawHotkeyPendingItem = {};
         g_quickDrawHotkeyQuantityPreviewItem = {};
         g_quickDrawHotkeyPendingKey = 0;
+        g_quickDrawHotkeyHeldKey = 0;
         g_quickDrawEditorWaitingHotkey = false;
         g_quickDrawKeyboardOpen = false;
         g_quickDrawKeyboardCards.clear();
@@ -21665,6 +22874,94 @@ namespace Menu
             static_cast<int>(std::clamp(tint.y * baseG * brightness, 0.0f, 1.0f) * 255.0f),
             static_cast<int>(std::clamp(tint.z * baseB * brightness, 0.0f, 1.0f) * 255.0f),
             alpha);
+    }
+
+    static bool IsShortcutIconPreviewEnabled()
+    {
+        return Config::g_shortcutFeedbackStyle == 3;
+    }
+
+    static void BeginQuickDrawHotkeyIconFadeOut(float initialAlpha)
+    {
+        if (!IsShortcutIconPreviewEnabled() || !g_quickDrawHotkeyIconPreviewItem.form)
+            return;
+        g_quickDrawHotkeyIconPreviewAlpha = std::clamp(initialAlpha, 0.0f, 1.0f);
+        g_quickDrawHotkeyIconPreviewFadingOut = true;
+    }
+
+    static void DrawQuickDrawHotkeyIconPreview(float deltaTime)
+    {
+        if (!IsShortcutIconPreviewEnabled())
+        {
+            g_quickDrawHotkeyIconPreviewItem = {};
+            g_quickDrawHotkeyIconPreviewAlpha = 0.0f;
+            g_quickDrawHotkeyIconPreviewFadingOut = false;
+            return;
+        }
+
+        const bool active = g_quickDrawHotkeyDirectPreviewActive ||
+            g_quickDrawHotkeyHandSelectionActive;
+        const bool exitingToHand = g_quickDrawHotkeyPreviewExitActive;
+        if (active && g_quickDrawHotkeyPendingItem.form)
+        {
+            g_quickDrawHotkeyIconPreviewItem = g_quickDrawHotkeyPendingItem;
+            g_quickDrawHotkeyIconPreviewFadingOut = false;
+            const float target = g_quickDrawHotkeyDirectPreviewActive
+                ? g_quickDrawHotkeyDirectPreviewAlpha : 1.0f;
+            g_quickDrawHotkeyIconPreviewAlpha = AnimateSettingsValue(
+                g_quickDrawHotkeyIconPreviewAlpha, target, 11.0f, deltaTime);
+        }
+        else if (exitingToHand && g_quickDrawHotkeyPendingItem.form)
+        {
+            g_quickDrawHotkeyIconPreviewItem = g_quickDrawHotkeyPendingItem;
+            const float eased = g_quickDrawHotkeyPreviewExitT *
+                g_quickDrawHotkeyPreviewExitT *
+                (3.0f - 2.0f * g_quickDrawHotkeyPreviewExitT);
+            g_quickDrawHotkeyIconPreviewAlpha = 1.0f - eased;
+        }
+        else if (g_quickDrawHotkeyIconPreviewFadingOut)
+        {
+            g_quickDrawHotkeyIconPreviewAlpha = AnimateSettingsValue(
+                g_quickDrawHotkeyIconPreviewAlpha, 0.0f, 7.0f, deltaTime);
+            if (g_quickDrawHotkeyIconPreviewAlpha <= 0.002f)
+            {
+                g_quickDrawHotkeyIconPreviewAlpha = 0.0f;
+                g_quickDrawHotkeyIconPreviewFadingOut = false;
+                g_quickDrawHotkeyIconPreviewItem = {};
+            }
+        }
+
+        const RadialItem& item = g_quickDrawHotkeyIconPreviewItem;
+        if (!item.form || g_quickDrawHotkeyIconPreviewAlpha <= 0.002f)
+            return;
+        auto* icon = ItemIcon::Get(item.form);
+        if (!icon)
+            return;
+
+        const ImVec2 screen = ImGui::GetIO().DisplaySize;
+        ImVec2 center(screen.x * 0.5f,
+            GetSettingsCloseButtonDefaultTarget(GetWheelLayout()).y);
+        if (exitingToHand)
+        {
+            const float eased = g_quickDrawHotkeyPreviewExitT *
+                g_quickDrawHotkeyPreviewExitT *
+                (3.0f - 2.0f * g_quickDrawHotkeyPreviewExitT);
+            center.x += (g_quickDrawHotkeyPreviewExitLeft ? -72.0f : 72.0f) * eased;
+        }
+
+        // Mesmo núcleo visual de um item de radial: círculo escuro opaco,
+        // sem contorno, e ícone colorido em 80%. Não há badge de tecla.
+        constexpr float radius = 27.5f;
+        const float alpha = g_quickDrawHotkeyIconPreviewAlpha;
+        ImDrawList* draw = ImGui::GetForegroundDrawList();
+        draw->AddCircleFilled(center, radius,
+            FadeColor(IM_COL32(20, 20, 25, 180), alpha), 48);
+        const float iconRadius = radius * 0.56f;
+        draw->AddImage(reinterpret_cast<ImTextureID>(icon),
+            center - ImVec2(iconRadius, iconRadius),
+            center + ImVec2(iconRadius, iconRadius), ImVec2(0, 0), ImVec2(1, 1),
+            MakeGameplayIconColor(item, static_cast<int>(204.0f * alpha),
+                1.0f, false, RadialSide::Left));
     }
 
     // Após remover um item no WheelSettings, o número/distribuição de slots
@@ -24561,17 +25858,21 @@ namespace Menu
 
         constexpr float baseAlpha = INVENTORY_MENU_ALPHA;
 
-        float rightAlpha = baseAlpha + (1.0f - baseAlpha) * rightProximity;
-        float leftAlpha = baseAlpha + (1.0f - baseAlpha) * leftProximity;
-        float topAlpha = baseAlpha + (1.0f - baseAlpha) * topProximity;
-        float bottomAlpha = baseAlpha + (1.0f - baseAlpha) * bottomProximity;
+        // O menu de inventory permanece em render durante alguns frames após
+        // o drop. Aplicar o alpha global aqui faz os quatro radiais seguirem
+        // o mesmo fade suave da bolsa e do item arrastado.
+        const float interfaceAlpha = std::clamp(g_globalAlpha, 0.0f, 1.0f);
+        float rightAlpha = interfaceAlpha * (baseAlpha + (1.0f - baseAlpha) * rightProximity);
+        float leftAlpha = interfaceAlpha * (baseAlpha + (1.0f - baseAlpha) * leftProximity);
+        float topAlpha = interfaceAlpha * (baseAlpha + (1.0f - baseAlpha) * topProximity);
+        float bottomAlpha = interfaceAlpha * (baseAlpha + (1.0f - baseAlpha) * bottomProximity);
 
         DrawRadialMenu(rightCenter, false, rightAlpha);
         DrawRadialMenu(leftCenter, true, leftAlpha);
 
         DrawTopRadialMenu(topCenter, static_cast<int>(g_topItems.size()), topAlpha);
         DrawBottomRadialMenu(bottomCenter, static_cast<int>(g_bottomItems.size()), bottomAlpha);
-        DrawInventoryItemBag(g_globalAlpha);
+        DrawInventoryItemBag(g_globalAlpha, io.DeltaTime);
     }
 
 
@@ -27499,6 +28800,13 @@ namespace Menu
             g_slowTimeSliderDragging = true;
             return true;
         }
+
+        if (insideRect(g_shortcutFeedbackStyleHitbox.min,
+                g_shortcutFeedbackStyleHitbox.max))
+        {
+            g_shortcutFeedbackStyleDragging = true;
+            return true;
+        }
         
         if (insideRect(g_slowTimeResetHitbox.min, g_slowTimeResetHitbox.max))
         {
@@ -28673,7 +29981,65 @@ namespace Menu
                 specialEffectsOptionY - ImGui::GetFontSize() * 0.5f),
             white, Language::Get("special_effects").c_str(), alpha);
 
-        const float drawTitleY = specialEffectsOptionY + 34.0f * controlScale;
+        // KEYS -------------------------------------------------------
+        // O feedback de atalhos pertence ao gameplay: é a escolha entre não
+        // mostrar nada, usar preview 3D ou usar o HUD compacto.
+        const float keysTitleY = specialEffectsOptionY + 34.0f * controlScale;
+        DrawTextWithShadow(draw, ImVec2(x, keysTitleY), gold,
+            Language::Get("gameplay_keys_section").c_str(), alpha);
+        const ImVec2 keysTitleSize = ImGui::CalcTextSize(
+            Language::Get("gameplay_keys_section").c_str());
+        draw->AddLine(ImVec2(x + keysTitleSize.x + 12.0f * controlScale,
+                keysTitleY + ImGui::GetFontSize() * 0.5f),
+            ImVec2(x + width, keysTitleY + ImGui::GetFontSize() * 0.5f),
+            FadeColor(IM_COL32(215, 195, 150, 90), alpha), 1.0f);
+
+        constexpr int feedbackStyleCount = 4;
+        static constexpr std::array<const char*, feedbackStyleCount> feedbackLabels{
+            "none", "shortcut_feedback_preview", "shortcut_feedback_hotkey_hud",
+            "shortcut_feedback_icon" };
+        const float feedbackLabelY = keysTitleY + 32.0f * controlScale;
+        const float feedbackTrackY = feedbackLabelY + 25.0f * controlScale;
+        const float feedbackTrackWidth = std::max(width, 1.0f);
+        const float feedbackCellWidth = feedbackTrackWidth / static_cast<float>(feedbackStyleCount);
+        g_shortcutFeedbackStyleHitbox = { ImVec2(x, feedbackLabelY - 4.0f * controlScale),
+            ImVec2(x + width, feedbackTrackY + 12.0f * controlScale) };
+        if (g_shortcutFeedbackStyleDragging)
+        {
+            const float normalized = std::clamp((g_settingsMousePos.x - x) /
+                feedbackTrackWidth, 0.0f, 1.0f);
+            Config::g_shortcutFeedbackStyle = std::clamp(
+                static_cast<int>(normalized * static_cast<float>(feedbackStyleCount)),
+                0, feedbackStyleCount - 1);
+        }
+        Config::g_shortcutFeedbackStyle = std::clamp(
+            Config::g_shortcutFeedbackStyle, 0, feedbackStyleCount - 1);
+        const char* feedbackName = Language::Get(
+            feedbackLabels[Config::g_shortcutFeedbackStyle]).c_str();
+        const ImVec2 feedbackNameSize = ImGui::CalcTextSize(feedbackName);
+        DrawTextWithShadow(draw, ImVec2(x, feedbackLabelY), white,
+            Language::Get("preview_during_hotkeys").c_str(), alpha);
+        DrawTextWithShadow(draw, ImVec2(x + width - feedbackNameSize.x, feedbackLabelY),
+            FadeColor(IM_COL32(180, 165, 130, 230), alpha), feedbackName, alpha);
+        draw->AddRectFilled(ImVec2(x, feedbackTrackY - 6.0f * controlScale),
+            ImVec2(x + width, feedbackTrackY + 6.0f * controlScale),
+            FadeColor(IM_COL32(25, 26, 31, 235), alpha), 4.0f * controlScale);
+        const float feedbackX = x + feedbackCellWidth *
+            static_cast<float>(Config::g_shortcutFeedbackStyle);
+        draw->AddRectFilled(ImVec2(feedbackX + 0.5f * controlScale,
+                feedbackTrackY - 5.5f * controlScale),
+            ImVec2(feedbackX + feedbackCellWidth - 0.5f * controlScale,
+                feedbackTrackY + 5.5f * controlScale),
+            FadeColor(IM_COL32(190, 184, 170, 225), alpha), 2.0f * controlScale);
+        for (int i = 0; i <= feedbackStyleCount; ++i)
+        {
+            const float tickX = x + feedbackCellWidth * static_cast<float>(i);
+            draw->AddLine(ImVec2(tickX, feedbackTrackY - 5.0f * controlScale),
+                ImVec2(tickX, feedbackTrackY + 5.0f * controlScale),
+                FadeColor(IM_COL32(180, 180, 185, 70), alpha), 1.0f);
+        }
+
+        const float drawTitleY = feedbackTrackY + 34.0f * controlScale;
         DrawTextWithShadow(draw, ImVec2(x, drawTitleY), gold,
             Language::Get("draw_section").c_str(), alpha);
         const ImVec2 drawTitleSize = ImGui::CalcTextSize(Language::Get("draw_section").c_str());
@@ -31613,11 +32979,13 @@ namespace Menu
             true
         );
 
-        // Biblioteca de hotkeys: fica no espaço entre a borda superior e a
-        // trava do radial Top. Reutiliza exatamente o círculo expansível do
-        // OK do Quick Draw, sem abrir o editor de gesto.
-        g_settingsHotkeyButtonCenter = ImVec2(topLockCenter.x,
-            wheelLayout.min.y + visibleHeight * 0.075f);
+        // Biblioteca de hotkeys: fica imediatamente acima do botão Settings,
+        // exatamente no ponto médio entre ele e a borda superior da tela.
+        // Reutiliza o mesmo círculo expansível do OK do Quick Draw, sem abrir
+        // o editor de gesto.
+        const SettingsSectionLayout sectionLayout = GetSettingsSectionLayout();
+        g_settingsHotkeyButtonCenter = ImVec2(sectionLayout.center.x,
+            (wheelLayout.min.y + sectionLayout.center.y) * 0.5f);
         // Flutuação própria do atalho Keys, aplicada antes de hover/click
         // para a área interativa acompanhar exatamente o círculo desenhado.
         const float hotkeyFloatTime = static_cast<float>(ImGui::GetTime());
@@ -32344,6 +33712,10 @@ namespace Menu
         }
         else if (!settingsOpen && wasSettingsOpen)
         {
+            // O WheelSettings terminou: qualquer HUD de amostra do Hub deve
+            // morrer aqui, antes de a próxima abertura poder reutilizar seu
+            // alpha e produzir um flash residual.
+            ResetQuickDrawHotkeyHudVisualState();
             TransitionSettingsBackdrop(0.0f, 0.5f);
             g_settingsBackdropClosingOnly = true;
             g_settingsPreviewFadeSettleElapsed = 0.0f;
@@ -32456,6 +33828,12 @@ namespace Menu
             if (g_globalAlpha < 0.0f) g_globalAlpha = 0.0f;
         }
 
+        // Diferente do radial, o HUD de hotkeys também existe com o menu
+        // principal fechado. Ele se ancora no próprio estado da tecla e
+        // preserva o fade depois da soltura.
+        DrawQuickDrawHotkeyHud(deltaTime);
+        DrawQuickDrawHotkeyIconPreview(deltaTime);
+
         // O preview 3D tem uma saída própria, independente do alpha do HUD.
         // Isso também mantém o menu silencioso vivo apenas até o último frame
         // da transparência do item.
@@ -32465,7 +33843,7 @@ namespace Menu
         if (g_quickDrawHotkeyHandSelectionActive &&
             g_quickDrawHotkeyPendingItem.form)
         {
-            if (Config::g_itemPreviewDuringShortcuts)
+            if (IsShortcutItemPreviewEnabled())
             {
                 const ImVec2 center = Resolution::GetVirtualCenter();
                 ItemPreview::SetHudPosition(center);
@@ -32486,7 +33864,7 @@ namespace Menu
             g_quickDrawHotkeyDirectPreviewAlpha = std::min(1.0f,
                 g_quickDrawHotkeyDirectPreviewAlpha +
                     std::clamp(deltaTime, 0.0f, 0.05f) / 0.18f);
-            if (Config::g_itemPreviewDuringShortcuts)
+            if (IsShortcutItemPreviewEnabled())
             {
                 const ImVec2 center = Resolution::GetVirtualCenter();
                 ItemPreview::SetHudPosition(center);
@@ -32510,7 +33888,7 @@ namespace Menu
                 g_quickDrawHotkeyPreviewExitT + std::clamp(deltaTime, 0.0f, 0.05f) / 0.34f);
             const float eased = g_quickDrawHotkeyPreviewExitT * g_quickDrawHotkeyPreviewExitT *
                 (3.0f - 2.0f * g_quickDrawHotkeyPreviewExitT);
-            if (Config::g_itemPreviewDuringShortcuts)
+            if (IsShortcutItemPreviewEnabled())
             {
                 const ImVec2 center = Resolution::GetVirtualCenter();
                 const ImVec2 exitPosition(center.x +

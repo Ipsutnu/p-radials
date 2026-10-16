@@ -196,6 +196,10 @@ namespace Menu {
     bool CancelQuickDrawHotkeyCaptureFromMouse(int button);
     bool HandleQuickDrawHotkey(int virtualKey, bool activationHeld);
     bool HandleQuickDrawHotkeyRelease(int virtualKey);
+    bool ScrollQuickDrawHotkeyHud(int direction);
+    // Verdadeiro enquanto o HUD de atalhos ainda está visível, inclusive no
+    // fade de saída. O Input usa isto para tratar PrintScreen como UI do mod.
+    bool IsQuickDrawHotkeyHudVisible();
     bool HandleQuickDrawHotkeyHandKey(int virtualKey, bool firstPress);
     bool HandleQuickDrawHotkeyHandMouseButton(int button, bool firstPress);
     bool HandleQuickDrawHotkeyHandMouseMove(float deltaX);
