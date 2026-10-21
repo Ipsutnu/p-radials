@@ -176,6 +176,7 @@ namespace Menu {
 
     bool SettingsMouseDown();
     bool SettingsLayoutKeyboardInput(std::uint32_t scanCode, bool pressed);
+    bool QuickDrawArmorKeyboardInput(std::uint32_t scanCode, bool pressed);
 
     void SettingsMouseUp();
 

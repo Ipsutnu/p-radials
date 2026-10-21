@@ -251,6 +251,23 @@ RE::BSEventNotifyControl InputHandler::ProcessEvent(
                     continue;
                 }
 
+                // O nome do loadout no Armor Hub é outro campo modal. Ele
+                // precisa vir antes dos atalhos globais pelo mesmo motivo do
+                // nome de preset: letras como First/Second são texto aqui.
+                if (button->GetDevice() == RE::INPUT_DEVICE::kKeyboard)
+                {
+                    const bool firstPress = button->IsDown() &&
+                        button->GetRuntimeData().heldDownSecs <= 0.0f;
+                    if (Menu::QuickDrawArmorKeyboardInput(button->GetIDCode(), firstPress))
+                    {
+                        button->GetRuntimeData().value = 0.0f;
+                        button->GetRuntimeData().heldDownSecs = 0.0f;
+                        button->SetUserEvent("");
+                        button->SetIDCode(0xFF);
+                        continue;
+                    }
+                }
+
                 // O nome de layout do WheelSettings também é um campo modal.
                 // Isto precisa ficar neste primeiro loop, antes da leitura de
                 // First/Second Key logo abaixo; o segundo loop já recebe o
@@ -847,6 +864,11 @@ RE::BSEventNotifyControl InputHandler::ProcessEvent(
             {
                 const bool firstPress = layoutKey->IsDown() &&
                     layoutKey->GetRuntimeData().heldDownSecs <= 0.0f;
+                if (Menu::QuickDrawArmorKeyboardInput(layoutKey->GetIDCode(), firstPress))
+                {
+                    consumeButton(layoutKey);
+                    continue;
+                }
                 if (Menu::SettingsLayoutKeyboardInput(layoutKey->GetIDCode(), firstPress))
                 {
                     consumeButton(layoutKey);

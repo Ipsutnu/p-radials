@@ -882,6 +882,12 @@ namespace Menu
     static int g_quickDrawArmorInventoryHoverSlot = -1;
     static bool g_quickDrawArmorInventoryBagOpen = false;
     static ImVec2 g_quickDrawArmorInventoryBagCenter{};
+    // Campo de nome do loadout, acima do Helmet. É modal só enquanto está
+    // recebendo texto: fora disso continua sendo apenas parte do Armor Hub.
+    static ImVec2 g_quickDrawArmorNameFieldMin{};
+    static ImVec2 g_quickDrawArmorNameFieldMax{};
+    static bool g_quickDrawArmorNameEditing = false;
+    static float g_quickDrawArmorNameFieldAlpha = 0.20f;
     static float g_quickDrawArmorInventoryBagExpandT = 0.0f;
     static float g_quickDrawArmorInventoryBagRadius = 300.0f;
     static float g_quickDrawArmorInventoryBagTargetRadius = 300.0f;
@@ -4888,6 +4894,56 @@ namespace Menu
             g_layoutPresetName.push_back(key == VK_SPACE ? ' ' : '-');
             return true;
         }
+        return true;
+    }
+
+    bool QuickDrawArmorKeyboardInput(std::uint32_t scanCode, bool pressed)
+    {
+        if (!Armor::IsEditing() || !g_quickDrawArmorNameEditing)
+            return false;
+
+        // Enquanto o campo é modal, a soltura também é consumida para que
+        // First/Second não fechem o Hub após terem sido digitadas aqui.
+        if (!pressed)
+            return true;
+
+        const UINT key = MapVirtualKeyW(scanCode, MAPVK_VSC_TO_VK_EX);
+        if (key == VK_ESCAPE || key == VK_RETURN)
+        {
+            g_quickDrawArmorNameEditing = false;
+            return true;
+        }
+
+        char* name = Armor::EditingName();
+        if (!name)
+            return true;
+        std::string value(name);
+        if (key == VK_BACK)
+        {
+            if (!value.empty())
+                value.pop_back();
+        }
+        else if (value.size() + 1 < Armor::kLoadoutNameCapacity)
+        {
+            char character = '\0';
+            if (key >= 'A' && key <= 'Z')
+            {
+                const bool shift = (GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0;
+                character = static_cast<char>(shift ? key : key + ('a' - 'A'));
+            }
+            else if (key >= '0' && key <= '9')
+                character = static_cast<char>(key);
+            else if (key == VK_SPACE)
+                character = ' ';
+            else if (key == VK_OEM_MINUS)
+                character = '-';
+            if (character != '\0')
+                value.push_back(character);
+        }
+
+        std::fill_n(name, Armor::kLoadoutNameCapacity, '\0');
+        std::memcpy(name, value.data(), std::min(value.size(),
+            Armor::kLoadoutNameCapacity - 1));
         return true;
     }
 
@@ -18306,6 +18362,8 @@ namespace Menu
         g_quickDrawArmorInventoryBagOpen = false;
         g_quickDrawArmorInventoryBagExpandT = 0.0f;
         g_quickDrawArmorDropTransition = {};
+        g_quickDrawArmorNameEditing = false;
+        g_quickDrawArmorNameFieldAlpha = 0.20f;
         g_quickDrawKeyboardArmorEmblemDirection = (std::rand() & 1) == 0 ? -1.0f : 1.0f;
         g_quickDrawKeyboardCards.clear();
         for (const auto& gesture : g_quickDrawGestures)
@@ -18376,6 +18434,8 @@ namespace Menu
         g_quickDrawArmorInventoryBagOpen = false;
         g_quickDrawArmorInventoryBagExpandT = 0.0f;
         g_quickDrawArmorDropTransition = {};
+        g_quickDrawArmorNameEditing = false;
+        g_quickDrawArmorNameFieldAlpha = 0.20f;
         g_quickDrawKeyboardOpen = false;
         g_quickDrawKeyboardCards.clear();
         g_quickDrawKeyboardScroll = 0.0f;
@@ -18747,6 +18807,61 @@ namespace Menu
         drawSlot(Armor::Slot::Shield, center + ImVec2(-275.0f, 250.0f), 0);
         const ImVec2 otherSlotCenter = center + ImVec2(275.0f, 250.0f);
         drawSlot(Armor::Slot::Other, otherSlotCenter, 0);
+
+        // Nome do conjunto: centralizado no vazio entre o topo da tela e o
+        // Helmet, com a mesma largura e o mesmo fundo do próprio slot.
+        const float helmetTop = center.y - 315.0f - slotSize.y * 0.5f;
+        constexpr float nameFieldHeight = 34.0f;
+        const ImVec2 nameFieldCenter(center.x, helmetTop * 0.5f);
+        g_quickDrawArmorNameFieldMin = nameFieldCenter -
+            ImVec2(slotSize.x * 0.5f, nameFieldHeight * 0.5f);
+        g_quickDrawArmorNameFieldMax = nameFieldCenter +
+            ImVec2(slotSize.x * 0.5f, nameFieldHeight * 0.5f);
+        const bool nameFieldHovered = PointInQuickDrawRect(g_settingsMousePos,
+            g_quickDrawArmorNameFieldMin, g_quickDrawArmorNameFieldMax);
+        const char* loadoutName = Armor::EditingName();
+        const bool hasLoadoutName = loadoutName && loadoutName[0] != '\0';
+        g_quickDrawArmorNameFieldAlpha = AnimateSettingsValue(
+            g_quickDrawArmorNameFieldAlpha,
+            (hasLoadoutName || nameFieldHovered || g_quickDrawArmorNameEditing) ?
+                1.0f : 0.20f,
+            8.0f, slotDt);
+        draw->AddRectFilled(g_quickDrawArmorNameFieldMin,
+            g_quickDrawArmorNameFieldMax,
+            FadeColor(MenuThemeColor(Config::MenuThemeColor::RaisedBackground, 205),
+                alpha * g_quickDrawArmorNameFieldAlpha), 7.0f);
+        if (loadoutName)
+        {
+            const ImVec2 textSize = ImGui::CalcTextSize(loadoutName);
+            constexpr float textPadding = 10.0f;
+            const float availableWidth = std::max(1.0f,
+                g_quickDrawArmorNameFieldMax.x - g_quickDrawArmorNameFieldMin.x -
+                    textPadding * 2.0f);
+            // Quando ultrapassa a caixa, o final fica ancorado à direita:
+            // cada nova letra desloca o texto para a esquerda sob o clip.
+            const float textX = textSize.x > availableWidth
+                ? g_quickDrawArmorNameFieldMax.x - textPadding - textSize.x
+                : g_quickDrawArmorNameFieldMin.x + textPadding;
+            const ImVec2 textPos(textX,
+                nameFieldCenter.y - textSize.y * 0.5f);
+            draw->PushClipRect(g_quickDrawArmorNameFieldMin + ImVec2(textPadding, 2.0f),
+                g_quickDrawArmorNameFieldMax - ImVec2(textPadding, 2.0f), true);
+            draw->AddText(textPos,
+                FadeColor(MenuThemeColor(Config::MenuThemeColor::PrimaryText, 210),
+                    alpha * g_quickDrawArmorNameFieldAlpha), loadoutName);
+            if (g_quickDrawArmorNameEditing &&
+                std::fmod(static_cast<float>(ImGui::GetTime()), 1.0f) < 0.55f)
+            {
+                const float caretX = std::clamp(textPos.x + textSize.x + 1.0f,
+                    g_quickDrawArmorNameFieldMin.x + textPadding,
+                    g_quickDrawArmorNameFieldMax.x - textPadding);
+                draw->AddLine(ImVec2(caretX, nameFieldCenter.y - 8.0f),
+                    ImVec2(caretX, nameFieldCenter.y + 8.0f),
+                    FadeColor(MenuThemeColor(Config::MenuThemeColor::PrimaryText, 235),
+                        alpha * g_quickDrawArmorNameFieldAlpha), 1.0f);
+            }
+            draw->PopClipRect();
+        }
         const float otherBottom = otherSlotCenter.y + slotSize.y * 0.5f;
         const ImVec2 secondaryAutoUseCenter(otherSlotCenter.x,
             (otherBottom + screen.y) * 0.5f);
@@ -19533,6 +19648,16 @@ namespace Menu
                     }
                     if (pointerOverKey && loadout)
                     {
+                        if (loadout->name[0] != '\0')
+                        {
+                            const std::string loadoutName(loadout->name.data());
+                            const ImVec2 nameSize = ImGui::CalcTextSize(
+                                loadoutName.c_str());
+                            hoveredItemNames.emplace_back(
+                                ImVec2(keyCenter.x - nameSize.x * 0.5f,
+                                    keyMax.y + 7.0f),
+                                loadoutName);
+                        }
                         const ImVec2 previewCenter = keyCenter + ImVec2(0.0f, -112.0f);
                         const std::array<std::pair<Armor::Slot, ImVec2>, 9> previewSlots{{
                             { Armor::Slot::Helmet, { 0.0f, -36.0f } },
@@ -24091,6 +24216,19 @@ namespace Menu
                 }
                 if (button != 0 && button != 1)
                     return true;
+                if (button == 0)
+                {
+                    if (PointInQuickDrawRect(g_settingsMousePos,
+                            g_quickDrawArmorNameFieldMin,
+                            g_quickDrawArmorNameFieldMax))
+                    {
+                        g_quickDrawArmorNameEditing = true;
+                        return true;
+                    }
+                    // Qualquer outro clique preserva sua ação normal, mas
+                    // encerra a edição textual antes de executá-la.
+                    g_quickDrawArmorNameEditing = false;
+                }
                 if (button == 0 && g_quickDrawArmorInventoryBagOpen)
                 {
                     for (const auto& candidate : g_quickDrawArmorInventoryCandidates)
