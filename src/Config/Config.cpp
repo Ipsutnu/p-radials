@@ -42,8 +42,8 @@ namespace Config
 
     bool g_showGameplayDescription = false;
     bool g_coloredPotions = true;
-    bool g_coloredMagicSchools = false;
-    bool g_coloredItemEnchants = false;
+    bool g_coloredMagicSchools = true;
+    bool g_coloredItemEnchants = true;
     bool g_fastInventoryDrag = false;
     bool g_customIcons = false;
     bool g_customIconsHasPreference = false;
@@ -83,6 +83,9 @@ namespace Config
     std::array<std::uint32_t, 5> g_schoolColors = kDefaultSchoolColors;
     std::array<std::uint32_t, 3> g_magicElementColors = kDefaultMagicElementColors;
     std::array<std::uint32_t, 5> g_enchantColors = kDefaultEnchantColors;
+    std::array<std::uint32_t,
+        static_cast<std::size_t>(MenuThemeColor::Count)> g_menuThemeColors =
+        kDefaultMenuThemeColors;
     float g_overflowOpacity = kDefaultOverflowOpacity;
     float g_itemNameOpacity = kDefaultItemNameOpacity;
     float g_itemNamePositionX = kDefaultItemNamePositionX;
@@ -96,11 +99,26 @@ namespace Config
     float g_sideOpacity = kDefaultSideOpacity;
     float g_topOpacity = kDefaultTopOpacity;
     float g_bottomOpacity = kDefaultBottomOpacity;
+    std::uint32_t g_radialLineColor = kDefaultRadialLineColor;
+    std::uint32_t g_overflowLineColor = kDefaultOverflowLineColor;
+    std::uint32_t g_topLineColor = kDefaultTopLineColor;
+    std::uint32_t g_bottomLineColor = kDefaultBottomLineColor;
+    std::uint32_t g_drawMarkColor = kDefaultDrawMarkColor;
     float g_fontSizeScale = kDefaultFontSizeScale;
     float g_drawMarkDistance = kDefaultDrawMarkDistance;
     bool g_drawEffectsGameplay = false;
     bool g_drawEffectsEditor = true;
     int g_shortcutFeedbackStyle = 1;
+    float g_shortcutPreviewPositionX = kDefaultShortcutPreviewPosition;
+    float g_shortcutPreviewPositionY = kDefaultShortcutPreviewPosition;
+    int g_shortcutHudStyle = 1;
+    bool g_shortcutHudInverted = false;
+    bool g_shortcutHudShowNames = false;
+    float g_shortcutHudNamePositionX = kDefaultShortcutHudNamePosition;
+    float g_shortcutHudNamePositionY = kDefaultShortcutHudNamePosition;
+    float g_shortcutHudPositionX = 0.0f;
+    std::uint32_t g_shortcutHudBackgroundColor = 0x141419;
+    float g_shortcutHudBackgroundOpacity = 70.0f;
     int g_drawEdgeEffectStyle = 0;
     float g_drawEdgeEffectSize = kDefaultDrawEdgeEffectSize;
     float g_drawEdgeEffectOpacity = kDefaultDrawEdgeEffectOpacity;
@@ -117,6 +135,7 @@ namespace Config
     float g_itemBagPositionX = kDefaultItemBagPosition;
     float g_itemBagPositionY = kDefaultItemBagPosition;
     float g_itemBagExpandedScale = kDefaultItemBagExpandedScale;
+    float g_quickDrawSecondaryBagRadius = kDefaultQuickDrawSecondaryBagRadius;
 
     ItemPreviewLayoutConfig& GetItemPreviewLayout(ItemPreviewProfile profile)
     {
@@ -547,15 +566,57 @@ namespace Config
         if (key == "DrawEffectsEditor") { g_drawEffectsEditor = ParseEnabled(value); return true; }
         // Compatibilidade com INIs anteriores ao slider de feedback.
         if (key == "ItemPreviewDuringShortcuts") { g_shortcutFeedbackStyle = ParseEnabled(value) ? 1 : 0; return true; }
+        // Legado: 0=None, 1=Preview, 2=HUD, 3=Icon.
         if (key == "ShortcutFeedbackStyle")
         {
-            try { g_shortcutFeedbackStyle = std::clamp(std::stoi(value), 0, 3); }
+            try
+            {
+                const int legacy = std::clamp(std::stoi(value), 0, 3);
+                g_shortcutFeedbackStyle = legacy == 3 ? 2 : (legacy == 1 ? 1 : 0);
+                g_shortcutHudStyle = legacy == 2 ? 1 : 0;
+            }
+            catch (...) { return false; }
+            return true;
+        }
+        if (key == "ShortcutPreviewStyle")
+        {
+            try { g_shortcutFeedbackStyle = std::clamp(std::stoi(value), 0, 2); }
+            catch (...) { return false; }
+            return true;
+        }
+        if (key == "ShortcutPreviewPositionX" || key == "ShortcutPreviewPositionY" ||
+            key == "ShortcutHudNamePositionX" || key == "ShortcutHudNamePositionY")
+        {
+            try
+            {
+                const float parsed = std::clamp(std::stof(value), -100.0f, 100.0f);
+                if (key == "ShortcutPreviewPositionX") g_shortcutPreviewPositionX = parsed;
+                else if (key == "ShortcutPreviewPositionY") g_shortcutPreviewPositionY = parsed;
+                else if (key == "ShortcutHudNamePositionX") g_shortcutHudNamePositionX = parsed;
+                else g_shortcutHudNamePositionY = parsed;
+            }
+            catch (...) { return false; }
+            return true;
+        }
+        if (key == "ShortcutHudStyle")
+        {
+            try { g_shortcutHudStyle = std::clamp(std::stoi(value), 0, 4); }
+            catch (...) { return false; }
+            return true;
+        }
+        if (key == "ShortcutHudInverted") { g_shortcutHudInverted = ParseEnabled(value); return true; }
+        if (key == "ShortcutHudBackgroundColor") { g_shortcutHudBackgroundColor = static_cast<std::uint32_t>(std::stoul(value, nullptr, 0)) & 0xFFFFFFu; return true; }
+        if (key == "ShortcutHudBackgroundOpacity") { g_shortcutHudBackgroundOpacity = std::clamp(std::stof(value), 0.0f, 100.0f); return true; }
+        if (key == "ShortcutHudShowNames") { g_shortcutHudShowNames = ParseEnabled(value); return true; }
+        if (key == "ShortcutHudPositionX")
+        {
+            try { g_shortcutHudPositionX = std::clamp(std::stof(value), -1.0f, 1.0f); }
             catch (...) { return false; }
             return true;
         }
         if (key == "DrawEdgeEffectStyle")
         {
-            try { g_drawEdgeEffectStyle = std::clamp(std::stoi(value), 0, 10); }
+            try { g_drawEdgeEffectStyle = std::clamp(std::stoi(value), 0, 11); }
             catch (...) { return false; }
             return true;
         }
@@ -653,9 +714,31 @@ namespace Config
             else if (key == "BaseIconColor") color = &g_baseIconColor;
             else if (key == "OverflowBackgroundColor") color = &g_overflowBackgroundColor;
             else if (key == "OverflowBorderColor") color = &g_overflowBorderColor;
+            else if (key == "RadialLineColor") color = &g_radialLineColor;
+            else if (key == "OverflowLineColor") color = &g_overflowLineColor;
+            else if (key == "TopLineColor") color = &g_topLineColor;
+            else if (key == "BottomLineColor") color = &g_bottomLineColor;
+            else if (key == "DrawMarkColor") color = &g_drawMarkColor;
             if (color)
             {
                 *color = static_cast<std::uint32_t>(std::stoul(value, nullptr, 0)) & 0xFFFFFFu;
+                return true;
+            }
+
+            static constexpr std::array<const char*,
+                static_cast<std::size_t>(MenuThemeColor::Count)> menuThemeKeys{
+                "MenuPrimaryTitleColor", "MenuSubtitleColor", "MenuPrimaryTextColor",
+                "MenuSecondaryTextColor", "MenuMutedTextColor", "MenuSliderValueColor",
+                "MenuDividerColor", "MenuButtonBackgroundColor", "MenuRaisedBackgroundColor",
+                "MenuSliderBackgroundColor", "MenuHoverBackgroundColor", "MenuBorderNormalColor",
+                "MenuBorderHoverColor", "MenuSliderFillColor", "MenuSliderFillActiveColor",
+                "MenuSliderTickColor", "MenuEditorSuccessColor", "MenuEditorErrorColor",
+                "MenuQuickDrawLineColor" };
+            for (std::size_t i = 0; i < menuThemeKeys.size(); ++i)
+            {
+                if (key != menuThemeKeys[i]) continue;
+                g_menuThemeColors[i] = static_cast<std::uint32_t>(
+                    std::stoul(value, nullptr, 0)) & 0xFFFFFFu;
                 return true;
             }
 
@@ -713,7 +796,11 @@ namespace Config
             else if (key == "TopOpacity") target = &g_topOpacity;
             else if (key == "BottomOpacity") target = &g_bottomOpacity;
             else if (key == "FontSizeScale") { target = &g_fontSizeScale; minimum = 1.0f; maximum = 2.5f; }
-            else if (key == "DrawMarkDistance") { target = &g_drawMarkDistance; minimum = 0.0f; maximum = 100.0f; }
+            else if (key == "DrawMarkDistance") { target = &g_drawMarkDistance; minimum = 0.0f; maximum = 600.0f; }
+            else if (key == "ShortcutPreviewPositionX") { target = &g_shortcutPreviewPositionX; minimum = -100.0f; maximum = 100.0f; }
+            else if (key == "ShortcutPreviewPositionY") { target = &g_shortcutPreviewPositionY; minimum = -100.0f; maximum = 100.0f; }
+            else if (key == "ShortcutHudNamePositionX") { target = &g_shortcutHudNamePositionX; minimum = -100.0f; maximum = 100.0f; }
+            else if (key == "ShortcutHudNamePositionY") { target = &g_shortcutHudNamePositionY; minimum = -100.0f; maximum = 100.0f; }
             else if (key == "SideRadialPosition") target = &g_sideRadialPosition;
             else if (key == "TopVerticalPosition") target = &g_topVerticalPosition;
             else if (key == "BottomVerticalPosition") target = &g_bottomVerticalPosition;
@@ -806,11 +893,22 @@ namespace Config
         write("StardustEnabled", g_stardustEnabled ? 1 : 0);
         write("DrawEffectsGameplay", g_drawEffectsGameplay ? 1 : 0);
         write("DrawEffectsEditor", g_drawEffectsEditor ? 1 : 0);
-        write("ShortcutFeedbackStyle", g_shortcutFeedbackStyle);
+        write("ShortcutPreviewStyle", g_shortcutFeedbackStyle);
+        write("ShortcutPreviewPositionX", g_shortcutPreviewPositionX);
+        write("ShortcutPreviewPositionY", g_shortcutPreviewPositionY);
+        write("ShortcutHudStyle", g_shortcutHudStyle);
+        write("ShortcutHudInverted", g_shortcutHudInverted ? 1 : 0);
+        write("ShortcutHudShowNames", g_shortcutHudShowNames ? 1 : 0);
+        write("ShortcutHudNamePositionX", g_shortcutHudNamePositionX);
+        write("ShortcutHudNamePositionY", g_shortcutHudNamePositionY);
+        write("ShortcutHudPositionX", g_shortcutHudPositionX);
+        write("ShortcutHudBackgroundColor", g_shortcutHudBackgroundColor);
+        write("ShortcutHudBackgroundOpacity", g_shortcutHudBackgroundOpacity);
         write("DrawEdgeEffectStyle", g_drawEdgeEffectStyle);
         write("DrawEdgeEffectSize", g_drawEdgeEffectSize);
         write("DrawEdgeEffectOpacity", g_drawEdgeEffectOpacity);
         write("DrawMarkStyle", g_drawMarkStyle);
+        write("DrawMarkColor", g_drawMarkColor);
         write("StardustFade", g_stardustFade);
         write("FontSizeScale", g_fontSizeScale); write("DrawMarkDistance", g_drawMarkDistance); write("FontFamily", g_fontFamily);
         write("CenterOpacity", g_centerOpacity); write("RadialQuantity", g_radialQuantity);
@@ -820,6 +918,17 @@ namespace Config
         write("ItemBackgroundOpacity", g_itemBackgroundOpacity); write("ItemBorderColor", g_itemBorderColor);
         write("ItemBorderOpacity", g_itemBorderOpacity); write("IconSize", g_iconSize);
         write("BaseIconColor", g_baseIconColor); write("BaseIconOpacity", g_baseIconOpacity);
+        static constexpr std::array<const char*,
+            static_cast<std::size_t>(MenuThemeColor::Count)> menuThemeKeys{
+            "MenuPrimaryTitleColor", "MenuSubtitleColor", "MenuPrimaryTextColor",
+            "MenuSecondaryTextColor", "MenuMutedTextColor", "MenuSliderValueColor",
+            "MenuDividerColor", "MenuButtonBackgroundColor", "MenuRaisedBackgroundColor",
+            "MenuSliderBackgroundColor", "MenuHoverBackgroundColor", "MenuBorderNormalColor",
+            "MenuBorderHoverColor", "MenuSliderFillColor", "MenuSliderFillActiveColor",
+            "MenuSliderTickColor", "MenuEditorSuccessColor", "MenuEditorErrorColor",
+            "MenuQuickDrawLineColor" };
+        for (std::size_t i = 0; i < menuThemeKeys.size(); ++i)
+            write(menuThemeKeys[i], g_menuThemeColors[i]);
         const auto writeItemStyle = [&](std::string_view prefix, const ItemStyleConfig& style) {
             write(std::string(prefix) + "Quantity", style.quantity);
             write(std::string(prefix) + "GeneralItemSize", style.generalSize);
@@ -869,6 +978,10 @@ namespace Config
         write("ItemNameOpacity", g_itemNameOpacity); write("ItemNamePositionX", g_itemNamePositionX);
         write("ItemNamePositionY", g_itemNamePositionY); write("SideOpacity", g_sideOpacity);
         write("TopOpacity", g_topOpacity); write("BottomOpacity", g_bottomOpacity);
+        write("RadialLineColor", g_radialLineColor); write("OverflowLineColor", g_overflowLineColor);
+        write("TopLineColor", g_topLineColor);
+        write("BottomLineColor", g_bottomLineColor);
+        write("DrawMarkColor", g_drawMarkColor);
         write("SideRadialPosition", g_sideRadialPosition); write("TopVerticalPosition", g_topVerticalPosition);
         write("BottomVerticalPosition", g_bottomVerticalPosition); write("TopHorizontalStretch", g_topHorizontalStretch);
         write("BottomHorizontalStretch", g_bottomHorizontalStretch);
@@ -1229,12 +1342,59 @@ namespace Config
                 }
                 else if (key == "ShortcutFeedbackStyle")
                 {
-                    try { g_shortcutFeedbackStyle = std::clamp(std::stoi(value), 0, 3); }
+                    try
+                    {
+                        const int legacy = std::clamp(std::stoi(value), 0, 3);
+                        g_shortcutFeedbackStyle = legacy == 3 ? 2 : (legacy == 1 ? 1 : 0);
+                        g_shortcutHudStyle = legacy == 2 ? 1 : 0;
+                    }
+                    catch (...) {}
+                }
+                else if (key == "ShortcutPreviewStyle")
+                {
+                    try { g_shortcutFeedbackStyle = std::clamp(std::stoi(value), 0, 2); }
+                    catch (...) {}
+                }
+                else if (key == "ShortcutPreviewPositionX" || key == "ShortcutPreviewPositionY" ||
+                    key == "ShortcutHudNamePositionX" || key == "ShortcutHudNamePositionY")
+                {
+                    try
+                    {
+                        const float parsed = std::clamp(std::stof(value), -100.0f, 100.0f);
+                        if (key == "ShortcutPreviewPositionX") g_shortcutPreviewPositionX = parsed;
+                        else if (key == "ShortcutPreviewPositionY") g_shortcutPreviewPositionY = parsed;
+                        else if (key == "ShortcutHudNamePositionX") g_shortcutHudNamePositionX = parsed;
+                        else g_shortcutHudNamePositionY = parsed;
+                    }
+                    catch (...) {}
+                }
+                else if (key == "ShortcutHudStyle")
+                {
+                    try { g_shortcutHudStyle = std::clamp(std::stoi(value), 0, 4); }
+                    catch (...) {}
+                }
+                else if (key == "ShortcutHudInverted")
+                    g_shortcutHudInverted = ParseEnabled(value);
+                else if (key == "ShortcutHudShowNames")
+                    g_shortcutHudShowNames = ParseEnabled(value);
+                else if (key == "ShortcutHudPositionX")
+                {
+                    try { g_shortcutHudPositionX = std::clamp(std::stof(value), -1.0f, 1.0f); }
+                    catch (...) {}
+                }
+                else if (key == "ShortcutHudBackgroundColor")
+                {
+                    try { g_shortcutHudBackgroundColor = static_cast<std::uint32_t>(std::stoul(value, nullptr, 0)) & 0xFFFFFFu; }
+                    catch (...) {}
+                }
+                else if (key == "ShortcutHudBackgroundOpacity")
+                {
+                    try { g_shortcutHudBackgroundOpacity = std::clamp(std::stof(value), 0.0f, 100.0f); }
                     catch (...) {}
                 }
                 else if (key == "DrawEdgeEffectStyle")
                 {
-                    try { g_drawEdgeEffectStyle = std::clamp(std::stoi(value), 0, 10); }
+                    try { g_drawEdgeEffectStyle = std::clamp(std::stoi(value), 0, 11); }
                     catch (...) {}
                 }
                 else if (key == "DrawEdgeEffectSize" || key == "DrawEdgeEffectOpacity")
@@ -1273,7 +1433,7 @@ namespace Config
                 {
                     try
                     {
-                        g_drawMarkDistance = std::clamp(std::stof(value), 0.0f, 100.0f);
+                        g_drawMarkDistance = std::clamp(std::stof(value), 0.0f, 600.0f);
                     }
                     catch (...)
                     {
@@ -1281,13 +1441,15 @@ namespace Config
                     }
                 }
                 else if (key == "ItemBagPositionX" || key == "ItemBagPositionY" ||
-                    key == "ItemBagExpandedScale")
+                    key == "ItemBagExpandedScale" || key == "QuickDrawSecondaryBagRadius")
                 {
                     try
                     {
                         const float parsed = std::stof(value);
                         if (key == "ItemBagExpandedScale")
                             g_itemBagExpandedScale = std::clamp(parsed, 0.5f, 3.0f);
+                        else if (key == "QuickDrawSecondaryBagRadius")
+                            g_quickDrawSecondaryBagRadius = std::clamp(parsed, 56.0f, 420.0f);
                         else if (key == "ItemBagPositionX")
                             g_itemBagPositionX = std::clamp(parsed, -1.0f, 100.0f);
                         else
@@ -1356,7 +1518,8 @@ namespace Config
                 }
                 if (key == "ItemBackgroundColor" || key == "ItemBorderColor" ||
                     key == "BaseIconColor" || key == "OverflowBackgroundColor" ||
-                    key == "OverflowBorderColor")
+                    key == "OverflowBorderColor" || key == "RadialLineColor" || key == "OverflowLineColor" ||
+                    key == "TopLineColor" || key == "BottomLineColor" || key == "DrawMarkColor")
                 {
                     try
                     {
@@ -1365,9 +1528,34 @@ namespace Config
                         else if (key == "ItemBorderColor") g_itemBorderColor = parsed;
                         else if (key == "BaseIconColor") g_baseIconColor = parsed;
                         else if (key == "OverflowBackgroundColor") g_overflowBackgroundColor = parsed;
-                        else g_overflowBorderColor = parsed;
+                        else if (key == "OverflowBorderColor") g_overflowBorderColor = parsed;
+                        else if (key == "RadialLineColor") g_radialLineColor = parsed;
+                        else if (key == "OverflowLineColor") g_overflowLineColor = parsed;
+                        else if (key == "TopLineColor") g_topLineColor = parsed;
+                        else if (key == "BottomLineColor") g_bottomLineColor = parsed;
+                        else g_drawMarkColor = parsed;
                     }
                     catch (...) {}
+                }
+                static constexpr std::array<const char*,
+                    static_cast<std::size_t>(MenuThemeColor::Count)> menuThemeKeys{
+                    "MenuPrimaryTitleColor", "MenuSubtitleColor", "MenuPrimaryTextColor",
+                    "MenuSecondaryTextColor", "MenuMutedTextColor", "MenuSliderValueColor",
+                    "MenuDividerColor", "MenuButtonBackgroundColor", "MenuRaisedBackgroundColor",
+                    "MenuSliderBackgroundColor", "MenuHoverBackgroundColor", "MenuBorderNormalColor",
+                    "MenuBorderHoverColor", "MenuSliderFillColor", "MenuSliderFillActiveColor",
+                    "MenuSliderTickColor", "MenuEditorSuccessColor", "MenuEditorErrorColor",
+                    "MenuQuickDrawLineColor" };
+                for (std::size_t i = 0; i < menuThemeKeys.size(); ++i)
+                {
+                    if (key != menuThemeKeys[i]) continue;
+                    try
+                    {
+                        g_menuThemeColors[i] = static_cast<std::uint32_t>(
+                            std::stoul(value, nullptr, 0)) & 0xFFFFFFu;
+                    }
+                    catch (...) {}
+                    break;
                 }
                 static constexpr std::array<const char*, 7> potionKeys{
                     "PotionHealthColor", "PotionStaminaColor", "PotionMagickaColor",
@@ -1508,8 +1696,8 @@ namespace Config
         g_blurDraw = true;
         g_showGameplayDescription = false;
         g_coloredPotions = true;
-        g_coloredMagicSchools = false;
-        g_coloredItemEnchants = false;
+        g_coloredMagicSchools = true;
+        g_coloredItemEnchants = true;
         g_fastInventoryDrag = false;
         g_customIcons = false;
         g_customIconsHasPreference = false;
@@ -1548,6 +1736,7 @@ namespace Config
         g_schoolColors = kDefaultSchoolColors;
         g_magicElementColors = kDefaultMagicElementColors;
         g_enchantColors = kDefaultEnchantColors;
+        g_menuThemeColors = kDefaultMenuThemeColors;
         g_overflowOpacity = kDefaultOverflowOpacity;
         g_itemNameOpacity = kDefaultItemNameOpacity;
         g_itemNamePositionX = kDefaultItemNamePositionX;
@@ -1557,11 +1746,26 @@ namespace Config
         g_sideOpacity = kDefaultSideOpacity;
         g_topOpacity = kDefaultTopOpacity;
         g_bottomOpacity = kDefaultBottomOpacity;
+        g_radialLineColor = kDefaultRadialLineColor;
+        g_overflowLineColor = kDefaultOverflowLineColor;
+        g_topLineColor = kDefaultTopLineColor;
+        g_bottomLineColor = kDefaultBottomLineColor;
+        g_drawMarkColor = kDefaultDrawMarkColor;
         g_fontSizeScale = kDefaultFontSizeScale;
         g_drawMarkDistance = kDefaultDrawMarkDistance;
         g_drawEffectsGameplay = false;
         g_drawEffectsEditor = true;
         g_shortcutFeedbackStyle = 1;
+        g_shortcutPreviewPositionX = kDefaultShortcutPreviewPosition;
+        g_shortcutPreviewPositionY = kDefaultShortcutPreviewPosition;
+        g_shortcutHudStyle = 1;
+        g_shortcutHudInverted = false;
+        g_shortcutHudShowNames = false;
+        g_shortcutHudNamePositionX = kDefaultShortcutHudNamePosition;
+        g_shortcutHudNamePositionY = kDefaultShortcutHudNamePosition;
+        g_shortcutHudPositionX = 0.0f;
+        g_shortcutHudBackgroundColor = 0x141419;
+        g_shortcutHudBackgroundOpacity = 70.0f;
         g_drawEdgeEffectStyle = 0;
         g_drawEdgeEffectSize = kDefaultDrawEdgeEffectSize;
         g_drawEdgeEffectOpacity = kDefaultDrawEdgeEffectOpacity;
@@ -1576,6 +1780,7 @@ namespace Config
         g_itemBagPositionX = kDefaultItemBagPosition;
         g_itemBagPositionY = kDefaultItemBagPosition;
         g_itemBagExpandedScale = kDefaultItemBagExpandedScale;
+        g_quickDrawSecondaryBagRadius = kDefaultQuickDrawSecondaryBagRadius;
         Language::SetCurrent(g_language);
         SaveConfig();
     }
@@ -1696,6 +1901,18 @@ namespace Config
         SetIniValue(lines, "Layout", "IconSize", std::to_string(g_iconSize));
         SetIniValue(lines, "Layout", "BaseIconColor", std::to_string(g_baseIconColor));
         SetIniValue(lines, "Layout", "BaseIconOpacity", std::to_string(g_baseIconOpacity));
+        static constexpr std::array<const char*,
+            static_cast<std::size_t>(MenuThemeColor::Count)> menuThemeKeys{
+            "MenuPrimaryTitleColor", "MenuSubtitleColor", "MenuPrimaryTextColor",
+            "MenuSecondaryTextColor", "MenuMutedTextColor", "MenuSliderValueColor",
+            "MenuDividerColor", "MenuButtonBackgroundColor", "MenuRaisedBackgroundColor",
+            "MenuSliderBackgroundColor", "MenuHoverBackgroundColor", "MenuBorderNormalColor",
+            "MenuBorderHoverColor", "MenuSliderFillColor", "MenuSliderFillActiveColor",
+            "MenuSliderTickColor", "MenuEditorSuccessColor", "MenuEditorErrorColor",
+            "MenuQuickDrawLineColor" };
+        for (std::size_t i = 0; i < menuThemeKeys.size(); ++i)
+            SetIniValue(lines, "Layout", menuThemeKeys[i],
+                std::to_string(g_menuThemeColors[i]));
         SetIniValue(lines, "Layout", "OverflowSize", std::to_string(g_overflowSize));
         SetIniValue(lines, "Layout", "OverflowBackgroundColor", std::to_string(g_overflowBackgroundColor));
         SetIniValue(lines, "Layout", "OverflowBackgroundOpacity", std::to_string(g_overflowBackgroundOpacity));
@@ -1731,11 +1948,26 @@ namespace Config
         SetIniValue(lines, "Layout", "SideOpacity", std::to_string(g_sideOpacity));
         SetIniValue(lines, "Layout", "TopOpacity", std::to_string(g_topOpacity));
         SetIniValue(lines, "Layout", "BottomOpacity", std::to_string(g_bottomOpacity));
+        SetIniValue(lines, "Layout", "RadialLineColor", std::to_string(g_radialLineColor));
+        SetIniValue(lines, "Layout", "OverflowLineColor", std::to_string(g_overflowLineColor));
+        SetIniValue(lines, "Layout", "TopLineColor", std::to_string(g_topLineColor));
+        SetIniValue(lines, "Layout", "BottomLineColor", std::to_string(g_bottomLineColor));
+        SetIniValue(lines, "Layout", "DrawMarkColor", std::to_string(g_drawMarkColor));
         SetIniValue(lines, "Layout", "FontSizeScale", std::to_string(g_fontSizeScale));
         SetIniValue(lines, "Layout", "DrawMarkDistance", std::to_string(g_drawMarkDistance));
         SetIniValue(lines, "Layout", "DrawEffectsGameplay", g_drawEffectsGameplay ? "1" : "0");
         SetIniValue(lines, "Layout", "DrawEffectsEditor", g_drawEffectsEditor ? "1" : "0");
-        SetIniValue(lines, "Layout", "ShortcutFeedbackStyle", std::to_string(g_shortcutFeedbackStyle));
+        SetIniValue(lines, "Layout", "ShortcutPreviewStyle", std::to_string(g_shortcutFeedbackStyle));
+        SetIniValue(lines, "Layout", "ShortcutPreviewPositionX", std::to_string(g_shortcutPreviewPositionX));
+        SetIniValue(lines, "Layout", "ShortcutPreviewPositionY", std::to_string(g_shortcutPreviewPositionY));
+        SetIniValue(lines, "Layout", "ShortcutHudStyle", std::to_string(g_shortcutHudStyle));
+        SetIniValue(lines, "Layout", "ShortcutHudInverted", g_shortcutHudInverted ? "1" : "0");
+        SetIniValue(lines, "Layout", "ShortcutHudShowNames", g_shortcutHudShowNames ? "1" : "0");
+        SetIniValue(lines, "Layout", "ShortcutHudNamePositionX", std::to_string(g_shortcutHudNamePositionX));
+        SetIniValue(lines, "Layout", "ShortcutHudNamePositionY", std::to_string(g_shortcutHudNamePositionY));
+        SetIniValue(lines, "Layout", "ShortcutHudPositionX", std::to_string(g_shortcutHudPositionX));
+        SetIniValue(lines, "Layout", "ShortcutHudBackgroundColor", std::to_string(g_shortcutHudBackgroundColor));
+        SetIniValue(lines, "Layout", "ShortcutHudBackgroundOpacity", std::to_string(g_shortcutHudBackgroundOpacity));
         SetIniValue(lines, "Layout", "DrawEdgeEffectStyle", std::to_string(g_drawEdgeEffectStyle));
         SetIniValue(lines, "Layout", "DrawEdgeEffectSize", std::to_string(g_drawEdgeEffectSize));
         SetIniValue(lines, "Layout", "DrawEdgeEffectOpacity", std::to_string(g_drawEdgeEffectOpacity));
@@ -1749,6 +1981,7 @@ namespace Config
         SetIniValue(lines, "Settings", "ItemBagPositionX", std::to_string(g_itemBagPositionX));
         SetIniValue(lines, "Settings", "ItemBagPositionY", std::to_string(g_itemBagPositionY));
         SetIniValue(lines, "Settings", "ItemBagExpandedScale", std::to_string(g_itemBagExpandedScale));
+        SetIniValue(lines, "Settings", "QuickDrawSecondaryBagRadius", std::to_string(g_quickDrawSecondaryBagRadius));
         SetIniValue(lines, "Language", "Selected", g_language);
         RemoveIniSection(lines, "Layout");
         RemoveIniKey(lines, "Settings", "ShowItemPreviewGameplay");

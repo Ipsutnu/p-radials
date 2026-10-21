@@ -4,6 +4,7 @@
 #include "Config.h"
 #include "PCH.h"
 #include "Animation/Track/TrackEditor.h"
+#include "Menu/Armor.h"
 
 #include <RE/Skyrim.h>
 #include <SKSE/SKSE.h>
@@ -21,7 +22,9 @@ namespace Serialization
     constexpr std::uint32_t kSerializationID = 'WHLW';
     constexpr std::uint32_t kRecordRadials    = 'RADS';
     constexpr std::uint32_t kRecordQuickDraw  = 'QDRW';
-    constexpr std::uint32_t kQuickDrawVersion = 3;
+    constexpr std::uint32_t kQuickDrawVersion = 5;
+    constexpr std::uint32_t kRecordArmorLoadouts = 'ARMR';
+    constexpr std::uint32_t kArmorLoadoutVersion = 4;
 
     // Versão antiga: apenas FormID.
     constexpr std::uint32_t kVersionLegacy = 1;
@@ -809,6 +812,15 @@ namespace Serialization
             spdlog::error("SERIALIZATION SAVE | quick draw OpenRecord failed");
         }
 
+        if (a_intfc->OpenRecord(kRecordArmorLoadouts, kArmorLoadoutVersion))
+        {
+            Armor::Save(a_intfc);
+        }
+        else
+        {
+            spdlog::error("SERIALIZATION SAVE | armor loadouts OpenRecord failed");
+        }
+
         spdlog::info(
             "SERIALIZATION SAVE COMPLETE | side={} | top={} | bottom={} | bag={}",
             Menu::g_sideItems.size(),
@@ -831,6 +843,7 @@ namespace Serialization
 
         ClearRadials();
         Menu::ClearQuickDraw();
+        Armor::Clear();
 
         // ============================================================
         // REDEFINE AS TRAVAS ANTES DO CARREGAMENTO
@@ -1009,6 +1022,13 @@ namespace Serialization
                 break;
             }
 
+            case kRecordArmorLoadouts:
+            {
+                if (!Armor::Load(a_intfc, version, length))
+                    spdlog::warn("SERIALIZATION LOAD | armor loadouts ignored");
+                break;
+            }
+
             // ========================================================
             // REGISTRO DESCONHECIDO
             // ========================================================
@@ -1041,6 +1061,7 @@ namespace Serialization
 
         ClearRadials();
         Menu::ClearQuickDraw();
+        Armor::Clear();
 
         // ============================================================
         // REDEFINE AS CONFIGURAÇÕES DAS TRAVAS
@@ -1062,7 +1083,7 @@ namespace Serialization
         g_ignoreNextGRelease = false;
 
         spdlog::info(
-            "SERIALIZATION REVERT | radials and locks reset"
+            "SERIALIZATION REVERT | radials, armor loadouts and locks reset"
         );
     }
 

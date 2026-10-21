@@ -216,6 +216,58 @@ RE::BSEventNotifyControl InputHandler::ProcessEvent(
 
             if (button)
             {
+                // O Keyboard Hub consome as teclas antes do fluxo normal,
+                // inclusive em runtimes que codificam PrintScreen como scan
+                // estendido. Capture-o aqui, antes do handler modal, usando
+                // a mesma comparação tolerante a backend usada no restante
+                // do Input.
+                if (Menu::IsQuickDrawKeyboardBrowserOpen() &&
+                    button->GetDevice() == RE::INPUT_DEVICE::kKeyboard &&
+                    button->IsDown() &&
+                    button->GetRuntimeData().heldDownSecs <= 0.0f &&
+                    MatchesKeyboardVirtualKey(button->GetIDCode(), VK_SNAPSHOT))
+                {
+                    Printscreen::Request();
+                    button->GetRuntimeData().value = 0.0f;
+                    button->GetRuntimeData().heldDownSecs = 0.0f;
+                    button->SetUserEvent("");
+                    button->SetIDCode(0xFF);
+                    continue;
+                }
+
+                // Enquanto o diálogo de nome do preset do Custom Radial está
+                // aberto, ele é um campo de texto modal. Isso vem antes dos
+                // atalhos globais para que, por exemplo, "X" seja digitado
+                // no nome em vez de fechar/alternar a interface.
+                if (button->GetDevice() == RE::INPUT_DEVICE::kKeyboard &&
+                    button->IsDown() &&
+                    button->GetRuntimeData().heldDownSecs <= 0.0f &&
+                    TrackEditor::KeyboardInput(button->GetIDCode(), true))
+                {
+                    button->GetRuntimeData().value = 0.0f;
+                    button->GetRuntimeData().heldDownSecs = 0.0f;
+                    button->SetUserEvent("");
+                    button->SetIDCode(0xFF);
+                    continue;
+                }
+
+                // O nome de layout do WheelSettings também é um campo modal.
+                // Isto precisa ficar neste primeiro loop, antes da leitura de
+                // First/Second Key logo abaixo; o segundo loop já recebe o
+                // evento tarde demais, depois que o atalho global foi usado.
+                if (button->GetDevice() == RE::INPUT_DEVICE::kKeyboard)
+                {
+                    const bool firstPress = button->IsDown() &&
+                        button->GetRuntimeData().heldDownSecs <= 0.0f;
+                    if (Menu::SettingsLayoutKeyboardInput(button->GetIDCode(), firstPress))
+                    {
+                        button->GetRuntimeData().value = 0.0f;
+                        button->GetRuntimeData().heldDownSecs = 0.0f;
+                        button->SetUserEvent("");
+                        button->SetIDCode(0xFF);
+                        continue;
+                    }
+                }
 
                 // ============================================================
                 // CAPTURA DA TECLA NO SETTINGS
@@ -430,7 +482,32 @@ RE::BSEventNotifyControl InputHandler::ProcessEvent(
         using Key = RE::BSWin32GamepadDevice::Key;
         bool handled = false;
 
-        if (gamepadSettingsOpen)
+        if (Menu::IsQuickDrawEditorOpen())
+        {
+            if (id == Key::kA || id == Key::kX)
+            {
+                if (firstPress)
+                    handled = Menu::HandleQuickDrawGamepadPrimary();
+            }
+            else if (firstPress && id == Key::kB)
+                handled = Menu::HandleQuickDrawGamepadBack();
+            else if (firstPress && id == Key::kUp)
+                handled = Menu::HandleQuickDrawGamepadDirectional(0, -1);
+            else if (firstPress && id == Key::kDown)
+                handled = Menu::HandleQuickDrawGamepadDirectional(0, 1);
+            else if (firstPress && id == Key::kLeft)
+                handled = Menu::HandleQuickDrawGamepadDirectional(-1, 0);
+            else if (firstPress && id == Key::kRight)
+                handled = Menu::HandleQuickDrawGamepadDirectional(1, 0);
+        }
+        else if (Menu::IsQuickDrawKeyboardBrowserOpen())
+        {
+            // Hub e Armor Hub terão navegação própria; por ora nenhum D-pad
+            // pode vazar para o cursor global do WheelSettings.
+            handled = firstPress && (id == Key::kUp || id == Key::kDown ||
+                id == Key::kLeft || id == Key::kRight);
+        }
+        else if (gamepadSettingsOpen)
         {
             if (id == Key::kA || id == Key::kX)
             {
@@ -733,11 +810,12 @@ RE::BSEventNotifyControl InputHandler::ProcessEvent(
         }
     }
 
-    // O HUD de hotkeys é uma interface do Wheel no gameplay, apesar de não
-    // abrir uma janela/radial. Mantê-lo neste fluxo também permite que o
-    // PrintScreen seja capturado pelo nosso sistema enquanto ele está visível.
+    // O HUD de hotkeys e o Keyboard Hub são interfaces do Wheel mesmo sem
+    // abrir o radial normal. Mantê-los neste fluxo permite que PrintScreen
+    // seja composto pelo nosso sistema enquanto qualquer um estiver visível.
     const bool hotkeyHudVisible = Menu::IsQuickDrawHotkeyHudVisible();
-    if (!g_showWindow && !settingsOpen && !hotkeyHudVisible)
+    const bool keyboardHubOpen = Menu::IsQuickDrawKeyboardBrowserOpen();
+    if (!g_showWindow && !settingsOpen && !hotkeyHudVisible && !keyboardHubOpen)
     {
         return RE::BSEventNotifyControl::kContinue;
     }

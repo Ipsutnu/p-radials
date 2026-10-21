@@ -18,6 +18,15 @@
 
 namespace
 {
+    ImU32 ThemeColor(Config::MenuThemeColor color, int alpha = 255)
+    {
+        const auto rgb = Config::g_menuThemeColors[static_cast<std::size_t>(color)];
+        return IM_COL32(
+            static_cast<int>((rgb >> 16) & 0xFF),
+            static_cast<int>((rgb >> 8) & 0xFF),
+            static_cast<int>(rgb & 0xFF), std::clamp(alpha, 0, 255));
+    }
+
     bool g_open = false;
     int g_selectedID = -1;
     // A peça primária mantém o gizmo. As demais são adicionadas com Ctrl e
@@ -1136,45 +1145,52 @@ namespace
     }
 
     void Button(ImDrawList* draw, const Rect& rect, const char* text,
-        bool active = false, bool darkActiveText = false)
+        bool active = false, bool darkActiveText = false,
+        float borderOpacity = 1.0f)
     {
-        const ImU32 fill = active ? IM_COL32(205, 190, 150, 220) : IM_COL32(30, 31, 37, 235);
+        const ImU32 fill = active ? ThemeColor(Config::MenuThemeColor::SliderFill, 220) :
+            ThemeColor(Config::MenuThemeColor::ButtonBackground, 235);
         draw->AddRectFilled(rect.min, rect.max, fill, 5.0f);
-        draw->AddRect(rect.min, rect.max, IM_COL32(210, 200, 175, 180), 5.0f, 0, 1.2f);
+        draw->AddRect(rect.min, rect.max, ThemeColor(active ? Config::MenuThemeColor::BorderHover : Config::MenuThemeColor::BorderNormal,
+            static_cast<int>(180.0f * borderOpacity)), 5.0f, 0, 1.2f);
         const ImVec2 size = ImGui::CalcTextSize(text);
         draw->AddText(ImVec2((rect.min.x + rect.max.x - size.x) * 0.5f,
             (rect.min.y + rect.max.y - size.y) * 0.5f),
-            active && darkActiveText ? IM_COL32(20, 21, 25, 255) : IM_COL32(245, 242, 230, 255), text);
+            active && darkActiveText ? ThemeColor(Config::MenuThemeColor::ButtonBackground) :
+            ThemeColor(Config::MenuThemeColor::PrimaryText), text);
     }
 
     void TransparentButton(ImDrawList* draw, const Rect& rect, const char* text,
         bool active = false)
     {
         draw->AddRect(rect.min, rect.max,
-            active ? IM_COL32(225, 210, 170, 220) : IM_COL32(170, 165, 155, 150),
+            ThemeColor(active ? Config::MenuThemeColor::BorderHover : Config::MenuThemeColor::BorderNormal,
+                active ? 220 : 150),
             5.0f, 0, active ? 1.8f : 1.2f);
         const ImVec2 size = ImGui::CalcTextSize(text);
         draw->AddText(ImVec2((rect.min.x + rect.max.x - size.x) * 0.5f,
             (rect.min.y + rect.max.y - size.y) * 0.5f),
-            IM_COL32(245, 242, 230, 255), text);
+            ThemeColor(Config::MenuThemeColor::PrimaryText), text);
     }
 
-    void DisabledButton(ImDrawList* draw, const Rect& rect, const char* text)
+    void DisabledButton(ImDrawList* draw, const Rect& rect, const char* text,
+        float borderOpacity = 1.0f)
     {
-        draw->AddRectFilled(rect.min, rect.max, IM_COL32(24, 25, 29, 115), 5.0f);
-        draw->AddRect(rect.min, rect.max, IM_COL32(75, 75, 80, 115), 5.0f);
+        draw->AddRectFilled(rect.min, rect.max, ThemeColor(Config::MenuThemeColor::ButtonBackground, 115), 5.0f);
+        draw->AddRect(rect.min, rect.max, ThemeColor(Config::MenuThemeColor::BorderNormal,
+            static_cast<int>(115.0f * borderOpacity)), 5.0f);
         const ImVec2 size = ImGui::CalcTextSize(text);
         draw->AddText(ImVec2((rect.min.x + rect.max.x - size.x) * 0.5f,
             (rect.min.y + rect.max.y - size.y) * 0.5f),
-            IM_COL32(125, 125, 130, 155), text);
+            ThemeColor(Config::MenuThemeColor::MutedText, 155), text);
     }
 
     void DisabledValueSlider(ImDrawList* draw, const Rect& rect, const char* label)
     {
         draw->AddText(ImVec2(rect.min.x, rect.min.y - 24.0f),
-            IM_COL32(120, 120, 125, 180), label);
-        draw->AddRectFilled(rect.min, rect.max, IM_COL32(24, 25, 29, 120), 5.0f);
-        draw->AddRect(rect.min, rect.max, IM_COL32(75, 75, 80, 120), 5.0f);
+            ThemeColor(Config::MenuThemeColor::MutedText, 180), label);
+        draw->AddRectFilled(rect.min, rect.max, ThemeColor(Config::MenuThemeColor::SliderBackground, 120), 5.0f);
+        // draw->AddRect(rect.min, rect.max, IM_COL32(75, 75, 80, 42), 5.0f);
     }
 
     // Rótulos dourados precisam permanecer legíveis tanto sobre o canvas claro
@@ -1191,20 +1207,20 @@ namespace
         float value, float minimum, float maximum, bool integer)
     {
         GoldText(draw, ImVec2(rect.min.x, rect.min.y - 24.0f),
-            IM_COL32(225, 207, 165, 255), label);
-        draw->AddRectFilled(rect.min, rect.max, IM_COL32(28, 29, 35, 210), 5.0f);
+            ThemeColor(Config::MenuThemeColor::PrimaryTitle), label);
+        draw->AddRectFilled(rect.min, rect.max, ThemeColor(Config::MenuThemeColor::SliderBackground, 210), 5.0f);
         const float t = std::clamp((value - minimum) /
             std::max(maximum - minimum, 0.001f), 0.0f, 1.0f);
         draw->AddRectFilled(rect.min,
             ImVec2(rect.min.x + (rect.max.x - rect.min.x) * t, rect.max.y),
-            IM_COL32(210, 195, 155, 220), 5.0f);
-        draw->AddRect(rect.min, rect.max, IM_COL32(220, 210, 185, 190), 5.0f);
+            ThemeColor(Config::MenuThemeColor::SliderFill, 220), 5.0f);
+        // draw->AddRect(rect.min, rect.max, IM_COL32(220, 210, 185, 67), 5.0f);
         const std::string text = integer
             ? std::to_string(static_cast<int>(std::lround(value)))
             : std::format("{:.0f}%", value);
         const ImVec2 size = ImGui::CalcTextSize(text.c_str());
         draw->AddText(ImVec2(rect.max.x - size.x, rect.min.y - 24.0f),
-            IM_COL32(235, 232, 220, 255), text.c_str());
+            ThemeColor(Config::MenuThemeColor::SliderValue), text.c_str());
     }
 
     void PieceButton(ImDrawList* draw, const Rect& rect, Track::PieceKind kind)
@@ -1213,8 +1229,8 @@ namespace
             (rect.min.y + rect.max.y) * 0.5f);
         const float buttonRadius = std::min(rect.max.x - rect.min.x,
             rect.max.y - rect.min.y) * 0.46f;
-        draw->AddCircleFilled(center, buttonRadius, IM_COL32(30, 31, 37, 170), 48);
-        draw->AddCircle(center, buttonRadius, IM_COL32(210, 200, 175, 180), 48, 1.4f);
+        draw->AddCircleFilled(center, buttonRadius, ThemeColor(Config::MenuThemeColor::ButtonBackground, 170), 48);
+        draw->AddCircle(center, buttonRadius, ThemeColor(Config::MenuThemeColor::BorderNormal, 180), 48, 1.4f);
         const auto points = Track::SamplePieceLocal(kind, 28);
         std::vector<ImVec2> preview;
         preview.reserve(points.size());
@@ -1225,7 +1241,7 @@ namespace
                 center.y + point.y * scale);
         if (preview.size() > 1)
             draw->AddPolyline(preview.data(), static_cast<int>(preview.size()),
-                IM_COL32(235, 225, 200, 235), 0, 2.2f);
+                ThemeColor(Config::MenuThemeColor::PrimaryText, 235), 0, 2.2f);
     }
 
     void FinishFreeDraw()
@@ -1489,7 +1505,7 @@ namespace TrackEditor
         const float ox = panelX + 20.0f;
         const float top = viewportMin.y;
         GoldText(draw, ImVec2(ox, top + 20.0f),
-            IM_COL32(225, 207, 165, 255), Tr("custom_radial_editor"));
+            ThemeColor(Config::MenuThemeColor::PrimaryTitle), Tr("custom_radial_editor"));
 
         g_selectButton = {};
         // Linha 1: gerenciamento de presets.
@@ -1497,25 +1513,25 @@ namespace TrackEditor
         g_presetLoad = { ImVec2(ox + 120, top + 54), ImVec2(ox + 230, top + 88) };
         g_presetReset = { ImVec2(ox + 240, top + 54), ImVec2(ox + 350, top + 88) };
         const bool presetCanSave = Track::IsValid(Track::CustomLayout());
-        if (presetCanSave) Button(draw, g_presetSave, Tr("save"));
+        if (presetCanSave) Button(draw, g_presetSave, Tr("save"), false, false, 0.42f);
         else
         {
-            draw->AddRectFilled(g_presetSave.min, g_presetSave.max, IM_COL32(25, 26, 31, 120), 5.0f);
-            draw->AddRect(g_presetSave.min, g_presetSave.max, IM_COL32(100, 100, 100, 100), 5.0f);
+            draw->AddRectFilled(g_presetSave.min, g_presetSave.max, ThemeColor(Config::MenuThemeColor::ButtonBackground, 120), 5.0f);
+            draw->AddRect(g_presetSave.min, g_presetSave.max, ThemeColor(Config::MenuThemeColor::BorderNormal, 42), 5.0f);
             draw->AddText(ImVec2(g_presetSave.min.x + 34, g_presetSave.min.y + 9),
-                IM_COL32(135, 135, 135, 150), Tr("save"));
+                ThemeColor(Config::MenuThemeColor::MutedText, 150), Tr("save"));
         }
-        Button(draw, g_presetLoad, Tr("load"), g_presetListOpen);
-        Button(draw, g_presetReset, Tr("reset"));
+        Button(draw, g_presetLoad, Tr("load"), g_presetListOpen, false, 0.42f);
+        Button(draw, g_presetReset, Tr("reset"), false, false, 0.42f);
 
         // Linha 2: - e + ocupam o antigo espaço do Zoom -, enquanto Reset
         // View usa o antigo botão Zoom + sem mudar sua largura.
         g_zoomOut = { ImVec2(ox, top + 96), ImVec2(ox + 80, top + 130) };
         g_zoomIn = { ImVec2(ox + 90, top + 96), ImVec2(ox + 170, top + 130) };
         g_reset = { ImVec2(ox + 180, top + 96), ImVec2(ox + 350, top + 130) };
-        Button(draw, g_zoomOut, "-");
-        Button(draw, g_zoomIn, "+");
-        Button(draw, g_reset, Tr("reset_view"));
+        Button(draw, g_zoomOut, "-", false, false, 0.42f);
+        Button(draw, g_zoomIn, "+", false, false, 0.42f);
+        Button(draw, g_reset, Tr("reset_view"), false, false, 0.42f);
 
         // Os dois submenus agora ocupam a antiga linha inteira de Reset
         // View. Fechados dividem a linha; ao abrir, um deles desce e cresce
@@ -1625,15 +1641,15 @@ namespace TrackEditor
             rect = { ImVec2(x, y), ImVec2(x + width, y + submenuHeaderHeight) };
         
             draw->AddRectFilled(rect.min, rect.max,
-                open ? IM_COL32(26, 28, 34, 82) : IM_COL32(26, 28, 34, 230), 5.0f);
+                ThemeColor(Config::MenuThemeColor::RaisedBackground, open ? 82 : 230), 5.0f);
         
             //draw->AddRect(rect.min, rect.max, IM_COL32(190, 160, 96, 195), 5.0f);
         
             GoldText(draw, ImVec2(rect.min.x + 14.0f, rect.min.y + 8.0f),
-                IM_COL32(232, 216, 177, 255), label);
+                ThemeColor(Config::MenuThemeColor::PrimaryTitle), label);
         
             GoldText(draw, ImVec2(rect.max.x - 23.0f, rect.min.y + 7.0f),
-                IM_COL32(232, 216, 177, 255), open ? "-" : "+");
+                ThemeColor(Config::MenuThemeColor::PrimaryTitle), open ? "-" : "+");
         };
 
         // Durante o recolhimento, o submenu ainda participa do layout até
@@ -1771,14 +1787,14 @@ namespace TrackEditor
         const float sy = (g_panelClipTop - (top + 190.0f)) - g_panelScroll;
         draw->PushClipRect(ImVec2(panelX, g_panelClipTop),
             ImVec2(viewportMax.x, g_panelClipBottom), true);
-        GoldText(draw, ImVec2(ox, top + 202 + sy), IM_COL32(225, 207, 165, 255), Tr("pieces"));
+        GoldText(draw, ImVec2(ox, top + 202 + sy), ThemeColor(Config::MenuThemeColor::PrimaryTitle), Tr("pieces"));
         draw->AddLine(ImVec2(ox + 72, top + 212 + sy), ImVec2(ox + 350, top + 212 + sy),
-            IM_COL32(190, 150, 70, 210), 1.2f);
+            ThemeColor(Config::MenuThemeColor::Divider, 210), 1.2f);
         g_drawPathButton = { ImVec2(ox + 127, top + 244 + sy), ImVec2(ox + 223, top + 340 + sy) };
         const ImVec2 drawPathCenter(ox + 175.0f, top + 292.0f + sy);
         draw->AddCircleFilled(drawPathCenter, 44.0f,
-            g_freeDrawTool ? IM_COL32(120, 108, 78, 235) : IM_COL32(30, 31, 37, 185), 48);
-        draw->AddCircle(drawPathCenter, 45.0f, IM_COL32(225, 207, 165, 230), 48, 1.7f);
+            g_freeDrawTool ? ThemeColor(Config::MenuThemeColor::HoverBackground, 235) : ThemeColor(Config::MenuThemeColor::ButtonBackground, 185), 48);
+        draw->AddCircle(drawPathCenter, 45.0f, ThemeColor(Config::MenuThemeColor::BorderHover, 230), 48, 1.7f);
         // Ícone próprio do DRAW: uma onda lenta e contínua, sem afetar a
         // ferramenta. O movimento é exclusivamente visual.
         constexpr int waveSegments = 28;
@@ -1793,13 +1809,13 @@ namespace TrackEditor
                 waveAmplitude;
             draw->PathLineTo(ImVec2(x, y));
         }
-        draw->PathStroke(IM_COL32(245, 238, 218, 245), 0, 2.4f);
+        draw->PathStroke(ThemeColor(Config::MenuThemeColor::PrimaryText, 245), 0, 2.4f);
 
         GoldText(draw, ImVec2(ox + 235, top + 282 + sy),
-            IM_COL32(225, 207, 165, 255), Tr("draw_path"));
+            ThemeColor(Config::MenuThemeColor::PrimaryTitle), Tr("draw_path"));
         g_smoothDrawButton = { ImVec2(ox + 12, top + 268 + sy),
             ImVec2(ox + 112, top + 316 + sy) };
-        Button(draw, g_smoothDrawButton, Tr("smooth_line"), g_smoothDraw, true);
+        Button(draw, g_smoothDrawButton, Tr("smooth_line"), g_smoothDraw, true, 0.42f);
         g_drawSmoothingSlider = { ImVec2(ox, top + 365 + sy),
             ImVec2(ox + 350, top + 387 + sy) };
         if (g_activeSlider == EditorSlider::DrawSmoothing && g_smoothDraw)
@@ -1819,8 +1835,8 @@ namespace TrackEditor
                 IM_COL32(120, 120, 125, 180), Tr("smoothing_amount"));
             draw->AddRectFilled(g_drawSmoothingSlider.min,
                 g_drawSmoothingSlider.max, IM_COL32(24, 25, 29, 120), 5.0f);
-            draw->AddRect(g_drawSmoothingSlider.min, g_drawSmoothingSlider.max,
-                IM_COL32(75, 75, 80, 120), 5.0f);
+            // draw->AddRect(g_drawSmoothingSlider.min, g_drawSmoothingSlider.max,
+            //     IM_COL32(75, 75, 80, 42), 5.0f);
         }
         for (std::size_t i = 0; i < kPieceKinds.size(); ++i)
         {
@@ -1840,15 +1856,15 @@ namespace TrackEditor
         const ImVec2 curveCenter((g_geometryDrawButton.min.x + g_geometryDrawButton.max.x) * 0.5f,
             (g_geometryDrawButton.min.y + g_geometryDrawButton.max.y) * 0.5f);
         draw->AddCircleFilled(curveCenter, 40.0f,
-            g_geometryDrawTool ? IM_COL32(120, 108, 78, 235) : IM_COL32(30, 31, 37, 185), 48);
-        draw->AddCircle(curveCenter, 41.0f, IM_COL32(225, 207, 165, 230), 48, 1.7f);
+            g_geometryDrawTool ? ThemeColor(Config::MenuThemeColor::HoverBackground, 235) : ThemeColor(Config::MenuThemeColor::ButtonBackground, 185), 48);
+        draw->AddCircle(curveCenter, 41.0f, ThemeColor(Config::MenuThemeColor::BorderHover, 230), 48, 1.7f);
         draw->PathLineTo(ImVec2(curveCenter.x - 22.0f, curveCenter.y + 8.0f));
         draw->PathBezierCubicCurveTo(ImVec2(curveCenter.x - 10.0f, curveCenter.y - 20.0f),
             ImVec2(curveCenter.x + 10.0f, curveCenter.y + 18.0f),
             ImVec2(curveCenter.x + 22.0f, curveCenter.y - 9.0f), 20);
-        draw->PathStroke(IM_COL32(245, 238, 218, 245), 0, 2.5f);
+        draw->PathStroke(ThemeColor(Config::MenuThemeColor::PrimaryText, 245), 0, 2.5f);
         GoldText(draw, ImVec2(ox + 235.0f, top + 1068.0f + sy),
-            IM_COL32(225, 207, 165, 255), Tr("curve_circle_tool"));
+            ThemeColor(Config::MenuThemeColor::PrimaryTitle), Tr("curve_circle_tool"));
 
         const float compactButtonWidth = 171.0f;
         const float compactButtonGap = 8.0f;
@@ -1864,17 +1880,17 @@ namespace TrackEditor
             ImVec2(ox + 350, top + 1402 + sy) };
         if (Selected())
         {
-            Button(draw, g_invertHorizontalButton, Tr("flip_horizontal"));
-            Button(draw, g_invertVerticalButton, Tr("flip_vertical"));
-            Button(draw, g_duplicateSelectedButton, Tr("duplicate_selected"));
-            Button(draw, g_deleteSelectedButton, Tr("delete_selected"));
+            Button(draw, g_invertHorizontalButton, Tr("flip_horizontal"), false, false, 0.42f);
+            Button(draw, g_invertVerticalButton, Tr("flip_vertical"), false, false, 0.42f);
+            Button(draw, g_duplicateSelectedButton, Tr("duplicate_selected"), false, false, 0.42f);
+            Button(draw, g_deleteSelectedButton, Tr("delete_selected"), false, false, 0.42f);
         }
         else
         {
-            DisabledButton(draw, g_invertHorizontalButton, Tr("flip_horizontal"));
-            DisabledButton(draw, g_invertVerticalButton, Tr("flip_vertical"));
-            DisabledButton(draw, g_duplicateSelectedButton, Tr("duplicate_selected"));
-            DisabledButton(draw, g_deleteSelectedButton, Tr("delete_selected"));
+            DisabledButton(draw, g_invertHorizontalButton, Tr("flip_horizontal"), 0.42f);
+            DisabledButton(draw, g_invertVerticalButton, Tr("flip_vertical"), 0.42f);
+            DisabledButton(draw, g_duplicateSelectedButton, Tr("duplicate_selected"), 0.42f);
+            DisabledButton(draw, g_deleteSelectedButton, Tr("delete_selected"), 0.42f);
         }
 
         g_resetRadialDrawing = {
@@ -1885,7 +1901,7 @@ namespace TrackEditor
             ImVec2(ox + 234, top + 1129 + sy), ImVec2(ox + 350, top + 1151 + sy) };
         g_eraserOverflowMode = {
             ImVec2(ox + 234, top + 1153 + sy), ImVec2(ox + 350, top + 1175 + sy) };
-        Button(draw, g_eraseRadialButton, Tr("editor_eraser"), g_eraseTool, true);
+        Button(draw, g_eraseRadialButton, Tr("editor_eraser"), g_eraseTool, true, 0.42f);
         g_resetRadialFlash = std::max(0.0f,
             g_resetRadialFlash - ImGui::GetIO().DeltaTime);
         const bool resetLit = g_resetRadialFlash > 0.0f;
@@ -1919,7 +1935,7 @@ namespace TrackEditor
             ImVec2(ox, top + 1276 + sy), ImVec2(ox + 350, top + 1298 + sy) };
         g_flipPoles = {
             ImVec2(ox + 35, top + 1410 + sy), ImVec2(ox + 315, top + 1452 + sy) };
-        Button(draw, g_flipPoles, Tr("clear_terminals"));
+        Button(draw, g_flipPoles, Tr("clear_terminals"), false, false, 0.42f);
         const auto sliderValue = [&](const Rect& rect, float minimum, float maximum) {
             return minimum + std::clamp(
                 (mouse.x - rect.min.x) / (rect.max.x - rect.min.x), 0.0f, 1.0f) *
@@ -1997,7 +2013,7 @@ namespace TrackEditor
                 (mouse.x - g_lineOpacitySlider.min.x) /
                 (g_lineOpacitySlider.max.x - g_lineOpacitySlider.min.x) * 100.0f,
                 0.0f, 100.0f);
-        draw->AddText(ImVec2(ox, top + 1472 + sy), IM_COL32(180, 180, 185, 255),
+        draw->AddText(ImVec2(ox, top + 1472 + sy), ThemeColor(Config::MenuThemeColor::SecondaryText),
             Tr("editor_instructions"));
         draw->PopClipRect();
 
@@ -2017,7 +2033,7 @@ namespace TrackEditor
                 ImVec2(submenuX + submenuWidth,
                     g_radialShapeSlider.min.y - 26.0f + 316.0f * radialsContentT), true);
             GoldText(draw, ImVec2(g_radialShapeSlider.min.x,
-                g_radialShapeSlider.min.y - 24.0f), IM_COL32(225, 207, 165, 255),
+                g_radialShapeSlider.min.y - 24.0f), ThemeColor(Config::MenuThemeColor::PrimaryTitle),
                 Language::Get("radial_shape").c_str());
             const float shapeTrackY = (g_radialShapeSlider.min.y +
                 g_radialShapeSlider.max.y) * 0.5f;
@@ -2027,10 +2043,10 @@ namespace TrackEditor
             const float shapeTrackMaxX = g_radialShapeSlider.max.x - shapeTrackInset;
             draw->AddRectFilled(ImVec2(shapeTrackMinX, shapeTrackY - shapeTrackHalfHeight),
                 ImVec2(shapeTrackMaxX, shapeTrackY + shapeTrackHalfHeight),
-                IM_COL32(28, 29, 35, 220), 5.0f);
-            draw->AddRect(ImVec2(shapeTrackMinX, shapeTrackY - shapeTrackHalfHeight),
-                ImVec2(shapeTrackMaxX, shapeTrackY + shapeTrackHalfHeight),
-                IM_COL32(145, 145, 150, 150), 5.0f, 0, 1.2f);
+                ThemeColor(Config::MenuThemeColor::SliderBackground, 220), 5.0f);
+            // draw->AddRect(ImVec2(shapeTrackMinX, shapeTrackY - shapeTrackHalfHeight),
+            //     ImVec2(shapeTrackMaxX, shapeTrackY + shapeTrackHalfHeight),
+            //     IM_COL32(145, 145, 150, 53), 5.0f, 0, 1.2f);
             const int shapeCount = RadialShape::Count();
             const int selectedShape = std::clamp(
                 Config::g_radialShape, 0, shapeCount - 1);
@@ -2041,20 +2057,20 @@ namespace TrackEditor
                     shapeTrackY - shapeTrackHalfHeight + 0.5f),
                 ImVec2(shapeTrackMinX + shapeCell * (selectedShape + 1) - 0.2f,
                     shapeTrackY + shapeTrackHalfHeight - 0.2f),
-                IM_COL32(220, 210, 185, 235), 2.0f);
+                ThemeColor(Config::MenuThemeColor::SliderFill, 235), 2.0f);
             for (int i = 0; i <= shapeCount; ++i)
             {
                 const float x = shapeTrackMinX + shapeCell * i;
                 draw->AddLine(ImVec2(x, shapeTrackY - 5.0f),
                     ImVec2(x, shapeTrackY + 5.0f),
-                    IM_COL32(160, 160, 165, 180), 1.0f);
+                    ThemeColor(Config::MenuThemeColor::SliderTick, 38), 1.0f);
             }
             const char* shapeName = ShapeDisplayName(
                 static_cast<RadialShape::Style>(selectedShape));
             const ImVec2 shapeNameSize = ImGui::CalcTextSize(shapeName);
             GoldText(draw, ImVec2(g_radialShapeSlider.min.x +
                 ((g_radialShapeSlider.max.x - g_radialShapeSlider.min.x) - shapeNameSize.x) * 0.5f,
-                g_radialShapeSlider.max.y + 7.0f), IM_COL32(225, 220, 205, 255), shapeName);
+                g_radialShapeSlider.max.y + 7.0f), ThemeColor(Config::MenuThemeColor::PrimaryText), shapeName);
             drawSubmenuReset(g_radialShapeReset);
             ValueSlider(draw, g_radialRotationSlider, Tr("radial_rotation"),
                 Track::CustomLayout().radialRotation * 57.2957795f, -180.0f, 180.0f, true);
@@ -2072,7 +2088,7 @@ namespace TrackEditor
         }
 
         GoldText(draw, ImVec2(g_ghostItemsSlider.min.x,
-            g_ghostItemsSlider.min.y - 24.0f), IM_COL32(225, 207, 165, 255),
+            g_ghostItemsSlider.min.y - 24.0f), ThemeColor(Config::MenuThemeColor::PrimaryTitle),
             Tr("editor_ghost_items"));
         ValueSlider(draw, g_ghostItemsSlider, "",
             static_cast<float>(g_previewGhostItems), 0.0f, 50.0f, true);
@@ -2082,16 +2098,16 @@ namespace TrackEditor
                 ImVec2(submenuX + submenuWidth,
                     g_lineOpacitySlider.min.y - 26.0f + 64.0f * overflowContentT), true);
             draw->AddRectFilled(g_lineOpacitySlider.min, g_lineOpacitySlider.max,
-                IM_COL32(28, 29, 35, 210), 5.0f);
+                ThemeColor(Config::MenuThemeColor::SliderBackground, 210), 5.0f);
             const float opacityX = g_lineOpacitySlider.min.x +
                 (g_lineOpacitySlider.max.x - g_lineOpacitySlider.min.x) *
                 Track::CustomLayout().lineOpacity * 0.01f;
             draw->AddRectFilled(g_lineOpacitySlider.min,
-                ImVec2(opacityX, g_lineOpacitySlider.max.y), IM_COL32(210, 195, 155, 220), 5.0f);
-            draw->AddRect(g_lineOpacitySlider.min, g_lineOpacitySlider.max,
-                IM_COL32(220, 210, 185, 190), 5.0f);
+                ImVec2(opacityX, g_lineOpacitySlider.max.y), ThemeColor(Config::MenuThemeColor::SliderFill, 220), 5.0f);
+            // draw->AddRect(g_lineOpacitySlider.min, g_lineOpacitySlider.max,
+            //     IM_COL32(220, 210, 185, 67), 5.0f);
             GoldText(draw, ImVec2(g_lineOpacitySlider.min.x,
-                g_lineOpacitySlider.min.y - 24.0f), IM_COL32(225, 207, 165, 255),
+                g_lineOpacitySlider.min.y - 24.0f), ThemeColor(Config::MenuThemeColor::PrimaryTitle),
                 Tr("overflow_line_opacity"));
             drawSubmenuReset(g_overflowOpacityReset);
             draw->PopClipRect();
@@ -2129,9 +2145,10 @@ namespace TrackEditor
         g_save = { ImVec2(ox, viewportMax.y - 92), ImVec2(ox + 170, viewportMax.y - 50) };
         g_cancel = { ImVec2(ox + 180, viewportMax.y - 92), ImVec2(ox + 350, viewportMax.y - 50) };
         TransparentButton(draw, g_save, valid ? Tr("editor_confirm") : Tr("invalid"), valid);
-        Button(draw, g_cancel, Tr("cancel"));
-        draw->AddText(ImVec2(ox, viewportMax.y - 126), valid ? IM_COL32(145, 220, 155, 255) :
-            IM_COL32(230, 130, 120, 255), valid ? Tr("circuit_ready") : ValidationReason(reason));
+        Button(draw, g_cancel, Tr("cancel"), false, false, 0.42f);
+        draw->AddText(ImVec2(ox, viewportMax.y - 126), valid ?
+            ThemeColor(Config::MenuThemeColor::EditorSuccess) : ThemeColor(Config::MenuThemeColor::EditorError),
+            valid ? Tr("circuit_ready") : ValidationReason(reason));
 
         g_canvasCenter = ImVec2((viewportMin.x + panelX) * 0.5f,
             (viewportMin.y + viewportMax.y) * 0.5f);
@@ -2263,7 +2280,7 @@ namespace TrackEditor
                 const ImU32 fill = gate == Track::CustomLayout().gates.end()
                     ? IM_COL32(35, 38, 48, 255)
                     : gate->kind == Track::GateKind::Entry
-                        ? IM_COL32(90, 210, 135, 245) : IM_COL32(225, 95, 85, 245);
+                        ? ThemeColor(Config::MenuThemeColor::EditorSuccess, 245) : ThemeColor(Config::MenuThemeColor::EditorError, 245);
                 draw->AddCircleFilled(p, hovered ? 10.0f : 8.0f, fill, 24);
                 draw->AddCircle(p, hovered ? 11.0f : 9.0f,
                     IM_COL32(225, 195, 120, 230), 24, 2.0f);
@@ -2282,9 +2299,9 @@ namespace TrackEditor
             const ImVec2 from = Track::GetPort(*a, connection.portA, center, radius).position;
             const ImVec2 to = Track::GetPort(*b, connection.portB, center, radius).position;
             const ImU32 fromColor = connection.sourceKind == Track::GateKind::Exit
-                ? IM_COL32(225, 95, 85, 235) : IM_COL32(90, 210, 135, 235);
+                ? ThemeColor(Config::MenuThemeColor::EditorError, 235) : ThemeColor(Config::MenuThemeColor::EditorSuccess, 235);
             const ImU32 toColor = connection.sourceKind == Track::GateKind::Exit
-                ? IM_COL32(90, 210, 135, 235) : IM_COL32(225, 95, 85, 235);
+                ? ThemeColor(Config::MenuThemeColor::EditorSuccess, 235) : ThemeColor(Config::MenuThemeColor::EditorError, 235);
             const ImVec2 middle((from.x + to.x) * 0.5f, (from.y + to.y) * 0.5f);
             draw->AddLine(from, middle, fromColor, 3.0f);
             draw->AddLine(middle, to, toColor, 3.0f);
@@ -2310,7 +2327,7 @@ namespace TrackEditor
             const float mainAngle = gate.mainAngle + Track::CustomLayout().radialRotation;
             const ImVec2 main = EditingRadialPoint(center, radius, mainAngle);
             const ImU32 color = gate.kind == Track::GateKind::Entry
-                ? IM_COL32(105, 210, 145, 235) : IM_COL32(225, 135, 105, 235);
+                ? ThemeColor(Config::MenuThemeColor::EditorSuccess, 235) : ThemeColor(Config::MenuThemeColor::EditorError, 235);
             draw->AddLine(main, rail, color, 3.0f);
             draw->AddCircleFilled(main, 7.0f, color, 24);
             const ImVec2 from = gate.kind == Track::GateKind::Entry ? main : rail;
@@ -2551,7 +2568,7 @@ namespace TrackEditor
         {
             g_gateMouse = mouse;
             const ImU32 color = g_gateToolKind == Track::GateKind::Entry
-                ? IM_COL32(105, 210, 145, 255) : IM_COL32(225, 95, 85, 255);
+                ? ThemeColor(Config::MenuThemeColor::EditorSuccess) : ThemeColor(Config::MenuThemeColor::EditorError);
             ImVec2 snapPoint{};
             int targetPiece = -1;
             int targetPort = -1;
@@ -2623,8 +2640,8 @@ namespace TrackEditor
                 draw->PathFillConvex(color);
             };
             slice(0.5235988f, 2.6179939f, IM_COL32(48, 50, 58, 255));
-            slice(2.6179939f, 4.7123890f, IM_COL32(225, 95, 85, 255));
-            slice(4.7123890f, 6.8067841f, IM_COL32(90, 210, 135, 255));
+            slice(2.6179939f, 4.7123890f, ThemeColor(Config::MenuThemeColor::EditorError));
+            slice(4.7123890f, 6.8067841f, ThemeColor(Config::MenuThemeColor::EditorSuccess));
             draw->AddCircle(p, 27.0f, IM_COL32(255, 250, 230, 255), 40, 2.2f);
         }
         if (g_eraseTool && mouse.x < g_panelLeft)
@@ -2708,21 +2725,40 @@ namespace TrackEditor
             const Rect box{ ImVec2(dialogCenter.x - 210, dialogCenter.y - 85),
                 ImVec2(dialogCenter.x + 210, dialogCenter.y + 85) };
             draw->AddRectFilled(box.min, box.max, IM_COL32(14, 16, 21, 248), 8.0f);
-            draw->AddRect(box.min, box.max, IM_COL32(220, 195, 140, 230), 8.0f, 0, 1.5f);
+            // draw->AddRect(box.min, box.max, IM_COL32(220, 195, 140, 230), 8.0f, 0, 1.5f);
             GoldText(draw, ImVec2(box.min.x + 18, box.min.y + 16),
                 IM_COL32(235, 220, 185, 255), Tr("preset_name"));
             const Rect field{ ImVec2(box.min.x + 18, box.min.y + 48),
                 ImVec2(box.max.x - 18, box.min.y + 83) };
             draw->AddRectFilled(field.min, field.max, IM_COL32(30, 32, 39, 245), 4.0f);
-            draw->AddRect(field.min, field.max, IM_COL32(200, 190, 165, 190), 4.0f);
-            draw->AddText(ImVec2(field.min.x + 10, field.min.y + 8),
+            // draw->AddRect(field.min, field.max, IM_COL32(200, 190, 165, 190), 4.0f);
+            const ImVec2 namePosition(field.min.x + 10, field.min.y + 8);
+            draw->AddText(namePosition,
                 IM_COL32(245, 242, 232, 255), g_presetName.c_str());
-            g_presetOK = { ImVec2(box.min.x + 52, box.max.y - 48),
-                ImVec2(box.min.x + 192, box.max.y - 14) };
-            g_presetCancel = { ImVec2(box.max.x - 192, box.max.y - 48),
-                ImVec2(box.max.x - 52, box.max.y - 14) };
-            Button(draw, g_presetOK, Tr("ok"));
-            Button(draw, g_presetCancel, Tr("cancel"));
+            // Cursor de inserção: o diálogo recebe todo teclado enquanto
+            // aberto e deixa explícito que o nome está em edição.
+            if (std::fmod(static_cast<float>(ImGui::GetTime()), 1.0f) < 0.52f)
+            {
+                const float cursorX = std::min(field.max.x - 10.0f,
+                    namePosition.x + ImGui::CalcTextSize(g_presetName.c_str()).x + 1.0f);
+                draw->AddLine(ImVec2(cursorX, field.min.y + 7.0f),
+                    ImVec2(cursorX, field.max.y - 7.0f),
+                    IM_COL32(245, 242, 232, 235), 1.35f);
+            }
+            g_presetOK = { ImVec2(box.min.x + 52, box.max.y - 58),
+                ImVec2(box.min.x + 192, box.max.y - 24) };
+            g_presetCancel = { ImVec2(box.max.x - 192, box.max.y - 58),
+                ImVec2(box.max.x - 52, box.max.y - 24) };
+            const auto drawPresetAction = [&](const Rect& rect, const char* label) {
+                draw->AddRectFilled(rect.min, rect.max, ThemeColor(Config::MenuThemeColor::ButtonBackground, 235), 5.0f);
+                // draw->AddRect(rect.min, rect.max, IM_COL32(210, 200, 175, 180), 5.0f, 0, 1.2f);
+                const ImVec2 labelSize = ImGui::CalcTextSize(label);
+                draw->AddText(ImVec2((rect.min.x + rect.max.x - labelSize.x) * 0.5f,
+                    (rect.min.y + rect.max.y - labelSize.y) * 0.5f),
+                    ThemeColor(Config::MenuThemeColor::PrimaryText), label);
+            };
+            drawPresetAction(g_presetOK, Tr("ok"));
+            drawPresetAction(g_presetCancel, Tr("cancel"));
         }
         draw->AddCircleFilled(mouse, 4.0f, IM_COL32(255, 255, 255, 230), 20);
         draw->PopClipRect();

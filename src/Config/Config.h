@@ -130,6 +130,55 @@ namespace Config
     extern std::array<std::uint32_t, 5> g_schoolColors;
     extern std::array<std::uint32_t, 3> g_magicElementColors;
     extern std::array<std::uint32_t, 5> g_enchantColors;
+    // Paleta compartilhada da interface.  Cada entrada guarda somente RGB;
+    // cada componente preserva a própria opacidade e animações existentes.
+    enum class MenuThemeColor : std::size_t
+    {
+        PrimaryTitle,
+        Subtitle,
+        PrimaryText,
+        SecondaryText,
+        MutedText,
+        SliderValue,
+        Divider,
+        ButtonBackground,
+        RaisedBackground,
+        SliderBackground,
+        HoverBackground,
+        BorderNormal,
+        BorderHover,
+        SliderFill,
+        SliderFillActive,
+        SliderTick,
+        EditorSuccess,
+        EditorError,
+        QuickDrawLine,
+        Count
+    };
+    inline constexpr std::array<std::uint32_t,
+        static_cast<std::size_t>(MenuThemeColor::Count)> kDefaultMenuThemeColors{
+        0xD7C396, // PrimaryTitle
+        0xCDBE9B, // Subtitle
+        0xEBE6D7, // PrimaryText
+        0xA5A096, // SecondaryText
+        0x9B968C, // MutedText
+        0xB4A582, // SliderValue
+        0xB4A582, // Divider
+        0x141419, // ButtonBackground
+        0x23242A, // RaisedBackground
+        0x191A1F, // SliderBackground
+        0x414146, // HoverBackground
+        0x73706A, // BorderNormal
+        0xFFFFFF, // BorderHover
+        0xBEB8AA, // SliderFill
+        0xEBE6D7, // SliderFillActive
+        0xB4B4B9, // SliderTick
+        0x5AD287, // EditorSuccess
+        0xE15F55, // EditorError
+        0xFFFFFF  // QuickDrawLine
+    };
+    extern std::array<std::uint32_t,
+        static_cast<std::size_t>(MenuThemeColor::Count)> g_menuThemeColors;
     extern float g_overflowOpacity;
     extern float g_itemNameOpacity;
     extern float g_itemNamePositionX;
@@ -144,12 +193,33 @@ namespace Config
     extern float g_sideOpacity;
     extern float g_topOpacity;
     extern float g_bottomOpacity;
+    extern std::uint32_t g_radialLineColor;
+    extern std::uint32_t g_overflowLineColor;
+    extern std::uint32_t g_topLineColor;
+    extern std::uint32_t g_bottomLineColor;
+    // Cor compartilhada por todos os estilos da marca orbital de Draw.
+    extern std::uint32_t g_drawMarkColor;
     extern float g_fontSizeScale;
     extern float g_drawMarkDistance;
     extern bool g_drawEffectsGameplay;
     extern bool g_drawEffectsEditor;
-    // 0 = nada; 1 = preview do item; 2 = HUD compacto; 3 = ícone compacto.
+    // 0 = nada; 1 = preview do item; 2 = ícone compacto.
     extern int g_shortcutFeedbackStyle;
+    // Deslocamentos percentuais relativos à área visível, mantendo 0 no
+    // ponto visual padrão de cada tipo de preview.
+    extern float g_shortcutPreviewPositionX;
+    extern float g_shortcutPreviewPositionY;
+    // 0 = nada; 1 = padrão; 2 = linha; 3 = lateral; 4 = RPG.
+    extern int g_shortcutHudStyle;
+    extern bool g_shortcutHudInverted;
+    extern bool g_shortcutHudShowNames;
+    extern float g_shortcutHudNamePositionX;
+    extern float g_shortcutHudNamePositionY;
+    // -1..1: deslocamento horizontal relativo ao espaço seguro do HUD.
+    extern float g_shortcutHudPositionX;
+    // Fundo compartilhado pelos ícones dos estilos de HUD de hotkey.
+    extern std::uint32_t g_shortcutHudBackgroundColor;
+    extern float g_shortcutHudBackgroundOpacity;
     extern int g_drawEdgeEffectStyle;
     extern float g_drawEdgeEffectSize;
     extern float g_drawEdgeEffectOpacity;
@@ -167,6 +237,8 @@ namespace Config
     extern float g_itemBagPositionX;
     extern float g_itemBagPositionY;
     extern float g_itemBagExpandedScale;
+    // Raio aberto da bolsa de Auto-Use secundário do Quick Draw.
+    extern float g_quickDrawSecondaryBagRadius;
 
     inline constexpr float kDefaultCenterOpacity = 100.0f;
     inline constexpr float kDefaultRadialQuantity = 13.0f;
@@ -214,12 +286,19 @@ namespace Config
     inline constexpr float kDefaultSideOpacity = 100.0f;
     inline constexpr float kDefaultTopOpacity = 100.0f;
     inline constexpr float kDefaultBottomOpacity = 100.0f;
+    inline constexpr std::uint32_t kDefaultRadialLineColor = 0xFFFFFF;
+    inline constexpr std::uint32_t kDefaultOverflowLineColor = 0xFFFFFF;
+    inline constexpr std::uint32_t kDefaultTopLineColor = 0xFFFFFF;
+    inline constexpr std::uint32_t kDefaultBottomLineColor = 0xFFFFFF;
+    inline constexpr std::uint32_t kDefaultDrawMarkColor = 0xFFFFFF;
+    inline constexpr float kDefaultShortcutPreviewPosition = 0.0f;
+    inline constexpr float kDefaultShortcutHudNamePosition = 0.0f;
     inline constexpr float kDefaultFontSizeScale = 1.3f;
     // Distância extra, em pixels virtuais, entre o marcador de Draw e a
     // borda do slot. Zero deixa o marcador tangente à borda.
     inline constexpr float kDefaultDrawMarkDistance = 5.0f;
-    inline constexpr float kDefaultDrawEdgeEffectSize = 100.0f;
-    inline constexpr float kDefaultDrawEdgeEffectOpacity = 100.0f;
+    inline constexpr float kDefaultDrawEdgeEffectSize = 130.0f;
+    inline constexpr float kDefaultDrawEdgeEffectOpacity = 10.0f;
     inline constexpr float kDefaultSideRadialPosition = 56.0f;
     inline constexpr float kDefaultTopVerticalPosition = 13.05f;
     inline constexpr float kDefaultBottomVerticalPosition = 45.76f;
@@ -227,6 +306,8 @@ namespace Config
     inline constexpr float kDefaultBottomHorizontalStretch = 42.86f;
     inline constexpr float kDefaultItemBagPosition = -1.0f;
     inline constexpr float kDefaultItemBagExpandedScale = 1.0f;
+    // Metade do limite máximo atual (420 px) na primeira abertura.
+    inline constexpr float kDefaultQuickDrawSecondaryBagRadius = 210.0f;
 
     // Obtém o caminho do arquivo: "Data/SKSE/Plugins/p-radials/p-radials.ini"
     std::filesystem::path GetConfigPath();

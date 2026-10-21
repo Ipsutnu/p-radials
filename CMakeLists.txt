@@ -48,6 +48,7 @@ add_commonlibsse_plugin(${PROJECT_NAME}
     SOURCES
         src/plugin.cpp
         src/Menu/Menu.cpp
+        src/Menu/Armor.cpp
         src/Config/Config.cpp
         src/Config/Language.cpp
         src/Utils/Logger.cpp

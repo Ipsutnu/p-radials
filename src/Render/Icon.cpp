@@ -567,6 +567,11 @@ namespace ItemIcon
             if (!a_armor)
                 return Type::DefaultArmor;
 
+            // Nem todo anel, sobretudo de mods, possui o keyword ArmorRing.
+            // O slot biped é a referência global usada por todos os menus.
+            if (a_armor->HasPartOf(RE::BIPED_MODEL::BipedObjectSlot::kRing))
+                return Type::ArmorRing;
+
 
             // --------------------------------------------------------
             // ESPECIAIS PRIMEIRO
