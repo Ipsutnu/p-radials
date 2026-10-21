@@ -854,6 +854,12 @@ namespace Menu
         float alpha = 0.0f;
         float appearDelay = 0.0f;
         int layoutOrdinal = -1;
+        // Quando uma inserção deslocaria a última célula de uma fila para o
+        // começo da seguinte, ela não atravessa a tela: apaga onde estava e
+        // reaparece na nova fila depois que a grade abre espaço.
+        ImVec2 rowWrapStartPosition{};
+        float rowWrapT = -1.0f;
+        bool rowWrapRelocated = false;
         bool wasEligible = false;
         bool removing = false;
         bool initialized = false;
@@ -877,8 +883,17 @@ namespace Menu
     static ImVec2 g_quickDrawArmorOkCenter{};
     static ImVec2 g_quickDrawArmorImportCenter{};
     static constexpr float kQuickDrawArmorActionButtonRadius = 29.4f;
+    static constexpr float kQuickDrawArmorOkButtonRadius =
+        kQuickDrawArmorActionButtonRadius + 10.0f;
     static int g_quickDrawKeyboardArmorLoadoutDragSource = 0;
+    // Clique curto abre o editor; somente após este limiar ele se torna drag.
+    static int g_quickDrawKeyboardPendingArmorLoadoutDragSource = 0;
+    static double g_quickDrawKeyboardPendingArmorLoadoutDragStart = 0.0;
     static float g_quickDrawKeyboardArmorEmblemDirection = 1.0f;
+    // Loadout removido pelo clique direito permanece desenhado por um curto
+    // fade antes de a estrutura persistida ser realmente apagada.
+    static int g_quickDrawKeyboardArmorRemovalKey = 0;
+    static float g_quickDrawKeyboardArmorRemovalT = -1.0f;
     static int g_quickDrawArmorInventoryHoverSlot = -1;
     static bool g_quickDrawArmorInventoryBagOpen = false;
     static ImVec2 g_quickDrawArmorInventoryBagCenter{};
@@ -18364,6 +18379,8 @@ namespace Menu
         g_quickDrawArmorDropTransition = {};
         g_quickDrawArmorNameEditing = false;
         g_quickDrawArmorNameFieldAlpha = 0.20f;
+        g_quickDrawKeyboardArmorRemovalKey = 0;
+        g_quickDrawKeyboardArmorRemovalT = -1.0f;
         g_quickDrawKeyboardArmorEmblemDirection = (std::rand() & 1) == 0 ? -1.0f : 1.0f;
         g_quickDrawKeyboardCards.clear();
         for (const auto& gesture : g_quickDrawGestures)
@@ -18416,6 +18433,9 @@ namespace Menu
         g_quickDrawKeyboardDragVisualT = 0.0f;
         g_quickDrawKeyboardDragSourceVisualKey = 0;
         g_quickDrawKeyboardDragSourceReturning = false;
+        g_quickDrawKeyboardArmorLoadoutDragSource = 0;
+        g_quickDrawKeyboardPendingArmorLoadoutDragSource = 0;
+        g_quickDrawKeyboardPendingArmorLoadoutDragStart = 0.0;
         g_quickDrawKeyboardPendingKeyRemove = false;
         g_quickDrawKeyboardPendingRemoveHotkey = 0;
         g_quickDrawKeyboardDragSourceHotkey = 0;
@@ -18436,6 +18456,8 @@ namespace Menu
         g_quickDrawArmorDropTransition = {};
         g_quickDrawArmorNameEditing = false;
         g_quickDrawArmorNameFieldAlpha = 0.20f;
+        g_quickDrawKeyboardArmorRemovalKey = 0;
+        g_quickDrawKeyboardArmorRemovalT = -1.0f;
         g_quickDrawKeyboardOpen = false;
         g_quickDrawKeyboardCards.clear();
         g_quickDrawKeyboardScroll = 0.0f;
@@ -18466,6 +18488,9 @@ namespace Menu
         g_quickDrawKeyboardDragVisualT = 0.0f;
         g_quickDrawKeyboardDragSourceVisualKey = 0;
         g_quickDrawKeyboardDragSourceReturning = false;
+        g_quickDrawKeyboardArmorLoadoutDragSource = 0;
+        g_quickDrawKeyboardPendingArmorLoadoutDragSource = 0;
+        g_quickDrawKeyboardPendingArmorLoadoutDragStart = 0.0;
         g_quickDrawKeyboardPendingKeyRemove = false;
         g_quickDrawKeyboardPendingRemoveHotkey = 0;
         g_quickDrawKeyboardDragSourceHotkey = 0;
@@ -18894,19 +18919,19 @@ namespace Menu
         g_quickDrawArmorImportCenter = ImVec2(center.x + 88.0f, buttonY);
         const float dt = std::clamp(ImGui::GetIO().DeltaTime, 0.0f, 0.05f);
         const auto drawButton = [&](const ImVec2& buttonCenter, ImU32 color,
-                                    const char* label) {
+                                    const char* label, float radius) {
             const bool hovered = IsSettingsCircleHovered(g_settingsMousePos,
-                buttonCenter, kQuickDrawArmorActionButtonRadius);
+                buttonCenter, radius);
             static std::array<float, 3> hoverT{};
             const int buttonIndex = label[0] == 'C' ? 0 : label[0] == 'O' ? 1 : 2;
             hoverT[buttonIndex] = AnimateSettingsValue(hoverT[buttonIndex],
                 hovered ? 1.0f : 0.0f, 12.0f, dt);
             const float buttonFloat = std::sin(time * 1.35f + buttonCenter.x * 0.01f) * 2.5f;
             const ImVec2 animatedCenter = buttonCenter + ImVec2(0.0f, buttonFloat);
-            draw->AddCircleFilled(animatedCenter, kQuickDrawArmorActionButtonRadius,
+            draw->AddCircleFilled(animatedCenter, radius,
                 FadeColor(MenuThemeColor(Config::MenuThemeColor::ButtonBackground, 220), alpha), 28);
             if (hoverT[buttonIndex] > 0.002f)
-                draw->AddCircle(animatedCenter, kQuickDrawArmorActionButtonRadius,
+                draw->AddCircle(animatedCenter, radius,
                     FadeColor(MenuThemeColor(Config::MenuThemeColor::BorderHover,
                         static_cast<int>(175.0f * hoverT[buttonIndex])), alpha), 28, 1.15f);
             const ImU32 contentColor = FadeColor(MenuThemeColor(Config::MenuThemeColor::PrimaryText, 176), alpha);
@@ -18936,9 +18961,12 @@ namespace Menu
                 draw->AddText(animatedCenter - textSize * 0.5f, contentColor, label);
             }
         };
-        drawButton(g_quickDrawArmorClearCenter, IM_COL32(50, 190, 95, 255), "CLEAR");
-        drawButton(g_quickDrawArmorOkCenter, IM_COL32(165, 75, 185, 255), "OK");
-        drawButton(g_quickDrawArmorImportCenter, IM_COL32(225, 50, 50, 255), "IMPORT");
+        drawButton(g_quickDrawArmorClearCenter, IM_COL32(50, 190, 95, 255), "CLEAR",
+            kQuickDrawArmorActionButtonRadius);
+        drawButton(g_quickDrawArmorOkCenter, IM_COL32(165, 75, 185, 255), "OK",
+            kQuickDrawArmorOkButtonRadius);
+        drawButton(g_quickDrawArmorImportCenter, IM_COL32(225, 50, 50, 255), "IMPORT",
+            kQuickDrawArmorActionButtonRadius);
 
         // O candidato vem do inventário real, não dos radiais/bag. A lista
         // pertence ao último slot clicado.
@@ -19338,6 +19366,17 @@ namespace Menu
         if (!draw || alpha <= 0.002f)
             return 0.0f;
 
+        if (g_quickDrawKeyboardArmorRemovalKey != 0)
+        {
+            g_quickDrawKeyboardArmorRemovalT += dt;
+            if (g_quickDrawKeyboardArmorRemovalT >= 0.62f)
+            {
+                Armor::ClearLoadout(g_quickDrawKeyboardArmorRemovalKey);
+                g_quickDrawKeyboardArmorRemovalKey = 0;
+                g_quickDrawKeyboardArmorRemovalT = -1.0f;
+            }
+        }
+
         // As teclas usam os VKs do layout ativo do Windows. KeyToString
         // resolve o rótulo conforme a disposição (QWERTY/AZERTY etc.) que o
         // jogador está usando, enquanto o desenho conserva a forma física.
@@ -19542,7 +19581,14 @@ namespace Menu
                     });
                 const bool hasBoundItem = key.key != 0 &&
                     boundCard != g_quickDrawKeyboardCards.end();
-                const bool hasArmorLoadout = key.key != 0 && Armor::HasLoadout(key.key);
+                const bool armorLoadoutRemoving = key.key != 0 &&
+                    key.key == g_quickDrawKeyboardArmorRemovalKey;
+                const bool hasArmorLoadout = key.key != 0 &&
+                    (Armor::HasLoadout(key.key) || armorLoadoutRemoving);
+                const float armorLoadoutAlpha = armorLoadoutRemoving
+                    ? std::clamp(1.0f - g_quickDrawKeyboardArmorRemovalT / 0.62f,
+                        0.0f, 1.0f)
+                    : 1.0f;
                 const bool pointerOverKey = key.key != 0 && PointInQuickDrawRect(
                     g_settingsMousePos, keyMin, keyMax);
                 const bool keyHovered = hasBoundItem && pointerOverKey;
@@ -19578,7 +19624,7 @@ namespace Menu
                         static_cast<float>(key.key) * 0.13f)) : 0.0f;
                 const ImU32 keyBackground = unavailable ? IM_COL32(32, 33, 39, 205) :
                     hasArmorLoadout ? IM_COL32(235, 232, 225,
-                        static_cast<int>(38.0f + 24.0f * armorPulse)) :
+                        static_cast<int>((38.0f + 24.0f * armorPulse) * armorLoadoutAlpha)) :
                     IM_COL32(25, 26, 32, 160);
                 draw->AddRectFilled(visualKeyMin, visualKeyMax,
                     FadeColor(keyBackground, keyAlpha), 7.0f);
@@ -19643,10 +19689,11 @@ namespace Menu
                                 keyCenter - ImVec2(radius, radius),
                                 keyCenter + ImVec2(radius, radius),
                                 ImVec2(0, 0), ImVec2(1, 1),
-                                FadeColor(MenuThemeColor(Config::MenuThemeColor::PrimaryText, 205), keyAlpha));
+                                FadeColor(MenuThemeColor(Config::MenuThemeColor::PrimaryText, 205),
+                                    keyAlpha * armorLoadoutAlpha));
                         }
                     }
-                    if (pointerOverKey && loadout)
+                    if (pointerOverKey && loadout && !armorLoadoutRemoving)
                     {
                         if (loadout->name[0] != '\0')
                         {
@@ -20327,6 +20374,22 @@ namespace Menu
                         (!wasEligible || oldOrdinal != visibleItemCount))
                     {
                         layoutChanged = true;
+                        // Só a peça que mudaria de fila recebe a transição
+                        // especial. As demais continuam interpolando seus
+                        // slots normalmente, abrindo espaço de forma suave.
+                        const int itemsPerPageForWrap = denseRows * denseColumns;
+                        const int oldWithinPage = oldOrdinal >= 0
+                            ? oldOrdinal % itemsPerPageForWrap : -1;
+                        const int newWithinPage = visibleItemCount % itemsPerPageForWrap;
+                        const int oldRow = oldWithinPage >= 0
+                            ? oldWithinPage / denseColumns : -1;
+                        const int newRow = newWithinPage / denseColumns;
+                        if (wasEligible && oldRow >= 0 && oldRow != newRow)
+                        {
+                            visual.rowWrapStartPosition = visual.position;
+                            visual.rowWrapT = 0.0f;
+                            visual.rowWrapRelocated = false;
+                        }
                     }
                     visibleLayoutOrdinals[index] = visibleItemCount++;
                 }
@@ -20480,6 +20543,9 @@ namespace Menu
             }
             else
             {
+                const bool rowWrapTransition = visual.rowWrapT >= 0.0f;
+                if (rowWrapTransition)
+                    visual.rowWrapT += dt;
                 if (visual.removing)
                 {
                     // A remoção é intencionalmente mais lenta que a entrada.
@@ -20498,7 +20564,16 @@ namespace Menu
                     // A rolagem lateral continua instantânea como antes:
                     // cruzar a borda não zera o alpha. Só uma entrada
                     // realmente nova recebe fade curto.
-                    if (visual.appearDelay > 0.0f)
+                    if (rowWrapTransition)
+                    {
+                        // Primeira metade: fecha onde estava. Segunda: a
+                        // peça já está invisível na nova fila e volta em
+                        // fade, sem percorrer a largura da tela.
+                        visual.alpha = AnimateSettingsValue(visual.alpha,
+                            visual.rowWrapRelocated ? 1.0f : 0.0f,
+                            14.0f, dt);
+                    }
+                    else if (visual.appearDelay > 0.0f)
                         visual.alpha = 0.0f;
                     else if (visual.alpha < 0.995f)
                         visual.alpha = AnimateSettingsValue(visual.alpha, 1.0f, 8.0f, dt);
@@ -20521,7 +20596,26 @@ namespace Menu
             {
                 // Reflow da lista: cada sobrevivente parte da posição que já
                 // tinha e procura o novo slot com desaceleração suave.
-                if (g_quickDrawKeyboardSourceReflowRemaining > 0.0f)
+                if (visual.rowWrapT >= 0.0f)
+                {
+                    constexpr float rowWrapFadeDuration = 0.20f;
+                    if (!visual.rowWrapRelocated &&
+                        visual.rowWrapT >= rowWrapFadeDuration)
+                    {
+                        visual.basePosition = target;
+                        visual.position = target;
+                        visual.denseHoverOffset = {};
+                        visual.rowWrapRelocated = true;
+                    }
+                    if (visual.rowWrapRelocated &&
+                        visual.rowWrapT >= rowWrapFadeDuration * 2.0f &&
+                        visual.alpha >= 0.98f)
+                    {
+                        visual.rowWrapT = -1.0f;
+                        visual.rowWrapRelocated = false;
+                    }
+                }
+                else if (g_quickDrawKeyboardSourceReflowRemaining > 0.0f)
                 {
                     const float settle = 1.0f - std::exp(-9.0f * dt);
                     visual.basePosition += (target - visual.basePosition) * settle;
@@ -20711,7 +20805,12 @@ namespace Menu
             entry.center = position;
             entry.radius = 38.0f;
             const bool hovered = visual.hoverT > 0.02f;
-            if (hovered)
+            // A animação de hover pode permanecer alguns frames durante o
+            // retorno à lista. Ela serve para a estética, mas não pode
+            // ressuscitar um preview sem o cursor estar fisicamente no item.
+            const bool pointerInside = IsSettingsCircleHovered(g_settingsMousePos,
+                position, entry.radius + 5.0f);
+            if (hovered && pointerInside)
             {
                 g_quickDrawKeyboardVisualPreviewItem = entry.item;
                 g_quickDrawKeyboardVisualPreviewWanted = true;
@@ -20913,6 +21012,17 @@ namespace Menu
             }
             g_quickDrawKeyboardPendingKeyRemove = false;
             g_quickDrawKeyboardPendingRemoveHotkey = 0;
+        }
+        // Um clique curto no loadout abre seu editor. Só após 0,35 s de
+        // pressão o mesmo gesto passa a ser um drag para outra tecla.
+        if (g_quickDrawKeyboardPendingArmorLoadoutDragSource != 0 &&
+            g_quickDrawKeyboardArmorLoadoutDragSource == 0 &&
+            ImGui::GetTime() - g_quickDrawKeyboardPendingArmorLoadoutDragStart >= 0.35)
+        {
+            g_quickDrawKeyboardArmorLoadoutDragSource =
+                g_quickDrawKeyboardPendingArmorLoadoutDragSource;
+            g_quickDrawKeyboardPendingArmorLoadoutDragSource = 0;
+            g_quickDrawKeyboardPendingArmorLoadoutDragStart = 0.0;
         }
         g_quickDrawKeyboardVisualModeT = AnimateSettingsValue(
             g_quickDrawKeyboardVisualModeT,
@@ -21580,10 +21690,14 @@ namespace Menu
                 }
                 g_quickDrawKeyboardHoveredCard = -1;
                 g_quickDrawKeyboardRemovingPreviewActive = false;
-                // O cartão já acabou seu próprio fade; agora o modelo e o
-                // nome fecham juntos, suavemente, antes de serem limpos.
-                g_quickDrawKeyboardRemovingPreviewNameAlpha = 1.0f;
-                BeginSettingsPreviewFadeOut();
+                // O Hub não atualiza o fade global do WheelSettings. Deixar
+                // esse fluxo ativo aqui prendia o último preview atrás do
+                // teclado até outro hover substituí-lo. O fade é local.
+                g_quickDrawKeyboardRemovingPreviewNameAlpha = 0.0f;
+                g_quickDrawKeyboardVisualPreviewWanted = false;
+                g_settingsPreviewFadeOut = false;
+                g_settingsPreviewFadeAlpha = 1.0f;
+                g_settingsPreviewFadeFrame = -1;
                 g_quickDrawKeyboardReflowCooldown = 0.38f;
                 g_quickDrawKeyboardCards.erase(g_quickDrawKeyboardCards.begin() + i);
                 baseCenters.erase(baseCenters.begin() + i);
@@ -24263,7 +24377,7 @@ namespace Menu
                     return true;
                 }
                 if (button == 0 && IsSettingsCircleHovered(g_settingsMousePos,
-                        g_quickDrawArmorOkCenter, kQuickDrawArmorActionButtonRadius + 4.0f))
+                        g_quickDrawArmorOkCenter, kQuickDrawArmorOkButtonRadius + 4.0f))
                 {
                     Armor::CommitEdit();
                     return true;
@@ -24325,6 +24439,25 @@ namespace Menu
             }
             if (!pressed)
             {
+                if (button == 0 && g_quickDrawKeyboardPendingArmorLoadoutDragSource != 0)
+                {
+                    const int sourceKey = g_quickDrawKeyboardPendingArmorLoadoutDragSource;
+                    g_quickDrawKeyboardPendingArmorLoadoutDragSource = 0;
+                    g_quickDrawKeyboardPendingArmorLoadoutDragStart = 0.0;
+                    for (const auto& slot : g_quickDrawKeyboardVisualSlots)
+                    {
+                        if (slot.key != sourceKey)
+                            continue;
+                        if (PointInQuickDrawRect(g_settingsMousePos, slot.min, slot.max) &&
+                            Armor::HasLoadout(sourceKey))
+                        {
+                            g_quickDrawArmorInventoryVisuals.clear();
+                            Armor::BeginEdit(sourceKey);
+                        }
+                        break;
+                    }
+                    return true;
+                }
                 if (button == 0 && g_quickDrawKeyboardArmorLoadoutDragSource != 0)
                 {
                     const int sourceKey = g_quickDrawKeyboardArmorLoadoutDragSource;
@@ -24464,13 +24597,30 @@ namespace Menu
                 return true;
             if (button == 1 && g_quickDrawKeyboardVisualModeT > 0.50f)
             {
+                // Este bloco roda antes das teclas visuais. Não consumir o
+                // clique direito aqui: um bind de item usa o mini-ícone da
+                // própria tecla e também precisa receber a remoção.
+                for (auto& card : g_quickDrawKeyboardCards)
+                {
+                    if (card.removeT >= 0.0f || card.testOnly ||
+                        !IsSettingsCircleHovered(g_settingsMousePos,
+                            card.keyboardMiniCenter, 34.0f))
+                        continue;
+                    for (auto& gesture : g_quickDrawGestures)
+                    {
+                        if (SameQuickDrawKey(gesture.key, card.key))
+                            gesture.hotkey = 0;
+                    }
+                    card.removeT = 0.0f;
+                    return true;
+                }
                 for (const auto& slot : g_quickDrawKeyboardVisualSlots)
                 {
                     if (PointInQuickDrawRect(g_settingsMousePos, slot.min, slot.max) &&
                         Armor::HasLoadout(slot.key))
                     {
-                        SpawnSettingsDeleteParticles((slot.min + slot.max) * 0.5f, 34.0f);
-                        Armor::ClearLoadout(slot.key);
+                        g_quickDrawKeyboardArmorRemovalKey = slot.key;
+                        g_quickDrawKeyboardArmorRemovalT = 0.0f;
                         return true;
                     }
                 }
@@ -24643,7 +24793,6 @@ namespace Menu
                                 if (SameQuickDrawKey(gesture.key, card.key))
                                     gesture.hotkey = 0;
                             }
-                            SpawnSettingsDeleteParticles(card.keyboardMiniCenter, 26.0f);
                             card.removeT = 0.0f;
                             return true;
                         }
@@ -24678,14 +24827,17 @@ namespace Menu
                             });
                         if (button == 1 && Armor::HasLoadout(slot.key))
                         {
-                            SpawnSettingsDeleteParticles((slot.min + slot.max) * 0.5f, 34.0f);
-                            Armor::ClearLoadout(slot.key);
+                            g_quickDrawKeyboardArmorRemovalKey = slot.key;
+                            g_quickDrawKeyboardArmorRemovalT = 0.0f;
                             return true;
                         }
                         if (button == 0 && !hasItemBind)
                         {
                             if (Armor::HasLoadout(slot.key))
-                                g_quickDrawKeyboardArmorLoadoutDragSource = slot.key;
+                            {
+                                g_quickDrawKeyboardPendingArmorLoadoutDragSource = slot.key;
+                                g_quickDrawKeyboardPendingArmorLoadoutDragStart = ImGui::GetTime();
+                            }
                             else
                             {
                                 g_quickDrawArmorInventoryVisuals.clear();
