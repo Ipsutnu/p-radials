@@ -503,6 +503,11 @@ RE::BSEventNotifyControl InputHandler::ProcessEvent(
         if (!button || button->GetDevice() != RE::INPUT_DEVICE::kGamepad)
             continue;
 
+        // A navegação nativa do inventário por controle não desloca o cursor
+        // Scaleform. Marque esta modalidade já no primeiro botão, antes de
+        // abrir o drag, para o indicador acompanhar a linha selecionada.
+        Menu::UseGamepadInventoryAnchor();
+
         const std::uint32_t id = button->GetIDCode();
         const bool previousDeviceState = AnyActivationHeld();
         if (!Gamepad::IsBinding(Config::g_toggleKey))
@@ -1048,6 +1053,9 @@ RE::BSEventNotifyControl InputHandler::ProcessEvent(
             // ========================================================
             // INVENTÁRIO
             // ========================================================
+
+            if (Menu::IsInventoryOpen())
+                Menu::UsePhysicalInventoryAnchor();
 
             if (g_radialMode == RadialMode::Inventory &&
                 g_inventoryDragMode == InventoryDragMode::KeyDrag)

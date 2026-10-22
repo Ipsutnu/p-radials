@@ -123,6 +123,8 @@ namespace Menu {
         RE::ButtonEvent* buttonEvent);
 
     void GamepadMoveCursor(float x, float y, bool rightStick);
+    void UseGamepadInventoryAnchor();
+    void UsePhysicalInventoryAnchor();
     bool GamepadOpenRadial(RadialSide side);
     void GamepadShoulder(int direction);
     void GamepadStepSideSelection(int direction);

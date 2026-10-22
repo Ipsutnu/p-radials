@@ -220,6 +220,10 @@ namespace Config
     // Fundo compartilhado pelos ícones dos estilos de HUD de hotkey.
     extern std::uint32_t g_shortcutHudBackgroundColor;
     extern float g_shortcutHudBackgroundOpacity;
+    // Deslocamento percentual da âncora central usada exclusivamente pelo
+    // marcador dourado e pelo drag iniciado no inventário via gamepad.
+    extern float g_inventoryGamepadIconPositionX;
+    extern float g_inventoryGamepadIconPositionY;
     extern int g_drawEdgeEffectStyle;
     extern float g_drawEdgeEffectSize;
     extern float g_drawEdgeEffectOpacity;
@@ -293,6 +297,7 @@ namespace Config
     inline constexpr std::uint32_t kDefaultDrawMarkColor = 0xFFFFFF;
     inline constexpr float kDefaultShortcutPreviewPosition = 0.0f;
     inline constexpr float kDefaultShortcutHudNamePosition = 0.0f;
+    inline constexpr float kDefaultInventoryGamepadIconPosition = 0.0f;
     inline constexpr float kDefaultFontSizeScale = 1.3f;
     // Distância extra, em pixels virtuais, entre o marcador de Draw e a
     // borda do slot. Zero deixa o marcador tangente à borda.

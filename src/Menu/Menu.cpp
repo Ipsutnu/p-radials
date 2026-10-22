@@ -61,6 +61,10 @@ bool g_inventoryMode = false;
 bool g_inventoryDragging = false;
 bool g_inventoryItemReleased = false;
 bool g_inventoryOverflowMorphActive = false;
+// O cursor físico do Scaleform não acompanha a seleção por gamepad. Esta
+// âncora existe somente para o controle: mouse/teclado continuam usando as
+// coordenadas físicas do inventário sem qualquer alteração.
+bool g_inventoryGamepadAnchorActive = false;
 
 RE::TESForm* g_draggedInventoryItem = nullptr;
 
@@ -760,6 +764,7 @@ namespace Menu
     static float g_quickDrawKeyboardConstellationMaxScrollX = 0.0f;
     static ImVec2 g_quickDrawKeyboardCloseCenter{};
     static float g_quickDrawKeyboardCloseRadius = 22.0f;
+    static float g_quickDrawKeyboardCloseHoverT = 0.0f;
     // Hover no botão de fechar apenas pré-visualiza o HUD; não seleciona nem
     // executa uma hotkey.
     static bool g_quickDrawKeyboardCloseHudPreviewWanted = false;
@@ -1002,6 +1007,9 @@ namespace Menu
     static float g_quickDrawEditorHotkeyClickFlash = 0.0f;
     static float g_quickDrawEditorHotkeyClearClickFlash = 0.0f;
     static float g_quickDrawEditorHotkeyShadowT = 0.0f;
+    static float g_quickDrawEditorHotkeyWaitingT = 0.0f;
+    static float g_quickDrawEditorHotkeyGateHoverT = 0.0f;
+    static float g_quickDrawEditorHotkeyKeyboardHoverT = 0.0f;
     static RadialItem g_quickDrawEditorHotkeyConflictItem{};
     static float g_quickDrawEditorHotkeyConflictPreviewT = -1.0f;
     static std::string g_quickDrawEditorHotkeyConflictLabel;
@@ -1032,6 +1040,7 @@ namespace Menu
     static ImVec2 g_quickDrawSettingsButtonCenter{};
     static float g_quickDrawSettingsButtonRadius = 13.0f;
     static float g_quickDrawSettingsClickFlash = 0.0f;
+    static float g_quickDrawSettingsHoverT = 0.0f;
     static ImVec2 g_quickDrawSettingsPanelMin{};
     static ImVec2 g_quickDrawSettingsPanelMax{};
     static ImVec2 g_quickDrawSettingsContentMin{};
@@ -1624,6 +1633,8 @@ namespace Menu
         ShortcutHudNamePositionY,
         ShortcutHudPositionX,
         ShortcutHudBackgroundOpacity,
+        InventoryGamepadIconPositionX,
+        InventoryGamepadIconPositionY,
         Count,
         None = Count
     };
@@ -1704,6 +1715,7 @@ namespace Menu
         Top,
         Bottom,
         Hotkeys,
+        Inventory,
         Count
     };
     static std::array<LayoutSliderHitbox,
@@ -1726,7 +1738,18 @@ namespace Menu
     static float g_settingsPanelMaxScroll = 0.0f;
     static LayoutSliderHitbox g_settingsScrollbarHitbox{};
     static bool g_settingsScrollbarDragging = false;
+    // O desenho dos três painéis é recortado. Guardamos os mesmos limites
+    // para que os hitboxes não continuem clicáveis atrás da máscara.
+    static LayoutSliderHitbox g_settingsContentViewport{};
+    static LayoutSliderHitbox g_gameplayContentViewport{};
+    static LayoutSliderHitbox g_layoutContentViewport{};
     static LayoutSlider g_activeLayoutSlider = LayoutSlider::None;
+    // O D-pad altera sliders sem iniciar um drag de mouse. Guardamos uma
+    // pequena janela própria para que os previews visuais usem o mesmo
+    // caminho dos sliders arrastados, sem deixar o valor ser sobrescrito pela
+    // posição atual do cursor.
+    static LayoutSlider g_gamepadLayoutPreviewSlider = LayoutSlider::None;
+    static float g_gamepadLayoutPreviewUntil = -1.0f;
     static bool g_previewLayoutButtonHeld = false;
 
     enum class PreviewLayoutField : std::size_t
@@ -1769,8 +1792,11 @@ namespace Menu
         Config::ItemPreviewCategory& category)
     {
         std::size_t categoryIndex = 0;
-        if (!GetPreviewCategorySliderInfo(
-                g_activeLayoutSlider, categoryIndex))
+        const LayoutSlider slider = g_activeLayoutSlider != LayoutSlider::None
+            ? g_activeLayoutSlider
+            : (g_gamepadLayoutPreviewUntil >= ImGui::GetTime()
+                ? g_gamepadLayoutPreviewSlider : LayoutSlider::None);
+        if (!GetPreviewCategorySliderInfo(slider, categoryIndex))
             return false;
         category = static_cast<Config::ItemPreviewCategory>(categoryIndex);
         return true;
@@ -1784,7 +1810,11 @@ namespace Menu
     static bool GetActivePreviewControl(
         Config::ItemPreviewProfile& profile, PreviewLayoutField& field)
     {
-        if (GetPreviewSliderInfo(g_activeLayoutSlider, profile, field))
+        const LayoutSlider slider = g_activeLayoutSlider != LayoutSlider::None
+            ? g_activeLayoutSlider
+            : (g_gamepadLayoutPreviewUntil >= ImGui::GetTime()
+                ? g_gamepadLayoutPreviewSlider : LayoutSlider::None);
+        if (GetPreviewSliderInfo(slider, profile, field))
             return true;
         if (!g_previewLayoutButtonHeld)
             return false;
@@ -1792,6 +1822,23 @@ namespace Menu
         field = g_previewLayoutButtonField;
         return true;
     }
+
+    static bool IsGamepadLayoutPreviewActive(LayoutSlider slider)
+    {
+        return g_gamepadLayoutPreviewSlider == slider &&
+            g_gamepadLayoutPreviewUntil >= ImGui::GetTime();
+    }
+
+    static bool IsGamepadShortcutPositionPreviewActive()
+    {
+        return IsGamepadLayoutPreviewActive(LayoutSlider::ShortcutPreviewPositionX) ||
+            IsGamepadLayoutPreviewActive(LayoutSlider::ShortcutPreviewPositionY) ||
+            IsGamepadLayoutPreviewActive(LayoutSlider::ShortcutHudNamePositionX) ||
+            IsGamepadLayoutPreviewActive(LayoutSlider::ShortcutHudNamePositionY) ||
+            IsGamepadLayoutPreviewActive(LayoutSlider::ShortcutHudPositionX);
+    }
+
+    static void BeginGamepadLayoutSliderPreview(LayoutSlider slider);
 
     static float& PreviewLayoutValue(Config::ItemPreviewProfile profile,
         PreviewLayoutField field)
@@ -2142,6 +2189,36 @@ namespace Menu
     static std::array<ImVec2, 4> g_blurScopeCenters{};
     static float g_blurScopeRadius = 0.0f;
     static bool g_gameplayBlurApplied = false;
+
+    static void BeginGamepadLayoutSliderPreview(LayoutSlider slider)
+    {
+        g_gamepadLayoutPreviewSlider = slider;
+        // Mantém a amostra visível entre repetições do D-pad e permite que o
+        // último ajuste termine em fade, como ao soltar o mouse.
+        g_gamepadLayoutPreviewUntil = ImGui::GetTime() + 0.45f;
+
+        switch (slider)
+        {
+        case LayoutSlider::ShortcutPreviewPositionX:
+            BeginShortcutHotkeyPositionPreview(ShortcutHotkeyPositionControl::PreviewX);
+            break;
+        case LayoutSlider::ShortcutPreviewPositionY:
+            BeginShortcutHotkeyPositionPreview(ShortcutHotkeyPositionControl::PreviewY);
+            break;
+        case LayoutSlider::ShortcutHudNamePositionX:
+            BeginShortcutHotkeyPositionPreview(ShortcutHotkeyPositionControl::NamesX);
+            break;
+        case LayoutSlider::ShortcutHudNamePositionY:
+            BeginShortcutHotkeyPositionPreview(ShortcutHotkeyPositionControl::NamesY);
+            break;
+        case LayoutSlider::ShortcutHudPositionX:
+            BeginShortcutHotkeyPositionPreview(ShortcutHotkeyPositionControl::PreviewX);
+            PreviewQuickDrawHotkeyHudPosition();
+            break;
+        default:
+            break;
+        }
+    }
 
         
     // ============================================================
@@ -5002,6 +5079,30 @@ namespace Menu
         return true;
     }
 
+    static bool IsSettingsPointerInsideContentViewport(SettingsSection section)
+    {
+        const LayoutSliderHitbox* viewport = nullptr;
+        switch (section)
+        {
+        case SettingsSection::Settings:
+            viewport = &g_settingsContentViewport;
+            break;
+        case SettingsSection::Gameplay:
+            viewport = &g_gameplayContentViewport;
+            break;
+        case SettingsSection::Layout:
+            viewport = &g_layoutContentViewport;
+            break;
+        default:
+            return false;
+        }
+
+        return g_settingsMousePos.x >= viewport->min.x &&
+            g_settingsMousePos.x <= viewport->max.x &&
+            g_settingsMousePos.y >= viewport->min.y &&
+            g_settingsMousePos.y <= viewport->max.y;
+    }
+
     bool SettingsMouseDown()
     {
         if (SettingsQuickDrawInfoClick())
@@ -5030,6 +5131,13 @@ namespace Menu
             }
         }
 
+        const auto insideViewport = [&](const LayoutSliderHitbox& viewport) {
+            return g_settingsMousePos.x >= viewport.min.x &&
+                g_settingsMousePos.x <= viewport.max.x &&
+                g_settingsMousePos.y >= viewport.min.y &&
+                g_settingsMousePos.y <= viewport.max.y;
+        };
+
         if (g_settingsSection == SettingsSection::Settings)
         {
             if (g_settingsMousePos.x >= g_settingsScrollbarHitbox.min.x &&
@@ -5040,6 +5148,11 @@ namespace Menu
                 g_settingsScrollbarDragging = true;
                 return true;
             }
+
+            // O conteúdo escondido pelo corte visual não pode manter
+            // hitboxes ativos fora da área realmente visível.
+            if (!insideViewport(g_settingsContentViewport))
+                return false;
 
             if (g_settingsMousePos.x >= g_resetAllConfigHitbox.min.x &&
                 g_settingsMousePos.x <= g_resetAllConfigHitbox.max.x &&
@@ -5083,18 +5196,35 @@ namespace Menu
             }
         }
 
-        if (g_settingsSection == SettingsSection::Gameplay &&
-            g_settingsMousePos.x >= g_gameplayScrollbarHitbox.min.x &&
-            g_settingsMousePos.x <= g_gameplayScrollbarHitbox.max.x &&
-            g_settingsMousePos.y >= g_gameplayScrollbarHitbox.min.y &&
-            g_settingsMousePos.y <= g_gameplayScrollbarHitbox.max.y)
+        if (g_settingsSection == SettingsSection::Gameplay)
         {
-            g_gameplayScrollbarDragging = true;
-            return true;
+            if (g_settingsMousePos.x >= g_gameplayScrollbarHitbox.min.x &&
+                g_settingsMousePos.x <= g_gameplayScrollbarHitbox.max.x &&
+                g_settingsMousePos.y >= g_gameplayScrollbarHitbox.min.y &&
+                g_settingsMousePos.y <= g_gameplayScrollbarHitbox.max.y)
+            {
+                g_gameplayScrollbarDragging = true;
+                return true;
+            }
+
+            if (!insideViewport(g_gameplayContentViewport))
+                return false;
         }
 
         if (g_settingsSection == SettingsSection::Layout)
         {
+            if (g_settingsMousePos.x >= g_layoutScrollbarHitbox.min.x &&
+                g_settingsMousePos.x <= g_layoutScrollbarHitbox.max.x &&
+                g_settingsMousePos.y >= g_layoutScrollbarHitbox.min.y &&
+                g_settingsMousePos.y <= g_layoutScrollbarHitbox.max.y)
+            {
+                g_layoutScrollbarDragging = true;
+                return true;
+            }
+
+            if (!insideViewport(g_layoutContentViewport))
+                return false;
+
             const auto inside = [&](const LayoutSliderHitbox& hitbox) {
                 return g_settingsMousePos.x >= hitbox.min.x && g_settingsMousePos.x <= hitbox.max.x &&
                     g_settingsMousePos.y >= hitbox.min.y && g_settingsMousePos.y <= hitbox.max.y;
@@ -5466,6 +5596,12 @@ namespace Menu
                     case LayoutSlider::ShortcutHudNamePositionY: Config::g_shortcutHudNamePositionY = Config::kDefaultShortcutHudNamePosition; break;
                     case LayoutSlider::ShortcutHudPositionX: Config::g_shortcutHudPositionX = 0.0f; break;
                     case LayoutSlider::ShortcutHudBackgroundOpacity: Config::g_shortcutHudBackgroundOpacity = 70.0f; break;
+                    case LayoutSlider::InventoryGamepadIconPositionX:
+                        Config::g_inventoryGamepadIconPositionX = Config::kDefaultInventoryGamepadIconPosition;
+                        break;
+                    case LayoutSlider::InventoryGamepadIconPositionY:
+                        Config::g_inventoryGamepadIconPositionY = Config::kDefaultInventoryGamepadIconPosition;
+                        break;
                     default: break;
                     }
                     if (previewControl)
@@ -6068,6 +6204,17 @@ namespace Menu
         }
     }
 
+    void UseGamepadInventoryAnchor()
+    {
+        if (IsInventoryOpen())
+            g_inventoryGamepadAnchorActive = true;
+    }
+
+    void UsePhysicalInventoryAnchor()
+    {
+        g_inventoryGamepadAnchorActive = false;
+    }
+
     void UsePhysicalSettingsCursor()
     {
         g_gamepadSettingsCursorActive = false;
@@ -6423,9 +6570,13 @@ namespace Menu
             if (g_gamepadSettingsConfigNavigation)
             {
                 // Dentro da lista, a saída pertence exclusivamente ao D-pad Up
-                // quando o primeiro controle está selecionado.
+                // quando o primeiro controle está selecionado. Left/Right
+                // pertence ao slider que Up/Down já deixou selecionado.
                 if (g_gamepadSettingsNavigationInPanel)
+                {
+                    GamepadSettingsAdjustSlider(horizontal);
                     return;
+                }
 
                 if (horizontal > 0)
                 {
@@ -6890,6 +7041,29 @@ namespace Menu
         if (!g_gamepadSettingsNavigationInPanel || direction == 0)
             return;
 
+        // Gameplay tem dois sliders fora da enumeração dos controles gerais:
+        // Slow Time e Draw Mark Distance. O foco por D-pad conserva o ID
+        // deles, portanto Left/Right pode ajustá-los sem iniciar um drag de
+        // mouse artificial.
+        if (g_settingsSection == SettingsSection::Gameplay)
+        {
+            if (g_gamepadSettingsFocusedControlId == 0x2030)
+            {
+                Config::g_slowTimeMultiplier = std::clamp(
+                    Config::g_slowTimeMultiplier + 0.05f * static_cast<float>(direction),
+                    0.1f, 0.8f);
+                Config::SaveConfig();
+            }
+            else if (g_gamepadSettingsFocusedControlId == 0x2052)
+            {
+                Config::g_drawMarkDistance = std::clamp(
+                    Config::g_drawMarkDistance + static_cast<float>(direction),
+                    0.0f, 600.0f);
+                Config::SaveLayoutConfig();
+            }
+            return;
+        }
+
         if (g_settingsSection == SettingsSection::Settings)
         {
             const int sliderIndex = g_gamepadSettingsSelectedGeneralSlider;
@@ -7017,6 +7191,34 @@ namespace Menu
         case LayoutSlider::BottomBorderOpacity: value = &Config::g_bottomItemStyle.borderOpacity; break;
         case LayoutSlider::BottomIconSize: value = &Config::g_bottomItemStyle.iconSize; minimum = 25.0f; maximum = 200.0f; break;
         case LayoutSlider::BottomIconOpacity: value = &Config::g_bottomItemStyle.iconOpacity; break;
+        case LayoutSlider::ShortcutPreviewPositionX:
+            value = &Config::g_shortcutPreviewPositionX;
+            minimum = -100.0f; maximum = 100.0f; break;
+        case LayoutSlider::ShortcutPreviewPositionY:
+            value = &Config::g_shortcutPreviewPositionY;
+            minimum = -100.0f; maximum = 100.0f; break;
+        case LayoutSlider::ShortcutHudNamePositionX:
+            value = &Config::g_shortcutHudNamePositionX;
+            minimum = -100.0f; maximum = 100.0f; break;
+        case LayoutSlider::ShortcutHudNamePositionY:
+            value = &Config::g_shortcutHudNamePositionY;
+            minimum = -100.0f; maximum = 100.0f; break;
+        case LayoutSlider::ShortcutHudPositionX:
+            value = &Config::g_shortcutHudPositionX;
+            minimum = -1.0f; maximum = 1.0f; step = 0.02f; break;
+        case LayoutSlider::ShortcutHudBackgroundOpacity:
+            value = &Config::g_shortcutHudBackgroundOpacity;
+            minimum = 0.0f; maximum = 100.0f; break;
+        case LayoutSlider::InventoryGamepadIconPositionX:
+            value = &Config::g_inventoryGamepadIconPositionX;
+            minimum = -100.0f;
+            maximum = 100.0f;
+            break;
+        case LayoutSlider::InventoryGamepadIconPositionY:
+            value = &Config::g_inventoryGamepadIconPositionY;
+            minimum = -100.0f;
+            maximum = 100.0f;
+            break;
         default: break;
         }
         if (!value)
@@ -7038,6 +7240,7 @@ namespace Menu
         if (GetPreviewCategorySliderInfo(
                 selectedLayoutSlider, changedPreviewCategory))
             ItemPreview::InvalidateSizeScale();
+        BeginGamepadLayoutSliderPreview(selectedLayoutSlider);
         Config::SaveConfig();
     }
 
@@ -10837,6 +11040,7 @@ namespace Menu
         g_inventoryOverflowMorphActive = false;
         g_fastDragZoneActive = false;
         g_fastDragReturningToCursor = false;
+        g_inventoryGamepadAnchorActive = false;
 
         g_showWindow = false;
         g_radialMode = RadialMode::Inventory;
@@ -11994,6 +12198,18 @@ namespace Menu
 
                         if (!bound)
                             return false;
+
+                        // Pilhas consumíveis mantêm o vínculo mesmo quando
+                        // chegam a zero. Assim o HUD/hotkey continua
+                        // mostrando a entrada vazia e ela volta a funcionar
+                        // automaticamente assim que o jogador obtiver mais
+                        // unidades, sem precisar recolocá-la no radial.
+                        if (item.form->As<RE::AlchemyItem>() != nullptr ||
+                            item.form->As<RE::TESAmmo>() != nullptr ||
+                            item.form->As<RE::IngredientItem>() != nullptr)
+                        {
+                            return false;
+                        }
 
                         return GetInventoryItemCount(actor, bound) <= 0;
                     }
@@ -16337,16 +16553,34 @@ namespace Menu
         return ImGui::GetIO().MousePos;
     }
 
-
     constexpr float FAST_DRAG_ZONE_RADIUS = 72.0f;
+
+    // Âncora deliberadamente fixa do gamepad. Não consulta o Scaleform nem
+    // tenta inferir a linha do inventário: os offsets pertencem ao Layout.
+    static ImVec2 GetInventoryGamepadAnchor()
+    {
+        const ImVec2 screen = Resolution::GetVirtualSize();
+        return ImVec2(
+            screen.x * (0.5f + 0.5f * std::clamp(
+                Config::g_inventoryGamepadIconPositionX, -100.0f, 100.0f) / 100.0f),
+            screen.y * (0.5f + 0.5f * std::clamp(
+                Config::g_inventoryGamepadIconPositionY, -100.0f, 100.0f) / 100.0f));
+    }
 
     static void InitializeInventoryDragPosition()
     {
-        const ImVec2 mouse = GetSkyrimMousePos();
+        // Sem Fast Drag, o gamepad não possui cursor Scaleform confiável:
+        // usa somente a âncora fixa no centro da tela. Mouse e teclado
+        // preservam integralmente a posição física original.
+        const ImVec2 mouse = g_inventoryGamepadAnchorActive ?
+            GetInventoryGamepadAnchor() : GetSkyrimMousePos();
         g_fastDragZoneActive = false;
         g_fastDragReturningToCursor = false;
         g_fastDragLastMousePosition = mouse;
 
+        // Fast Drag tem prioridade para qualquer dispositivo: se já existe
+        // um último radial válido, o item do gamepad nasce exatamente nele,
+        // igual ao fluxo de mouse/teclado.
         if (Config::g_fastInventoryDrag && g_hasLastInventoryRadialPosition)
         {
             g_inventoryDraggedPosition = g_lastInventoryRadialPosition;
@@ -16412,6 +16646,7 @@ namespace Menu
         // hover seguinte reproduz a animação completa, sem herdar o frame
         // aberto de um drag anterior.
         g_inventoryBagExpandT = 0.0f;
+        g_inventoryGamepadAnchorActive = Gamepad::IsActivationHeld();
 
         //g_draggedInventoryItem = GetSelectedInventoryItem();
         const auto selected =
@@ -16847,7 +17082,8 @@ namespace Menu
         ImDrawList* drawList =
             ImGui::GetForegroundDrawList();
 
-        const ImVec2 mousePos = GetSkyrimMousePos();
+        const ImVec2 mousePos = g_inventoryGamepadAnchorActive ?
+            GetInventoryGamepadAnchor() : GetSkyrimMousePos();
 
         // Animação exclusiva deste indicador. Ela não reutiliza cache,
         // velocidade ou estado dos itens dos radiais.
@@ -16894,8 +17130,10 @@ namespace Menu
         const ImVec2 indicatorPos(
             // Âncora fixa do indicador em relação ao cursor do Skyrim.
             // Altere estes dois valores para ajustar manualmente a posição.
-            mousePos.x + 60.0f + floatOffset.x + motionOffset.x,
-            mousePos.y + 62.0f + floatOffset.y + motionOffset.y);
+            mousePos.x + (g_inventoryGamepadAnchorActive ? 0.0f : 60.0f) +
+                floatOffset.x + motionOffset.x,
+            mousePos.y + (g_inventoryGamepadAnchorActive ? 0.0f : 62.0f) +
+                floatOffset.y + motionOffset.y);
 
         // ============================================================
         // ESTRELA
@@ -18095,7 +18333,11 @@ namespace Menu
     {
         const bool dragging = g_activeShortcutHotkeyPosition !=
                 ShortcutHotkeyPositionControl::None ||
-            g_shortcutHudPositionXDragging;
+            g_shortcutHudPositionXDragging ||
+            IsGamepadShortcutPositionPreviewActive();
+        if (!dragging && !g_shortcutHotkeyPositionPreviewFadingOut &&
+            g_shortcutHotkeyPositionPreviewItem.form)
+            g_shortcutHotkeyPositionPreviewFadingOut = true;
         if (!dragging && !g_shortcutHotkeyPositionPreviewFadingOut)
             return;
         if (!g_shortcutHotkeyPositionPreviewItem.form)
@@ -18161,6 +18403,7 @@ namespace Menu
             (g_activeShortcutHotkeyPosition != ShortcutHotkeyPositionControl::None ||
                 g_shortcutHotkeyPositionPreviewFadingOut ||
                 g_shortcutHudPositionXDragging ||
+                IsGamepadShortcutPositionPreviewActive() ||
                 g_shortcutHudPositionPreviewFadingOut);
     }
 
@@ -18212,6 +18455,7 @@ namespace Menu
             (g_activeShortcutHotkeyPosition != ShortcutHotkeyPositionControl::None ||
                 g_shortcutHotkeyPositionPreviewFadingOut ||
                 g_shortcutHudPositionXDragging ||
+                IsGamepadShortcutPositionPreviewActive() ||
                 g_shortcutHudPositionPreviewFadingOut);
         const bool previewActive = g_quickDrawKeyboardCloseHudPreviewWanted;
         if (previewActive)
@@ -18232,7 +18476,8 @@ namespace Menu
         const bool activePositionPreview = g_shortcutHudPositionXDragging;
         const bool hotkeyHudAppearancePreview =
             g_activeLayoutColor == static_cast<int>(LayoutColorControl::ShortcutHudBackground) ||
-            g_activeLayoutSlider == LayoutSlider::ShortcutHudBackgroundOpacity;
+            g_activeLayoutSlider == LayoutSlider::ShortcutHudBackgroundOpacity ||
+            IsGamepadLayoutPreviewActive(LayoutSlider::ShortcutHudBackgroundOpacity);
         const bool active = hotkeyActive || namesOnlyActive || previewActive ||
             settingsPositionPreviewActive ||
             activeStylePreview || activePositionPreview || hotkeyHudAppearancePreview;
@@ -18462,6 +18707,9 @@ namespace Menu
                 center.x += offsetX;
         }
         const float time = static_cast<float>(ImGui::GetTime());
+        // Cada bind conserva sua própria transição para que os badges não
+        // saltem quando a seleção muda de um item para outro.
+        static std::unordered_map<int, float> hudBadgeSelectionT;
 
         for (std::size_t index = 0; index < entries.size(); ++index)
         {
@@ -18470,8 +18718,12 @@ namespace Menu
                 std::cos(time * 0.69f + phase * 1.71f) * 1.8f);
             const bool highlighted = entries[index].hotkey ==
                 g_quickDrawHotkeyHudHighlightedKey;
-            const float highlightT = highlighted ? 1.0f : 0.0f;
-            const float itemRadius = radius * (1.0f + highlightT * 0.18f);
+            float& badgeSelectionT = hudBadgeSelectionT[entries[index].hotkey];
+            badgeSelectionT = AnimateSettingsValue(badgeSelectionT,
+                highlighted ? 1.0f : 0.0f, 10.0f, deltaTime);
+            // A seleção expande o próprio item suavemente; o ícone e os
+            // badges acompanham esse mesmo raio interpolado.
+            const float itemRadius = radius * (1.0f + badgeSelectionT * 0.18f);
             const ImVec2 visualCenter = hudCenters[index] + floatOffset;
             const float alpha = g_quickDrawHotkeyHudAlpha;
 
@@ -18481,9 +18733,10 @@ namespace Menu
                     static_cast<int>((hudBackground >> 8) & 0xFF),
                     static_cast<int>(hudBackground & 0xFF),
                     static_cast<int>(std::clamp(Config::g_shortcutHudBackgroundOpacity, 0.0f, 100.0f) * 2.55f)), alpha), 28);
-            if (highlighted)
+            if (badgeSelectionT > 0.002f)
                 draw->AddCircleFilled(visualCenter, itemRadius,
-                    FadeColor(IM_COL32(245, 242, 232, 80), alpha), 28);
+                    FadeColor(IM_COL32(245, 242, 232,
+                        static_cast<int>(80.0f * badgeSelectionT)), alpha), 28);
             //draw->AddCircle(visualCenter, itemRadius,
             //    FadeColor(IM_COL32(245, 242, 232, highlighted ? 235 : 118), alpha),
             //    28, highlighted ? 1.7f : 1.0f);
@@ -18499,8 +18752,11 @@ namespace Menu
                         1.0f, false, RadialSide::Left));
             }
 
+            // Ambos os badges ficam 2px mais afastados do ícone. A seleção
+            // já os move junto ao crescimento interpolado do próprio item.
+            const float badgeDistance = itemRadius * 0.68f + 2.0f;
             const ImVec2 badgeCenter = visualCenter +
-                ImVec2(itemRadius * 0.68f, -itemRadius * 0.68f);
+                ImVec2(badgeDistance, -badgeDistance);
             constexpr float badgeRadius = 11.7f;
             draw->AddCircleFilled(badgeCenter, badgeRadius,
                 FadeColor(IM_COL32(35, 36, 42, 235), alpha), 18);
@@ -18519,6 +18775,39 @@ namespace Menu
             draw->AddText(ImGui::GetFont(), keyFontSize,
                 badgeCenter - keySize * 0.5f,
                 FadeColor(IM_COL32(255, 245, 240, 245), alpha), keyText.c_str());
+
+            // Consumíveis empilháveis permanecem legíveis no HUD mesmo na
+            // última unidade (inclusive 0). O badge espelha o bind: mesma
+            // escala, fundo e tipografia, no canto inferior esquerdo.
+            const bool hasHudQuantity = entries[index].item.form->As<RE::AlchemyItem>() ||
+                entries[index].item.form->As<RE::TESAmmo>() ||
+                entries[index].item.form->As<RE::IngredientItem>();
+            if (hasHudQuantity)
+            {
+                const int quantity = std::max(0, ItemInfo::Get(
+                    entries[index].item.form,
+                    entries[index].item.uniqueID,
+                    entries[index].item.hasUniqueID).instanceQuantity);
+                const std::string quantityText = std::to_string(quantity);
+                const ImVec2 quantityBadgeCenter = visualCenter +
+                    ImVec2(-badgeDistance, badgeDistance);
+                draw->AddCircleFilled(quantityBadgeCenter, badgeRadius,
+                    FadeColor(IM_COL32(35, 36, 42, 235), alpha), 18);
+
+                float quantityFontSize = ImGui::GetFontSize() * 0.91f;
+                ImVec2 quantitySize = ImGui::GetFont()->CalcTextSizeA(quantityFontSize,
+                    FLT_MAX, 0.0f, quantityText.c_str());
+                if (quantitySize.x > badgeRadius * 1.55f)
+                {
+                    quantityFontSize *= badgeRadius * 1.55f / quantitySize.x;
+                    quantitySize = ImGui::GetFont()->CalcTextSizeA(quantityFontSize,
+                        FLT_MAX, 0.0f, quantityText.c_str());
+                }
+                draw->AddText(ImGui::GetFont(), quantityFontSize,
+                    quantityBadgeCenter - quantitySize * 0.5f,
+                    FadeColor(IM_COL32(255, 245, 240, 245), alpha),
+                    quantityText.c_str());
+            }
         }
 
         // O nome é um canal independente do preview 3D e do ícone. Quando o
@@ -18714,6 +19003,7 @@ namespace Menu
         g_quickDrawKeyboardVisualPreviewRopeInitialized = false;
         g_quickDrawKeyboardVisualPreviewRopeVelocity = {};
         g_quickDrawKeyboardToggleHoverT = 0.0f;
+        g_quickDrawKeyboardCloseHoverT = 0.0f;
         g_quickDrawKeyboardToggleCenterInitialized = false;
         g_quickDrawKeyboardItemDragActive = false;
         g_quickDrawKeyboardDraggedItem = {};
@@ -21832,9 +22122,31 @@ namespace Menu
             draw->AddCircle(keyMoonCenter, keyMoonRadius,
                 FadeColor(MenuThemeColor(Config::MenuThemeColor::BorderHover, 165), alpha * filteredCardAlpha), 24, 1.15f);
             
-            draw->AddText(ImVec2(keyMoonCenter.x - keyTextSize.x * 0.5f,
+            // Binds extensos, como alguns nomes de gamepad, percorrem a
+            // faixa interna da lua sem escapar do círculo.
+            const float keyTextWidth = keyMoonRadius * 1.50f;
+            const float keyOverflow = std::max(0.0f, keyTextSize.x - keyTextWidth);
+            float keyTextOffset = 0.0f;
+            if (keyOverflow > 0.0f)
+            {
+                const float phase = std::fmod(time * 0.27f, 2.0f);
+                keyTextOffset = keyOverflow * (phase <= 1.0f ? phase : 2.0f - phase);
+            }
+            draw->PushClipRect(ImVec2(keyMoonCenter.x - keyTextWidth * 0.5f,
+                    keyMoonCenter.y - keyMoonRadius + 3.0f),
+                ImVec2(keyMoonCenter.x + keyTextWidth * 0.5f,
+                    keyMoonCenter.y + keyMoonRadius - 3.0f), true);
+            // O percurso começa exatamente na borda esquerda do recorte e
+            // termina com a borda direita do texto no fim dele: sem margem
+            // vazia e sem cortar a primeira letra.
+            const float keyTextX = keyOverflow > 0.0f
+                ? keyMoonCenter.x - keyTextWidth * 0.5f - keyTextOffset
+                : keyMoonCenter.x - keyTextSize.x * 0.5f;
+            draw->AddText(ImVec2(keyTextX,
                     keyMoonCenter.y - keyTextSize.y * 0.5f),
-                FadeColor(MenuThemeColor(Config::MenuThemeColor::PrimaryText, 230), alpha * filteredCardAlpha), keyText.c_str());
+                FadeColor(MenuThemeColor(Config::MenuThemeColor::PrimaryText, 230),
+                    alpha * filteredCardAlpha), keyText.c_str());
+            draw->PopClipRect();
 
             RadialItem item{};
             bool canToggleAutoUse = false;
@@ -22048,10 +22360,6 @@ namespace Menu
             draw->AddCircleFilled(filterCenter, kQuickDrawKeyboardFilterRadius,
                 FadeColor(IM_COL32(245, 242, 232,
                     static_cast<int>(180.0f * whiteStrength)), alpha), 24);
-            draw->AddCircle(filterCenter, kQuickDrawKeyboardFilterRadius,
-                FadeColor(IM_COL32(245, 242, 232,
-                    active ? 220 : static_cast<int>(125.0f *
-                        g_quickDrawKeyboardFilterHoverT[index])), alpha), 24, 1.0f);
             if (filterHovered)
             {
                 const std::string& label = Language::Get(filterLabels[index]);
@@ -22104,10 +22412,6 @@ namespace Menu
             kQuickDrawKeyboardToggleRadius,
             FadeColor(IM_COL32(245, 242, 232,
                 static_cast<int>(105.0f * g_quickDrawKeyboardToggleHoverT)), alpha), 18);
-        draw->AddCircle(g_quickDrawKeyboardToggleCenter,
-            kQuickDrawKeyboardToggleRadius,
-            FadeColor(IM_COL32(245, 242, 232,
-                g_quickDrawKeyboardVisualMode ? 225 : 125), alpha), 18, 1.0f);
         g_quickDrawKeyboardVisualPreviewWanted = false;
         const float visualKeyboardBottom = DrawQuickDrawVisualKeyboard(draw, screen,
             alpha * g_quickDrawKeyboardVisualModeT, dt);
@@ -22117,16 +22421,17 @@ namespace Menu
         // Mesmo ponto inferior usado pelo círculo dourado que fecha o Hub.
         const bool closeHovered = IsSettingsCircleHovered(g_settingsMousePos,
             g_quickDrawKeyboardCloseCenter, g_quickDrawKeyboardCloseRadius);
+        g_quickDrawKeyboardCloseHoverT = AnimateSettingsValue(
+            g_quickDrawKeyboardCloseHoverT, closeHovered ? 1.0f : 0.0f,
+            closeHovered ? 12.0f : 8.0f, dt);
         // O botão apenas revela uma amostra do HUD existente. O próprio HUD
         // conserva o fade de entrada/saída e fica sem item destacado.
         g_quickDrawKeyboardCloseHudPreviewWanted = closeHovered;
         draw->AddCircleFilled(g_quickDrawKeyboardCloseCenter,
             g_quickDrawKeyboardCloseRadius,
-            FadeColor(closeHovered ? IM_COL32(235, 230, 215, 175) :
-                IM_COL32(20, 20, 25, 230), alpha), 32);
-        draw->AddCircle(g_quickDrawKeyboardCloseCenter,
-            g_quickDrawKeyboardCloseRadius,
-            FadeColor(IM_COL32(245, 242, 232, closeHovered ? 230 : 105), alpha), 32, 1.0f);
+            FadeColor(LerpColor(IM_COL32(20, 20, 25, 230),
+                    IM_COL32(235, 230, 215, 175),
+                    g_quickDrawKeyboardCloseHoverT), alpha), 32);
 
         // Organiza a lista de fontes pelo tipo de item. Sem texto e sem
         // tooltip: desligado preserva a ordem natural Top → Bottom → Side →
@@ -23304,6 +23609,9 @@ namespace Menu
         testItems(g_sideItems, RadialSide::Left);
         testItems(g_topItems, RadialSide::Top);
         testItems(g_bottomItems, RadialSide::Bottom);
+        // Hotkeys já consultam a Bag; o desenho deve reconhecer os mesmos
+        // itens para que gestos e Auto-Use tenham comportamento idêntico.
+        testItems(g_bagItems, RadialSide::Bag);
 
         const bool matched = bestItem != nullptr;
 
@@ -23415,6 +23723,10 @@ namespace Menu
         g_quickDrawEditorHotkeyClickFlash = 0.0f;
         g_quickDrawEditorHotkeyClearClickFlash = 0.0f;
         g_quickDrawEditorHotkeyShadowT = 0.0f;
+        g_quickDrawEditorHotkeyWaitingT = 0.0f;
+        g_quickDrawEditorHotkeyGateHoverT = 0.0f;
+        g_quickDrawEditorHotkeyKeyboardHoverT = 0.0f;
+        g_quickDrawSettingsHoverT = 0.0f;
         g_quickDrawEditorHotkeyConflictItem = {};
         g_quickDrawEditorHotkeyConflictPreviewT = -1.0f;
         g_quickDrawEditorHotkeyConflictLabel.clear();
@@ -23670,16 +23982,36 @@ namespace Menu
             {
                 const auto slider = sliders[static_cast<std::size_t>(
                     g_quickDrawSettingsGamepadSliderIndex)];
+                bool changed = false;
                 if (slider == QuickDrawSettingsSlider::Style)
+                {
+                    const int previous = Config::g_drawEdgeEffectStyle;
                     Config::g_drawEdgeEffectStyle = std::clamp(
                         Config::g_drawEdgeEffectStyle + horizontal, 0,
                         QuickDrawMagicEffects::kEdgeEffectStyleCount - 1);
+                    changed = previous != Config::g_drawEdgeEffectStyle;
+                }
                 else if (slider == QuickDrawSettingsSlider::Size)
+                {
+                    const float previous = Config::g_drawEdgeEffectSize;
                     Config::g_drawEdgeEffectSize = std::clamp(
                         Config::g_drawEdgeEffectSize + horizontal * 5.0f, 25.0f, 250.0f);
+                    changed = previous != Config::g_drawEdgeEffectSize;
+                }
                 else if (slider == QuickDrawSettingsSlider::Opacity)
+                {
+                    const float previous = Config::g_drawEdgeEffectOpacity;
                     Config::g_drawEdgeEffectOpacity = std::clamp(
                         Config::g_drawEdgeEffectOpacity + horizontal * 5.0f, 0.0f, 100.0f);
+                    changed = previous != Config::g_drawEdgeEffectOpacity;
+                }
+                if (changed)
+                {
+                    QuickDrawMagicEffects::ClearEdgeFlashes();
+                    g_quickDrawEffectPreviewStyle = GetQuickDrawEdgeEffectPreviewStyle();
+                    g_quickDrawEffectPreviewUntil = static_cast<float>(ImGui::GetTime()) +
+                        (slider == QuickDrawSettingsSlider::Style ? 2.0f : 0.20f);
+                }
                 Config::SaveConfig();
                 Gamepad::PulseSelection();
             }
@@ -23860,20 +24192,29 @@ namespace Menu
             g_quickDrawSettingsButtonRadius * g_quickDrawSettingsButtonRadius;
         g_quickDrawSettingsClickFlash = std::max(0.0f,
             g_quickDrawSettingsClickFlash - dt * 5.5f);
+        g_quickDrawSettingsHoverT = AnimateSettingsValue(
+            g_quickDrawSettingsHoverT, buttonHovered ? 1.0f : 0.0f,
+            buttonHovered ? 12.0f : 8.0f, dt);
         const float buttonAlpha = alpha * (0.84f + 0.16f * g_quickDrawSettingsOpenT);
-        const float buttonLight = std::max(buttonHovered ? 0.70f : 0.0f,
-            g_quickDrawSettingsClickFlash);
+        // O branco deixa de ser apenas um flash de clique: acompanha a
+        // abertura real do painel e se desfaz junto dele ao fechar.
+        const float buttonLight = std::max({
+            g_quickDrawSettingsHoverT * 0.70f,
+            g_quickDrawSettingsOpenT * 0.70f });
         draw->AddCircleFilled(g_quickDrawSettingsButtonCenter,
-            g_quickDrawSettingsButtonRadius + (buttonHovered ? 1.5f : 0.0f),
-            FadeColor(buttonLight > 0.0f
-                    ? MenuThemeColor(Config::MenuThemeColor::BorderHover, static_cast<int>(210.0f * buttonLight))
-                    : MenuThemeColor(Config::MenuThemeColor::ButtonBackground, 235),
-                buttonAlpha), 32);
-        draw->AddCircle(g_quickDrawSettingsButtonCenter,
-            g_quickDrawSettingsButtonRadius + (buttonHovered ? 1.5f : 0.0f),
-            FadeColor(MenuThemeColor(Config::MenuThemeColor::BorderHover,
-                buttonLight > 0.0f ? 255 : 150), buttonAlpha),
-            32, 1.25f);
+            g_quickDrawSettingsButtonRadius + 1.5f * g_quickDrawSettingsHoverT,
+            FadeColor(LerpColor(
+                    MenuThemeColor(Config::MenuThemeColor::ButtonBackground, 235),
+                    MenuThemeColor(Config::MenuThemeColor::BorderHover, 210),
+                    buttonLight), buttonAlpha), 32);
+        if (g_quickDrawSettingsHoverT > 0.001f)
+        {
+            draw->AddCircle(g_quickDrawSettingsButtonCenter,
+                g_quickDrawSettingsButtonRadius + 1.5f * g_quickDrawSettingsHoverT,
+                FadeColor(MenuThemeColor(Config::MenuThemeColor::BorderHover,
+                    static_cast<int>(255.0f * g_quickDrawSettingsHoverT)), buttonAlpha),
+                32, 1.25f);
+        }
 
         if (g_quickDrawSettingsOpenT <= 0.01f)
         {
@@ -23915,8 +24256,8 @@ namespace Menu
             draw->PrimWriteVtx(outer0, fadeUv, fadeEdge);
             draw->PrimWriteVtx(outer1, fadeUv, fadeEdge);
         }
-        draw->AddCircle(center, panelRadius,
-            FadeColor(MenuThemeColor(Config::MenuThemeColor::PrimaryTitle, 135), alpha * contentT), 96, 1.0f);
+        // Sem contorno externo: o painel permanece somente como um disco
+        // escuro com degradê, sem competir com os controles internos.
 
         // Daqui em diante todos os controles acompanham somente o fade do
         // disco. O conteúdo fica dentro de um retângulo central protegido,
@@ -24128,8 +24469,16 @@ namespace Menu
             AddQuickDrawPoint(g_quickDrawEditorStroke, g_settingsMousePos,
                 center, QUICK_DRAW_EDITOR_RADIUS);
 
-        draw->AddCircle(center, QUICK_DRAW_EDITOR_RADIUS,
-            FadeColor(MenuThemeColor(Config::MenuThemeColor::BorderHover, 205), alpha), 96, 1.8f);
+        // O anel de desenho cede suavemente o lugar ao painel de Settings.
+        // Mantemos o gesto e os efeitos ativos; só a referência branca some.
+        const float drawCircleVisibleT = 1.0f - SmoothSettingsProgress(
+            g_quickDrawSettingsOpenT);
+        if (drawCircleVisibleT > 0.001f)
+        {
+            draw->AddCircle(center, QUICK_DRAW_EDITOR_RADIUS,
+                FadeColor(MenuThemeColor(Config::MenuThemeColor::BorderHover, 205),
+                    alpha * drawCircleVisibleT), 96, 1.8f);
+        }
 
         QuickDrawMagicEffects::DrawLive(draw, g_quickDrawEditorStroke,
             center, QUICK_DRAW_EDITOR_RADIUS, g_settingsMousePos,
@@ -24466,7 +24815,7 @@ namespace Menu
             g_quickDrawEditorOkHoverT > 0.001f ? 8.0f : 6.0f, dt);
 
         const auto drawCommandCircle = [&](const ImVec2& buttonCenter, float hoverT,
-            float shadowT, float& outRadius, const char* label) {
+            float shadowT, float& outRadius, const char* label, bool clearIcon) {
             (void)commandBaseRadius;
             outRadius = commandExpandedRadius;
 
@@ -24491,6 +24840,19 @@ namespace Menu
 
             if (hoverT <= 0.01f)
                 return;
+            if (clearIcon)
+            {
+                // Mesmo X compacto usado no botão CLEAR do Armor Hub.
+                constexpr float markHalf = 5.6f;
+                const ImU32 iconColor = FadeColor(
+                    MenuThemeColor(Config::MenuThemeColor::PrimaryText, 176),
+                    alpha * hoverT);
+                draw->AddLine(buttonCenter - ImVec2(markHalf, markHalf),
+                    buttonCenter + ImVec2(markHalf, markHalf), iconColor, 2.6f);
+                draw->AddLine(buttonCenter + ImVec2(markHalf, -markHalf),
+                    buttonCenter + ImVec2(-markHalf, markHalf), iconColor, 2.6f);
+                return;
+            }
             const ImVec2 textSize = ImGui::CalcTextSize(label);
             draw->AddText(ImVec2(buttonCenter.x - textSize.x * 0.5f,
                     buttonCenter.y - textSize.y * 0.5f),
@@ -24500,11 +24862,11 @@ namespace Menu
         drawCommandCircle(g_quickDrawEditorResetCenter,
             g_quickDrawEditorResetHoverT, g_quickDrawEditorResetShadowT,
             g_quickDrawEditorResetRadius,
-            Language::Get("reset").c_str());
+            Language::Get("reset").c_str(), true);
         drawCommandCircle(g_quickDrawEditorOkCenter,
             g_quickDrawEditorOkHoverT, g_quickDrawEditorOkShadowT,
             g_quickDrawEditorOkRadius,
-            Language::Get("ok").c_str());
+            Language::Get("ok").c_str(), false);
 
         if (IsQuickDrawAutoUseEligible(g_quickDrawEditorItem.form))
         {
@@ -24589,6 +24951,16 @@ namespace Menu
         g_quickDrawEditorHotkeyShadowT = AnimateSettingsValue(
             g_quickDrawEditorHotkeyShadowT, hotkeyHovered ? 1.0f : 0.0f,
             hotkeyHovered ? 8.0f : 6.0f, dt);
+        g_quickDrawEditorHotkeyWaitingT = AnimateSettingsValue(
+            g_quickDrawEditorHotkeyWaitingT,
+            g_quickDrawEditorWaitingHotkey ? 1.0f : 0.0f,
+            g_quickDrawEditorWaitingHotkey ? 10.0f : 7.0f, dt);
+        g_quickDrawEditorHotkeyGateHoverT = AnimateSettingsValue(
+            g_quickDrawEditorHotkeyGateHoverT, gateHovered ? 1.0f : 0.0f,
+            gateHovered ? 12.0f : 8.0f, dt);
+        g_quickDrawEditorHotkeyKeyboardHoverT = AnimateSettingsValue(
+            g_quickDrawEditorHotkeyKeyboardHoverT, keyboardHovered ? 1.0f : 0.0f,
+            keyboardHovered ? 12.0f : 8.0f, dt);
 
         // Mesmo halo curto do Auto-Use: o cinza do botão nasce no centro e
         // se dissolve suavemente antes de chegar à borda externa.
@@ -24608,16 +24980,20 @@ namespace Menu
             }
         }
         draw->AddCircleFilled(g_quickDrawEditorHotkeyCenter,
-            kQuickDrawEditorHotkeyRadius + (hotkeyHovered ? 2.0f : 0.0f),
-            FadeColor(g_quickDrawEditorWaitingHotkey
-                    ? MenuThemeColor(Config::MenuThemeColor::PrimaryText, 155)
-                    : MenuThemeColor(Config::MenuThemeColor::RaisedBackground, 220), alpha * hotkeyEntryAlpha), 40);
-        draw->AddCircle(g_quickDrawEditorHotkeyCenter,
-            kQuickDrawEditorHotkeyRadius + (hotkeyHovered ? 2.0f : 0.0f),
-            FadeColor(MenuThemeColor(Config::MenuThemeColor::BorderHover,
-                g_quickDrawEditorWaitingHotkey ? 220 : hotkeyHovered ? 170 : 75),
-                alpha * hotkeyEntryAlpha),
-            40, 1.15f);
+            kQuickDrawEditorHotkeyRadius + 2.0f * g_quickDrawEditorHotkeyShadowT,
+            FadeColor(LerpColor(
+                    MenuThemeColor(Config::MenuThemeColor::RaisedBackground, 220),
+                    MenuThemeColor(Config::MenuThemeColor::PrimaryText, 155),
+                    g_quickDrawEditorHotkeyWaitingT), alpha * hotkeyEntryAlpha), 40);
+        if (g_quickDrawEditorHotkeyShadowT > 0.001f)
+        {
+            draw->AddCircle(g_quickDrawEditorHotkeyCenter,
+                kQuickDrawEditorHotkeyRadius + 2.0f * g_quickDrawEditorHotkeyShadowT,
+                FadeColor(MenuThemeColor(Config::MenuThemeColor::BorderHover,
+                    static_cast<int>(170.0f * g_quickDrawEditorHotkeyShadowT)),
+                    alpha * hotkeyEntryAlpha),
+                40, 1.15f);
+        }
         const std::string hotkeyText = !g_quickDrawEditorWaitingHotkey && hotkey != 0
             ? Config::KeyToString(hotkey) : "";
         if (!hotkeyText.empty())
@@ -24700,22 +25076,27 @@ namespace Menu
         if (g_quickDrawEditorHotkeyAuxiliaryT > 0.001f)
         {
         const float gateRedStrength = requiresActivation ? 1.0f :
-            0.30f * (gateHovered ? 1.0f : 0.0f);
+            0.30f * g_quickDrawEditorHotkeyGateHoverT;
+        const float gateRadius = kQuickDrawEditorHotkeyGateRadius +
+            1.5f * g_quickDrawEditorHotkeyGateHoverT;
         draw->AddCircleFilled(g_quickDrawEditorHotkeyGateCenter,
-            kQuickDrawEditorHotkeyGateRadius + (gateHovered ? 1.5f : 0.0f),
+            gateRadius,
             FadeColor(MenuThemeColor(Config::MenuThemeColor::RaisedBackground, 220), hotkeyAuxiliaryAlpha), 24);
         if (gateRedStrength > 0.002f)
         {
             draw->AddCircleFilled(g_quickDrawEditorHotkeyGateCenter,
-                kQuickDrawEditorHotkeyGateRadius + (gateHovered ? 1.5f : 0.0f),
+                gateRadius,
                 FadeColor(IM_COL32(220, 62, 62,
                     static_cast<int>(190.0f * gateRedStrength)), hotkeyAuxiliaryAlpha), 24);
         }
-        draw->AddCircle(g_quickDrawEditorHotkeyGateCenter,
-            kQuickDrawEditorHotkeyGateRadius + (gateHovered ? 1.5f : 0.0f),
-            FadeColor(IM_COL32(185, 185, 190,
-                requiresActivation ? 220 : gateHovered ? 175 : 100),
-                hotkeyAuxiliaryAlpha), 24, 1.1f);
+        if (g_quickDrawEditorHotkeyGateHoverT > 0.001f)
+        {
+            draw->AddCircle(g_quickDrawEditorHotkeyGateCenter,
+                gateRadius,
+                FadeColor(IM_COL32(185, 185, 190,
+                    static_cast<int>(175.0f * g_quickDrawEditorHotkeyGateHoverT)), hotkeyAuxiliaryAlpha),
+                24, 1.1f);
+        }
         if (gateHovered)
         {
             const std::string& gateHint = Language::Get("require_wheel_key");
@@ -24727,12 +25108,17 @@ namespace Menu
         }
 
         draw->AddCircleFilled(g_quickDrawEditorHotkeyKeyboardCenter,
-            kQuickDrawEditorHotkeyGateRadius + (keyboardHovered ? 1.5f : 0.0f),
+            kQuickDrawEditorHotkeyGateRadius + 1.5f * g_quickDrawEditorHotkeyKeyboardHoverT,
             FadeColor(MenuThemeColor(Config::MenuThemeColor::RaisedBackground, 220), hotkeyAuxiliaryAlpha), 24);
-        draw->AddCircle(g_quickDrawEditorHotkeyKeyboardCenter,
-            kQuickDrawEditorHotkeyGateRadius + (keyboardHovered ? 1.5f : 0.0f),
-            FadeColor(MenuThemeColor(Config::MenuThemeColor::BorderHover, keyboardHovered ? 210 : 100),
-                hotkeyAuxiliaryAlpha), 24, 1.1f);
+        if (g_quickDrawEditorHotkeyKeyboardHoverT > 0.001f)
+        {
+            draw->AddCircle(g_quickDrawEditorHotkeyKeyboardCenter,
+                kQuickDrawEditorHotkeyGateRadius + 1.5f * g_quickDrawEditorHotkeyKeyboardHoverT,
+                FadeColor(MenuThemeColor(Config::MenuThemeColor::BorderHover,
+                    static_cast<int>(210.0f * g_quickDrawEditorHotkeyKeyboardHoverT)),
+                    hotkeyAuxiliaryAlpha),
+                24, 1.1f);
+        }
         if (keyboardHovered)
         {
             const std::string& keyboardHint = Language::Get("keyboard");
@@ -27533,11 +27919,15 @@ namespace Menu
         const int quantity =
             info.instanceQuantity;
 
-        // O indicador normal só aparece a partir de duas unidades. Poções
-        // bindadas por hotkey são a exceção: continuam mostrando inclusive 0,
-        // para que seja claro quando a última unidade foi consumida.
+        // O indicador normal só aparece a partir de duas unidades. As pilhas
+        // que continuam bindadas em quantidade zero exibem explicitamente o
+        // 0 no preview do WheelSettings, em vez de parecerem sem informação.
         const bool isPotion = item.form->As<RE::AlchemyItem>() != nullptr;
-        if (quantity <= 1 && !(showPotionQuantityAtAnyAmount && isPotion))
+        const bool isPreservedEmptyStack = quantity == 0 &&
+            (isPotion || item.form->As<RE::TESAmmo>() != nullptr ||
+                item.form->As<RE::IngredientItem>() != nullptr);
+        if (quantity <= 1 && !(showPotionQuantityAtAnyAmount && isPotion) &&
+            !isPreservedEmptyStack)
             return;
 
         ImDrawList* draw =
@@ -30345,12 +30735,15 @@ namespace Menu
                 {
                     anim.inventoryOverflowMorph = 0.0f;
                 }
-                const float visualRadialSizeT =
-                    activeDragMorph
+                // inventoryOverflowMorph já se aproxima suavemente de zero
+                // após a soltura. Continue usando-o durante essa saída; usar
+                // radialSizeT no primeiro frame sem drag fazia o excedente
+                // voltar instantaneamente ao estado compacto.
+                const float visualRadialSizeT = dragMorphContext
                     ? std::clamp(anim.inventoryOverflowMorph, 0.0f, 1.0f)
                     : std::clamp(anim.radialSizeT, 0.0f, 1.0f);
                 constexpr float dragOverflowMainScale = 0.80f;
-                const float morphItemRadius = activeDragMorph
+                const float morphItemRadius = dragMorphContext
                     ? itemRadius * dragOverflowMainScale
                     : itemRadius;
                 const float animatedRadius =
@@ -30366,7 +30759,7 @@ namespace Menu
                 // até o mesmo tamanho visual de um item principal.
                 const float finalOverflowRadius =
                     animatedRadius +
-                    ((activeDragMorph ? morphItemRadius : itemRadius) - animatedRadius) *
+                    ((dragMorphContext ? morphItemRadius : itemRadius) - animatedRadius) *
                     anim.overflowHoverT;
                 
                 // ============================================================
@@ -30572,7 +30965,7 @@ namespace Menu
                     // transformação da bolinha excedente até a escala visual
                     // usada pelo item principal.
                     const float fullItemIconRadius =
-                        (activeDragMorph ? morphItemRadius : itemRadius) * 0.53f;
+                        (dragMorphContext ? morphItemRadius : itemRadius) * 0.53f;
                     const float iconRadius = std::min(fullItemIconRadius,
                         baseIconRadius +
                             (fullItemIconRadius - baseIconRadius) *
@@ -33009,9 +33402,9 @@ namespace Menu
                         std::clamp(ImGui::GetIO().DeltaTime, 0.0f, 0.05f));
                     draw->AddCircleFilled(openCenter, openRadiusBase,
                         FadeColor(MenuThemeColor(Config::MenuThemeColor::PrimaryText,
-                            static_cast<int>(125.0f * g_settingsInfoOpenQuickDrawHoverT)), alpha), 24);
+                            static_cast<int>(100.0f * g_settingsInfoOpenQuickDrawHoverT)), alpha), 24);
                     draw->AddCircle(openCenter, openRadiusBase,
-                        FadeColor(MenuThemeColor(Config::MenuThemeColor::BorderHover, 180), alpha),
+                        FadeColor(MenuThemeColor(Config::MenuThemeColor::BorderHover, 144), alpha),
                         24, 1.0f);
                     y += openRadiusBase * 2.0f + 13.0f * descriptorScale;
                 }
@@ -33035,9 +33428,9 @@ namespace Menu
                     10.0f, std::clamp(ImGui::GetIO().DeltaTime, 0.0f, 0.05f));
                 draw->AddCircleFilled(openCenter, openRadiusBase,
                     FadeColor(MenuThemeColor(Config::MenuThemeColor::PrimaryText,
-                        static_cast<int>(125.0f * g_settingsInfoOpenQuickDrawHoverT)), alpha), 24);
+                        static_cast<int>(100.0f * g_settingsInfoOpenQuickDrawHoverT)), alpha), 24);
                 draw->AddCircle(openCenter, openRadiusBase,
-                    FadeColor(MenuThemeColor(Config::MenuThemeColor::BorderHover, 180), alpha),
+                    FadeColor(MenuThemeColor(Config::MenuThemeColor::BorderHover, 144), alpha),
                     24, 1.0f);
                 y += openRadiusBase * 2.0f + 13.0f * descriptorScale;
             }
@@ -33066,7 +33459,13 @@ namespace Menu
         // QUANTIDADE
         // ========================================================
 
-        if (info.totalQuantity > 0)
+        // Poções/consumíveis, munições e ingredientes podem permanecer
+        // vinculados ao radial mesmo sem unidades no inventário. Para eles o
+        // painel precisa exibir "0", em vez de ocultar a linha Quantity.
+        const bool preservesEmptyQuantity = info.form->As<RE::AlchemyItem>() != nullptr ||
+            info.form->As<RE::TESAmmo>() != nullptr ||
+            info.form->As<RE::IngredientItem>() != nullptr;
+        if (info.totalQuantity > 0 || preservesEmptyQuantity)
         {
             //AddRow(
             //    "Quantity",
@@ -33080,7 +33479,7 @@ namespace Menu
             // QUANTIDADE>>>> DA INSTÂNCIA <<<<<<<<<<<<<<<<<<
             // ============================================================
 
-            if (info.instanceQuantity > 0)
+            if (info.instanceQuantity > 0 || preservesEmptyQuantity)
             {
                 AddRow(
                     Language::Get("quantity").c_str(),
@@ -33758,6 +34157,9 @@ namespace Menu
         if (g_settingsSection != SettingsSection::Settings)
             return false;
 
+        if (!IsSettingsPointerInsideContentViewport(SettingsSection::Settings))
+            return false;
+
         const ImVec2 mouse =
             g_settingsMousePos;
 
@@ -33829,6 +34231,12 @@ namespace Menu
 
         if (g_settingsSection != SettingsSection::Gameplay &&
             g_settingsSection != SettingsSection::Layout)
+            return false;
+
+        // Este handler é chamado diretamente pelo InputSink, antes do
+        // SettingsMouseDown. Sem esta guarda, controles já recortados pelo
+        // painel ainda respondiam a cliques fora da área visível.
+        if (!IsSettingsPointerInsideContentViewport(g_settingsSection))
             return false;
 
         const auto insideRect = [&](const ImVec2& min, const ImVec2& max) {
@@ -34303,6 +34711,9 @@ namespace Menu
     
         const float contentBottom =
             GetSettingsPanelContentBottom(panel, padding);
+
+        g_settingsContentViewport.min = ImVec2(panel.min.x, contentTop);
+        g_settingsContentViewport.max = ImVec2(panel.max.x, contentBottom);
     
         const float y = panelHeaderY - g_settingsPanelScroll;
     
@@ -34938,6 +35349,9 @@ namespace Menu
         
         const float gameplayContentBottom =
             GetSettingsPanelContentBottom(panel, padding);
+
+        g_gameplayContentViewport.min = ImVec2(panel.min.x, gameplayContentTop);
+        g_gameplayContentViewport.max = ImVec2(panel.max.x, gameplayContentBottom);
         
         const float gameplayScrollbarX = panel.max.x + 6.0f * controlScale;
         
@@ -36540,7 +36954,9 @@ namespace Menu
             { Language::Get("names_x").c_str(), &Config::g_shortcutHudNamePositionX, -100.0f, 100.0f },
             { Language::Get("names_y").c_str(), &Config::g_shortcutHudNamePositionY, -100.0f, 100.0f },
             { Language::Get("shortcut_hud_position_x").c_str(), &Config::g_shortcutHudPositionX, -1.0f, 1.0f },
-            { Language::Get("hud_background_opacity").c_str(), &Config::g_shortcutHudBackgroundOpacity, 0.0f, 100.0f }
+            { Language::Get("hud_background_opacity").c_str(), &Config::g_shortcutHudBackgroundOpacity, 0.0f, 100.0f },
+            { Language::Get("pradial_gamepad_icon_x").c_str(), &Config::g_inventoryGamepadIconPositionX, -100.0f, 100.0f },
+            { Language::Get("pradial_gamepad_icon_y").c_str(), &Config::g_inventoryGamepadIconPositionY, -100.0f, 100.0f }
         };
         
         const float rowHeight = std::max(45.0f * controlScale,
@@ -36647,6 +37063,7 @@ namespace Menu
         int bottomLineColorRow = -1;
         int menuTitleRow = -1;
         int hotkeysHeaderRow = -1;
+        int inventoryHeaderRow = -1;
         int hotkeyBackgroundColorRow = -1;
         int potionsTitleRow = -1;
         int schoolsTitleRow = -1;
@@ -36825,6 +37242,12 @@ namespace Menu
             addColorRow(LayoutColorControl::ShortcutHudBackground, hotkeyBackgroundColorRow);
             addSliderRow(LayoutSlider::ShortcutHudBackgroundOpacity);
         }
+        inventoryHeaderRow = nextRow++;
+        if (groupExpanded(LayoutGroup::Inventory))
+        {
+            addSliderRow(LayoutSlider::InventoryGamepadIconPositionX);
+            addSliderRow(LayoutSlider::InventoryGamepadIconPositionY);
+        }
         itemColorsHeaderRow = nextRow++;
         if (groupExpanded(LayoutGroup::ItemColors))
         {
@@ -36858,6 +37281,9 @@ namespace Menu
         
         const float contentBottom =
             GetSettingsPanelContentBottom(panel, padding);
+
+        g_layoutContentViewport.min = ImVec2(panel.min.x, contentTop);
+        g_layoutContentViewport.max = ImVec2(panel.max.x, contentBottom);
         
         const float visibleContentHeight = std::max(1.0f, contentBottom - contentTop);
         
@@ -37183,6 +37609,8 @@ namespace Menu
             LayoutGroup::ItemOverflow);
         drawSectionTitle(hotkeysHeaderRow, Language::Get("hotkeys").c_str(),
             LayoutGroup::Hotkeys);
+        drawSectionTitle(inventoryHeaderRow, Language::Get("inventory_section").c_str(),
+            LayoutGroup::Inventory);
         drawSectionTitle(itemColorsHeaderRow, Language::Get("colors_section").c_str(),
             LayoutGroup::ItemColors);
         
@@ -38202,6 +38630,20 @@ namespace Menu
         }
 
         draw->PopClipRect();
+
+        // Preview exclusivo dos offsets de gamepad: enquanto um dos dois
+        // sliders estiver sendo manipulado, mostra o mesmo anel dourado no
+        // ponto que será usado pelo inventário. Ele fica fora do clip do
+        // painel para continuar visível mesmo quando cruza suas bordas.
+        if (g_activeLayoutSlider == LayoutSlider::InventoryGamepadIconPositionX ||
+            g_activeLayoutSlider == LayoutSlider::InventoryGamepadIconPositionY ||
+            IsGamepadLayoutPreviewActive(LayoutSlider::InventoryGamepadIconPositionX) ||
+            IsGamepadLayoutPreviewActive(LayoutSlider::InventoryGamepadIconPositionY))
+        {
+            const float previewTime = static_cast<float>(ImGui::GetTime());
+            DrawGoldenRing3D(draw, GetInventoryGamepadAnchor(), 12.0f, alpha,
+                previewTime * 0.42f, std::sin(previewTime * 0.63f) * 0.28f);
+        }
 
         draw->AddRectFilled(
             ImVec2(scrollbarX - 2.0f * controlScale, scrollbarTop),

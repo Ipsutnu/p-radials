@@ -98,6 +98,8 @@ namespace Language
             { "hotkeys", "HOTKEYS" },
             { "hud_background_color", "HUD Background Color" },
             { "hud_background_opacity", "HUD Background Opacity" },
+            { "pradial_gamepad_icon_x", "P-radial Gamepad Icon X" },
+            { "pradial_gamepad_icon_y", "P-radial Gamepad Icon Y" },
             { "draw_effects_editor", "Effects during Editor" },
             { "draw_edge_effect", "Edge Effect" },
             { "draw_edge_none", "None" },

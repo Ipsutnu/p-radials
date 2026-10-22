@@ -119,6 +119,8 @@ namespace Config
     float g_shortcutHudPositionX = 0.0f;
     std::uint32_t g_shortcutHudBackgroundColor = 0x141419;
     float g_shortcutHudBackgroundOpacity = 70.0f;
+    float g_inventoryGamepadIconPositionX = kDefaultInventoryGamepadIconPosition;
+    float g_inventoryGamepadIconPositionY = kDefaultInventoryGamepadIconPosition;
     int g_drawEdgeEffectStyle = 0;
     float g_drawEdgeEffectSize = kDefaultDrawEdgeEffectSize;
     float g_drawEdgeEffectOpacity = kDefaultDrawEdgeEffectOpacity;
@@ -607,6 +609,17 @@ namespace Config
         if (key == "ShortcutHudInverted") { g_shortcutHudInverted = ParseEnabled(value); return true; }
         if (key == "ShortcutHudBackgroundColor") { g_shortcutHudBackgroundColor = static_cast<std::uint32_t>(std::stoul(value, nullptr, 0)) & 0xFFFFFFu; return true; }
         if (key == "ShortcutHudBackgroundOpacity") { g_shortcutHudBackgroundOpacity = std::clamp(std::stof(value), 0.0f, 100.0f); return true; }
+        if (key == "InventoryGamepadIconPositionX" || key == "InventoryGamepadIconPositionY")
+        {
+            try
+            {
+                const float parsed = std::clamp(std::stof(value), -100.0f, 100.0f);
+                if (key == "InventoryGamepadIconPositionX") g_inventoryGamepadIconPositionX = parsed;
+                else g_inventoryGamepadIconPositionY = parsed;
+            }
+            catch (...) { return false; }
+            return true;
+        }
         if (key == "ShortcutHudShowNames") { g_shortcutHudShowNames = ParseEnabled(value); return true; }
         if (key == "ShortcutHudPositionX")
         {
@@ -904,6 +917,8 @@ namespace Config
         write("ShortcutHudPositionX", g_shortcutHudPositionX);
         write("ShortcutHudBackgroundColor", g_shortcutHudBackgroundColor);
         write("ShortcutHudBackgroundOpacity", g_shortcutHudBackgroundOpacity);
+        write("InventoryGamepadIconPositionX", g_inventoryGamepadIconPositionX);
+        write("InventoryGamepadIconPositionY", g_inventoryGamepadIconPositionY);
         write("DrawEdgeEffectStyle", g_drawEdgeEffectStyle);
         write("DrawEdgeEffectSize", g_drawEdgeEffectSize);
         write("DrawEdgeEffectOpacity", g_drawEdgeEffectOpacity);
@@ -1392,6 +1407,19 @@ namespace Config
                     try { g_shortcutHudBackgroundOpacity = std::clamp(std::stof(value), 0.0f, 100.0f); }
                     catch (...) {}
                 }
+                else if (key == "InventoryGamepadIconPositionX" ||
+                    key == "InventoryGamepadIconPositionY")
+                {
+                    try
+                    {
+                        const float parsed = std::clamp(std::stof(value), -100.0f, 100.0f);
+                        if (key == "InventoryGamepadIconPositionX")
+                            g_inventoryGamepadIconPositionX = parsed;
+                        else
+                            g_inventoryGamepadIconPositionY = parsed;
+                    }
+                    catch (...) {}
+                }
                 else if (key == "DrawEdgeEffectStyle")
                 {
                     try { g_drawEdgeEffectStyle = std::clamp(std::stoi(value), 0, 11); }
@@ -1766,6 +1794,8 @@ namespace Config
         g_shortcutHudPositionX = 0.0f;
         g_shortcutHudBackgroundColor = 0x141419;
         g_shortcutHudBackgroundOpacity = 70.0f;
+        g_inventoryGamepadIconPositionX = kDefaultInventoryGamepadIconPosition;
+        g_inventoryGamepadIconPositionY = kDefaultInventoryGamepadIconPosition;
         g_drawEdgeEffectStyle = 0;
         g_drawEdgeEffectSize = kDefaultDrawEdgeEffectSize;
         g_drawEdgeEffectOpacity = kDefaultDrawEdgeEffectOpacity;
@@ -1968,6 +1998,8 @@ namespace Config
         SetIniValue(lines, "Layout", "ShortcutHudPositionX", std::to_string(g_shortcutHudPositionX));
         SetIniValue(lines, "Layout", "ShortcutHudBackgroundColor", std::to_string(g_shortcutHudBackgroundColor));
         SetIniValue(lines, "Layout", "ShortcutHudBackgroundOpacity", std::to_string(g_shortcutHudBackgroundOpacity));
+        SetIniValue(lines, "Layout", "InventoryGamepadIconPositionX", std::to_string(g_inventoryGamepadIconPositionX));
+        SetIniValue(lines, "Layout", "InventoryGamepadIconPositionY", std::to_string(g_inventoryGamepadIconPositionY));
         SetIniValue(lines, "Layout", "DrawEdgeEffectStyle", std::to_string(g_drawEdgeEffectStyle));
         SetIniValue(lines, "Layout", "DrawEdgeEffectSize", std::to_string(g_drawEdgeEffectSize));
         SetIniValue(lines, "Layout", "DrawEdgeEffectOpacity", std::to_string(g_drawEdgeEffectOpacity));
