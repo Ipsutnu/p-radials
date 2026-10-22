@@ -444,6 +444,58 @@ RE::BSEventNotifyControl InputHandler::ProcessEvent(
 
             stick->xValue = 0.0f;
             stick->yValue = 0.0f;
+            // Mouse já é zerado antes de PlayerControls. Para o analógico
+            // direito, limpar também o evento impede que o mapeamento nativo
+            // de câmera o processe enquanto o cursor do Hub o usa.
+            if (gamepadSettingsOpen && !Config::g_pauseGameDuringHub)
+            {
+                // ThumbstickEvent não é a única fonte que o Skyrim consulta
+                // para movimento/câmera: PlayerControls também pode ler o
+                // estado bruto mantido pelo dispositivo XInput no mesmo
+                // frame. O Hub já recebeu os valores acima para mover seu
+                // cursor; a partir daqui eles pertencem exclusivamente ao
+                // menu e precisam ficar neutros para o jogo.
+                if (auto* manager = RE::BSInputDeviceManager::GetSingleton())
+                {
+                    if (auto* gamepad = skyrim_cast<RE::BSWin32GamepadDevice*>(
+                            manager->GetGamepad()))
+                    {
+                        auto& state = gamepad->GetRuntimeData();
+                        state.currentLX = 0.0f;
+                        state.currentLY = 0.0f;
+                        state.currentRX = 0.0f;
+                        state.currentRY = 0.0f;
+                        state.previousLX = 0.0f;
+                        state.previousLY = 0.0f;
+                        state.previousRX = 0.0f;
+                        state.previousRY = 0.0f;
+                        // Alguns handlers de movimento consultam o estado
+                        // XInput sem normalização, especialmente na primeira
+                        // leitura do stick esquerdo. Neutralize também esses
+                        // eixos crus para não deixar escapar o passo inicial.
+                        state.currentState.gamepad.thumbLX = 0;
+                        state.currentState.gamepad.thumbLY = 0;
+                        state.currentState.gamepad.thumbRX = 0;
+                        state.currentState.gamepad.thumbRY = 0;
+                        state.previousState.gamepad.thumbLX = 0;
+                        state.previousState.gamepad.thumbLY = 0;
+                        state.previousState.gamepad.thumbRX = 0;
+                        state.previousState.gamepad.thumbRY = 0;
+                    }
+                }
+
+                if (auto* controls = RE::PlayerControls::GetSingleton())
+                {
+                    controls->data.moveInputVec = RE::NiPoint2{};
+                    controls->data.lookInputVec = RE::NiPoint2{};
+                    controls->data.prevMoveVec = RE::NiPoint2{};
+                    controls->data.prevLookVec = RE::NiPoint2{};
+                }
+
+                stick->userEvent = "";
+                stick->idCode = 0;
+                stick->device = RE::INPUT_DEVICE::kNone;
+            }
             continue;
         }
 
@@ -462,10 +514,71 @@ RE::BSEventNotifyControl InputHandler::ProcessEvent(
         const bool primaryBinding = Gamepad::Matches(Config::g_toggleKey, id);
         const bool secondaryBinding = Gamepad::Matches(Config::g_secondaryKey, id);
         const bool altConfigBinding = Gamepad::Matches(Config::g_altConfigKey, id);
+        const bool firstPress = button->IsDown() &&
+            button->GetRuntimeData().heldDownSecs <= 0.0f;
+        using Key = RE::BSWin32GamepadDevice::Key;
+        // B/Bolinha sempre pertence ao Quick Draw enquanto ele estiver
+        // aberto, inclusive se o usuário a configurou como First/Second.
+        // Sem esta prioridade ela virava uma tecla modificadora e o editor
+        // recebia seu fechamento normal em vez de sair da bolsa modal.
+        if (Menu::IsQuickDrawEditorOpen() && firstPress && id == Key::kB)
+        {
+            if (Menu::HandleQuickDrawGamepadBack())
+            {
+                consumeButton(button);
+                continue;
+            }
+        }
+        // A/X é o confirmar do editor. A captura de Waiting Key já ocorreu
+        // acima, portanto aqui podemos dar prioridade segura ao controle de
+        // UI mesmo se A ou X também forem First/Second globais.
+        if (Menu::IsQuickDrawEditorOpen() && firstPress &&
+            (id == Key::kA || id == Key::kX))
+        {
+            if (Menu::HandleQuickDrawGamepadPrimary())
+            {
+                consumeButton(button);
+                continue;
+            }
+        }
+
+        // Binds do Quick Draw podem ser teclas de gamepad. A captura já os
+        // serializa com Gamepad::Encode(), mas antes este caminho só chamava
+        // HandleQuickDrawHotkey para eventos de teclado — portanto o bind era
+        // salvo corretamente e nunca chegava à execução no gameplay.
+        const int gamepadHotkey = Gamepad::Encode(id);
+        const bool released = !button->IsPressed();
+        if ((released && Menu::HandleQuickDrawHotkeyRelease(gamepadHotkey)) ||
+            (firstPress && Menu::HandleQuickDrawHotkey(gamepadHotkey,
+                g_primaryActivationHeld || g_secondaryActivationHeld)))
+        {
+            consumeButton(button);
+            continue;
+        }
+
+        // Enquanto a tecla de hotkey permanece pressionada e o item pede uma
+        // mão, L1/R1 escolhem esquerda/direita. Nenhum outro comando do
+        // gamepad pode vazar para Skyrim ou abrir menus nesse intervalo.
+        if (Menu::IsQuickDrawHotkeyHandSelectionActive())
+        {
+            Menu::HandleQuickDrawHotkeyHandGamepad(id, firstPress);
+            consumeButton(button);
+            continue;
+        }
+
         // A tecla configurada sempre tem prioridade sobre qualquer comando
         // nativo do botão (incluindo L3/R3) e é consumida como modificadora.
         if (primaryBinding || secondaryBinding)
         {
+            // No WheelSettings, First/Second sobre um item apontado pelo
+            // cursor de gamepad abre o Quick Draw, tal como o teclado. Isto
+            // precisa vir antes de transformar o botão em modificador.
+            if (gamepadSettingsOpen && firstPress &&
+                Menu::GamepadOpenQuickDrawEditorAtCursor())
+            {
+                consumeButton(button);
+                continue;
+            }
             const bool previous = AnyActivationHeld();
             if (button->IsDown() && button->GetRuntimeData().heldDownSecs <= 0.0f)
             {
@@ -482,8 +595,6 @@ RE::BSEventNotifyControl InputHandler::ProcessEvent(
             continue;
         }
 
-        const bool firstPress = button->IsDown() &&
-            button->GetRuntimeData().heldDownSecs <= 0.0f;
         if (altConfigBinding && !primaryBinding && !secondaryBinding)
         {
             if (firstPress)
@@ -496,7 +607,6 @@ RE::BSEventNotifyControl InputHandler::ProcessEvent(
         if (!wheelOwnsButton)
             continue;
 
-        using Key = RE::BSWin32GamepadDevice::Key;
         bool handled = false;
 
         if (Menu::IsQuickDrawEditorOpen())

@@ -129,6 +129,7 @@ namespace Menu {
     bool GamepadSettingsPrimaryDown();
     void GamepadSettingsPrimaryUp();
     bool GamepadSettingsDelete();
+    bool GamepadOpenQuickDrawEditorAtCursor();
     void GamepadSettingsNavigate(int horizontal, int vertical);
     void GamepadSettingsAdjustSlider(int direction);
     void GamepadSettingsDirectional(int horizontal, int vertical);
@@ -137,6 +138,7 @@ namespace Menu {
     void UsePhysicalSettingsCursor();
 
     bool SettingsGameplayDescriptionClick();
+    bool SettingsQuickDrawInfoClick();
 
     ImVec2 GetSkyrimMousePos();
     void UpdateInventoryDragPointerFromSkyrimMouse();
@@ -205,6 +207,8 @@ namespace Menu {
     // fade de saída. O Input usa isto para tratar PrintScreen como UI do mod.
     bool IsQuickDrawHotkeyHudVisible();
     bool HandleQuickDrawHotkeyHandKey(int virtualKey, bool firstPress);
+    bool HandleQuickDrawHotkeyHandGamepad(std::uint32_t button, bool firstPress);
+    bool IsQuickDrawHotkeyHandSelectionActive();
     bool HandleQuickDrawHotkeyHandMouseButton(int button, bool firstPress);
     bool HandleQuickDrawHotkeyHandMouseMove(float deltaX);
     bool IsQuickDrawHotkeyHandSelectionActive();

@@ -651,6 +651,11 @@ namespace Menu
     static float g_quickDrawSecondaryBagRadiusVelocity = 0.0f;
     static bool g_quickDrawSecondaryBagRadiusInitialized = false;
     static bool g_quickDrawSecondaryDragActive = false;
+    // Navegação por controle da bolsa secundária é modal: enquanto ela está
+    // ativa, somente esquerda/direita escolhem um candidato e B sai dela.
+    static bool g_quickDrawSecondaryGamepadSelecting = false;
+    static int g_quickDrawSecondaryGamepadIndex = -1;
+    static bool g_quickDrawSecondaryGamepadBagSuppressed = false;
     static RadialItem g_quickDrawSecondaryDraggedItem{};
     static RadialItem g_quickDrawSecondarySelectedItem{};
     static RadialItem g_quickDrawSecondaryHoveredItem{};
@@ -1018,7 +1023,10 @@ namespace Menu
     static float g_quickDrawEditorResetShadowT = 0.0f;
     static float g_quickDrawEditorOkShadowT = 0.0f;
     static bool g_quickDrawSettingsExpanded = false;
-    enum class QuickDrawGamepadFocus { Settings, Hotkey, Gate, Secondary, AutoUse, Ok, Clear };
+    enum class QuickDrawGamepadFocus {
+        Settings, Hotkey, Gate, Secondary, AutoUse, Ok, Clear,
+        HotkeyClear, OpenHotkeys
+    };
     static QuickDrawGamepadFocus g_quickDrawGamepadFocus = QuickDrawGamepadFocus::Settings;
     static float g_quickDrawSettingsOpenT = 0.0f;
     static ImVec2 g_quickDrawSettingsButtonCenter{};
@@ -1041,9 +1049,14 @@ namespace Menu
     static ImVec2 g_quickDrawSettingsSizeMax{};
     static ImVec2 g_quickDrawSettingsOpacityMin{};
     static ImVec2 g_quickDrawSettingsOpacityMax{};
-    enum class QuickDrawSettingsSlider { None, Style, Size, Opacity };
+    enum class QuickDrawSettingsSlider {
+        None, EffectsGameplay, EffectsEditor, Style, Size, Opacity
+    };
     static QuickDrawSettingsSlider g_quickDrawSettingsActiveSlider =
         QuickDrawSettingsSlider::None;
+    // Foco separado do estado de drag do mouse: D-pad seleciona um slider,
+    // enquanto esquerda/direita altera seu valor sem fingir um clique.
+    static int g_quickDrawSettingsGamepadSliderIndex = -1;
     static float g_quickDrawEffectPreviewUntil = 0.0f;
     static int g_quickDrawEffectPreviewStyle = -1;
 
@@ -1441,8 +1454,16 @@ namespace Menu
     static int g_gamepadSideSelection = -1;
     static ImVec2 g_gamepadAnalogSmoothedDelta{ 0.0f, 0.0f };
     static bool g_gamepadSettingsConfigNavigation = false;
+    static bool g_gamepadSettingsHotkeysFocused = false;
     static RadialSide g_gamepadSettingsRadialFocus = RadialSide::None;
     static int g_gamepadSettingsRadialItemIndex = -1;
+    // Índice real do LayoutSlider sob foco. É separado da posição na lista
+    // porque a navegação também percorre títulos, fonte e seletores de cor.
+    static int g_gamepadSettingsSelectedLayoutSlider = -1;
+    static int g_gamepadSettingsSelectedGeneralSlider = -1;
+    // ID da âncora lógica atual. Índices mudam quando o scroll recalcula a
+    // geometria; o ID impede que o primeiro Down pule para outra camada.
+    static std::uint64_t g_gamepadSettingsFocusedControlId = 0;
 
     int GetSideRadialItem(const ImVec2& mouse, const ImVec2& center,
         bool leftSide, int itemCount, float innerRadius);
@@ -1938,6 +1959,14 @@ namespace Menu
         static_cast<std::size_t>(LayoutColorControl::Count)> g_layoutColorHitboxes{};
     static std::array<LayoutSliderHitbox,
         static_cast<std::size_t>(LayoutColorControl::Count)> g_layoutColorResetHitboxes{};
+    // Linha lógica de cada seletor de cor. O retângulo de mouse é removido
+    // quando sai do clip do painel, mas a navegação por gamepad precisa
+    // continuar conhecendo sua posição no conteúdo.
+    static std::array<int,
+        static_cast<std::size_t>(LayoutColorControl::Count)> g_layoutColorRows{};
+    // Título MENU dentro de COLORS; é uma âncora de navegação para o
+    // primeiro seletor de cor, não um controle de mouse separado.
+    static int g_layoutMenuTitleRow = -1;
     static LayoutSliderHitbox g_layoutColorPickerHitbox{};
     static LayoutSliderHitbox g_layoutColorValueHitbox{};
     static LayoutSliderHitbox g_layoutColorWhiteHitbox{};
@@ -3362,6 +3391,17 @@ namespace Menu
     static std::uint16_t g_settingsInfoLastUniqueID = 0;
 
     static bool g_settingsInfoLastHasUniqueID = false;
+
+    // Comandos de Quick Draw desenhados dentro do painel INFORMATION.
+    // Mantemos as áreas separadas do hover normal do radial, pois este
+    // painel continua interativo mesmo quando o cursor está no Gamepad.
+    static LayoutSliderHitbox g_settingsInfoDrawQuickDrawHitbox{};
+    static LayoutSliderHitbox g_settingsInfoHotkeyQuickDrawHitbox{};
+    static LayoutSliderHitbox g_settingsInfoOpenQuickDrawHitbox{};
+    static float g_settingsInfoDrawQuickDrawHoverT = 0.0f;
+    static float g_settingsInfoHotkeyQuickDrawHoverT = 0.0f;
+    static float g_settingsInfoOpenQuickDrawHoverT = 0.0f;
+    static RadialItem g_settingsInfoQuickDrawItem{};
 
     // ============================================================
     // OVERFLOW HOVER
@@ -4964,6 +5004,9 @@ namespace Menu
 
     bool SettingsMouseDown()
     {
+        if (SettingsQuickDrawInfoClick())
+            return true;
+
         // Mover a bolsa só é permitido ao clicar no espaço vazio dela já
         // aberto. Clicar sobre uma bolinha continua iniciando o drag normal
         // do item, sem disputar o gesto com a própria bolsa.
@@ -5878,6 +5921,24 @@ namespace Menu
     void GamepadMoveCursor(float x, float y, bool rightStick)
     {
         constexpr float deadzone = 0.18f;
+
+        // A escolha de Auto-Use secundário é modal. O analógico esquerdo não
+        // pode deslocar o cursor para fora da bolsa; vertical ajusta o raio e
+        // o D-pad permanece responsável por avançar/voltar pelos candidatos.
+        if (g_quickDrawEditorOpen && g_quickDrawSecondaryGamepadSelecting &&
+            !rightStick)
+        {
+            if (std::abs(y) > deadzone)
+            {
+                g_quickDrawSecondaryBagTargetRadius = std::clamp(
+                    g_quickDrawSecondaryBagTargetRadius - y * 5.0f,
+                    56.0f, 420.0f);
+                Config::g_quickDrawSecondaryBagRadius =
+                    g_quickDrawSecondaryBagTargetRadius;
+            }
+            g_gamepadAnalogSmoothedDelta = ImVec2(0.0f, 0.0f);
+            return;
+        }
         
         const float length = std::sqrt(x * x + y * y);
 
@@ -6154,6 +6215,18 @@ namespace Menu
         if (TrackEditor::IsOpen())
             return true;
 
+        // HOTKEYS é um botão solto acima de SETTINGS, não o primeiro campo
+        // do painel. A/X deve acioná-lo diretamente em vez de entrar na
+        // navegação interna da seção SETTINGS.
+        if (g_gamepadSettingsHotkeysFocused)
+        {
+            g_gamepadSettingsHotkeysFocused = false;
+            const bool opened = HandleMouseUnlockClick();
+            if (opened)
+                Gamepad::PulseSelection();
+            return opened;
+        }
+
         if (g_activeGeneralSlider != GeneralSlider::None ||
             g_activeLayoutSlider != LayoutSlider::None)
         {
@@ -6198,6 +6271,15 @@ namespace Menu
         return handled;
     }
 
+    bool GamepadOpenQuickDrawEditorAtCursor()
+    {
+        if (!SettingsMenu::WheelSettingsMenu::IsOpen() ||
+            g_quickDrawEditorOpen || g_settingsDrag.active ||
+            !g_settingsHoveredItem)
+            return false;
+        return BeginQuickDrawEditor();
+    }
+
     void GamepadSettingsPrimaryUp()
     {
         if (g_gamepadSettingsDragClickArmed)
@@ -6228,7 +6310,11 @@ namespace Menu
             CloseSettingsSectionMenu();
             g_gamepadSettingsConfigNavigation = false;
             g_gamepadSettingsNavigationInPanel = false;
+            g_gamepadSettingsHotkeysFocused = false;
             g_gamepadSettingsRadialFocus = RadialSide::None;
+            g_gamepadSettingsSelectedLayoutSlider = -1;
+            g_gamepadSettingsSelectedGeneralSlider = -1;
+            g_gamepadSettingsFocusedControlId = 0;
             g_gamepadSettingsRadialItemIndex = -1;
             g_settingsMousePos = GetWheelLayout().leftRadial;
             ImGui::GetIO().MousePos = g_settingsMousePos;
@@ -6241,7 +6327,11 @@ namespace Menu
         }
         SettingsMenu::WheelSettingsMenu::Close();
         g_gamepadSettingsConfigNavigation = false;
+        g_gamepadSettingsHotkeysFocused = false;
         g_gamepadSettingsRadialFocus = RadialSide::None;
+        g_gamepadSettingsSelectedLayoutSlider = -1;
+        g_gamepadSettingsSelectedGeneralSlider = -1;
+        g_gamepadSettingsFocusedControlId = 0;
         g_gamepadSettingsRadialItemIndex = -1;
     }
 
@@ -6251,6 +6341,45 @@ namespace Menu
             return;
         if (TrackEditor::IsOpen())
             return;
+
+        const auto hotkeysCenter = []() {
+            const WheelLayout wheel = GetWheelLayout();
+            const SettingsSectionLayout layout = GetSettingsSectionLayout();
+            return ImVec2(layout.center.x, (wheel.min.y + layout.center.y) * 0.5f);
+        };
+        const auto moveCursorTo = [](const ImVec2& position) {
+            g_settingsMousePos = position;
+            ImGui::GetIO().MousePos = position;
+            Gamepad::PulseSelection();
+        };
+
+        // HOTKEYS não é uma seção lateral: é um botão acima de SETTINGS.
+        // SETTINGS já entra no modo de navegação de seções ao receber D-pad
+        // Right; portanto não podemos depender de "!ConfigNavigation" aqui.
+        // Guardamos esse foco vertical explicitamente para que Up funcione
+        // também depois de chegar ao SETTINGS pelo ciclo horizontal.
+        if (horizontal == 0 && !g_gamepadSettingsNavigationInPanel)
+        {
+            const SettingsSectionLayout layout = GetSettingsSectionLayout();
+            const ImVec2 hotkeys = hotkeysCenter();
+            const auto isNear = [](const ImVec2& left, const ImVec2& right, float radius) {
+                const ImVec2 delta = left - right;
+                return delta.x * delta.x + delta.y * delta.y <= radius * radius;
+            };
+            if (vertical < 0 && g_settingsSection == SettingsSection::Settings &&
+                isNear(g_settingsMousePos, layout.center, 56.0f))
+            {
+                g_gamepadSettingsHotkeysFocused = true;
+                moveCursorTo(hotkeys);
+                return;
+            }
+            if (vertical > 0 && g_gamepadSettingsHotkeysFocused)
+            {
+                g_gamepadSettingsHotkeysFocused = false;
+                moveCursorTo(layout.center);
+                return;
+            }
+        }
 
         const auto focusSection = [&](SettingsSection section) {
             if (g_settingsSection == SettingsSection::Layout &&
@@ -6262,6 +6391,10 @@ namespace Menu
             g_settingsSectionExpanded = true;
             g_gamepadSettingsConfigNavigation = true;
             g_gamepadSettingsNavigationInPanel = false;
+            g_gamepadSettingsHotkeysFocused = false;
+            g_gamepadSettingsSelectedLayoutSlider = -1;
+            g_gamepadSettingsSelectedGeneralSlider = -1;
+            g_gamepadSettingsFocusedControlId = 0;
             g_gamepadSettingsRadialFocus = RadialSide::None;
             const SettingsSectionLayout layout = GetSettingsSectionLayout();
             g_settingsMousePos = section == SettingsSection::Gameplay
@@ -6274,7 +6407,11 @@ namespace Menu
         const auto returnToRadial = [&]() {
             g_gamepadSettingsConfigNavigation = false;
             g_gamepadSettingsNavigationInPanel = false;
+            g_gamepadSettingsHotkeysFocused = false;
             g_gamepadSettingsRadialFocus = RadialSide::Left;
+            g_gamepadSettingsSelectedLayoutSlider = -1;
+            g_gamepadSettingsSelectedGeneralSlider = -1;
+            g_gamepadSettingsFocusedControlId = 0;
             g_gamepadSettingsRadialItemIndex = -1;
             g_settingsMousePos = GetWheelLayout().leftRadial;
             ImGui::GetIO().MousePos = g_settingsMousePos;
@@ -6419,6 +6556,218 @@ namespace Menu
         Gamepad::PulseItemSelection();
     }
 
+    struct GamepadSettingsFocusEntry
+    {
+        std::uint64_t id{ 0 };
+        LayoutSliderHitbox hitbox{};
+        // Posição no conteúdo antes do scroll; é o que torna a navegação
+        // estável mesmo quando o controle selecionado ainda está atrás da máscara.
+        float contentY{ 0.0f };
+        int layoutSlider{ -1 };
+        int generalSlider{ -1 };
+    };
+
+    static bool IsGamepadFocusableHitbox(const LayoutSliderHitbox& hitbox)
+    {
+        constexpr float minimumSize = 1.0f;
+        return std::isfinite(hitbox.min.x) && std::isfinite(hitbox.min.y) &&
+            std::isfinite(hitbox.max.x) && std::isfinite(hitbox.max.y) &&
+            hitbox.max.x - hitbox.min.x > minimumSize &&
+            hitbox.max.y - hitbox.min.y > minimumSize &&
+            hitbox.min.x > -5000.0f && hitbox.min.y > -5000.0f &&
+            hitbox.max.x < 50000.0f && hitbox.max.y < 50000.0f;
+    }
+
+    static std::vector<GamepadSettingsFocusEntry> BuildGamepadSettingsFocusRegistry()
+    {
+        std::vector<GamepadSettingsFocusEntry> entries;
+        const float scroll = g_settingsSection == SettingsSection::Settings
+            ? g_settingsPanelScroll : g_settingsSection == SettingsSection::Gameplay
+                ? g_gameplayPanelScroll : g_layoutPanelScroll;
+        const auto addRect = [&](std::uint64_t id, const LayoutSliderHitbox& hitbox,
+            int layoutSlider = -1, int generalSlider = -1) {
+            if (!IsGamepadFocusableHitbox(hitbox))
+                return;
+            const float centerY = (hitbox.min.y + hitbox.max.y) * 0.5f;
+            entries.push_back({ id, hitbox, centerY + scroll, layoutSlider, generalSlider });
+        };
+        const auto addCircle = [&](std::uint64_t id, const ImVec2& center, float radius) {
+            // Nunca cria um alvo artificial: valores não desenhados continuam
+            // em zero/-10000 e eram a origem dos saltos para o canto da tela.
+            if (!std::isfinite(center.x) || !std::isfinite(center.y) || radius <= 1.0f ||
+                center.x < -5000.0f || center.y < -5000.0f)
+                return;
+            addRect(id, { center - ImVec2(radius, radius), center + ImVec2(radius, radius) });
+        };
+
+        if (g_settingsSection == SettingsSection::Settings)
+        {
+            addRect(0x1001, { g_wheelKeyButtonMin, g_wheelKeyButtonMax });
+            addRect(0x1002, { g_secondaryKeyButtonMin, g_secondaryKeyButtonMax });
+            addRect(0x1003, { g_altConfigKeyButtonMin, g_altConfigKeyButtonMax });
+            for (std::size_t i = 0; i < g_generalSliderHitboxes.size(); ++i)
+                addRect(0x1100 + i, g_generalSliderHitboxes[i], -1, static_cast<int>(i));
+            addRect(0x11F0, g_resetAllConfigHitbox);
+        }
+        else if (g_settingsSection == SettingsSection::Gameplay)
+        {
+            addRect(0x2001, { g_languageButtonMin, g_languageButtonMax });
+            addCircle(0x2002, g_automaticArrowButtonCenter, g_automaticArrowButtonRadius);
+            addCircle(0x2003, g_pauseGameDuringHubButtonCenter, g_pauseGameDuringHubButtonRadius);
+            for (std::size_t i = 0; i < g_slowTimeScopeCenters.size(); ++i)
+                addCircle(0x2010 + i, g_slowTimeScopeCenters[i], g_slowTimeScopeRadius);
+            for (std::size_t i = 0; i < g_blurScopeCenters.size(); ++i)
+                addCircle(0x2020 + i, g_blurScopeCenters[i], g_blurScopeRadius);
+            addRect(0x2030, { g_slowTimeSliderMin, g_slowTimeSliderMax });
+            addRect(0x2031, g_slowTimeResetHitbox);
+            addCircle(0x2032, g_specialEffectsButtonCenter, g_specialEffectsButtonRadius);
+            addCircle(0x2033, g_showItemQuantityButtonCenter, g_showItemQuantityButtonRadius);
+            addCircle(0x2034, g_showOverflowIconButtonCenter, g_showOverflowIconButtonRadius);
+            addCircle(0x2035, g_stardustButtonCenter, g_stardustButtonRadius);
+            for (std::size_t i = 0; i < g_drawToggleButtonCenters.size(); ++i)
+                addCircle(0x2040 + i, g_drawToggleButtonCenters[i], g_drawToggleButtonRadii[i]);
+            addRect(0x2050, g_drawEdgeEffectStyleHitbox);
+            addRect(0x2051, g_drawMarkStyleHitbox);
+            addRect(0x2052, g_layoutSliderHitboxes[static_cast<std::size_t>(LayoutSlider::DrawMarkDistance)]);
+            addRect(0x2053, g_drawMarkColorHitbox);
+            for (std::size_t i = 0; i < g_gameplayIconButtonCenters.size(); ++i)
+                addCircle(0x2060 + i, g_gameplayIconButtonCenters[i], g_gameplayIconButtonRadius);
+            addCircle(0x2070, g_fastDragButtonCenter, g_fastDragButtonRadius);
+            if (IconCustom::HasValidConfiguration())
+                addCircle(0x2071, g_customIconsReloadCenter, g_customIconsReloadRadius);
+            addRect(0x2080, { g_radialShapeButtonMin, g_radialShapeButtonMax });
+            addRect(0x2081, { g_trackModeButtonMin, g_trackModeButtonMax });
+            addRect(0x2082, { g_trackEditorButtonMin, g_trackEditorButtonMax });
+            addRect(0x2083, { g_radialAnimationButtonMin, g_radialAnimationButtonMax });
+            // Preview e descrição pertencem ao item sob o cursor do radial,
+            // não são controles do painel Gameplay. Não entram no ciclo D-pad.
+        }
+        else if (g_settingsSection == SettingsSection::Layout)
+        {
+            // Sliders registram-se pela linha lógica, não só pelo retângulo
+            // atualmente visível. Isso permite atravessar menus grandes sem
+            // depender de hitboxes descartados pelo clip do painel.
+            const float controlScale = 1.0f +
+                (std::clamp(Config::g_fontSizeScale, 1.0f, 2.5f) - 1.0f) * (2.0f / 3.0f);
+            const float rowHeight = std::max(45.0f * controlScale,
+                ImGui::GetFontSize() + 25.0f * controlScale);
+            int sampleIndex = -1;
+            for (int i = 0; i < static_cast<int>(LayoutSlider::Count); ++i)
+            {
+                if (g_layoutSliderVisible[static_cast<std::size_t>(i)] &&
+                    IsGamepadFocusableHitbox(g_layoutSliderHitboxes[static_cast<std::size_t>(i)]))
+                {
+                    sampleIndex = i;
+                    break;
+                }
+            }
+            LayoutSliderHitbox logicalSample{};
+            int logicalSampleRow = -1;
+            if (sampleIndex >= 0)
+            {
+                logicalSample = g_layoutSliderHitboxes[static_cast<std::size_t>(sampleIndex)];
+                logicalSampleRow = g_layoutSliderRows[static_cast<std::size_t>(sampleIndex)];
+            }
+            // Em COLORS, todos os sliders normais podem estar fora do clip.
+            // Nesse caso um seletor de cor visível fornece a mesma grade.
+            if (logicalSampleRow < 0)
+            {
+                for (int i = 0; i < static_cast<int>(LayoutColorControl::Count); ++i)
+                {
+                    if (g_layoutColorRows[static_cast<std::size_t>(i)] >= 0 &&
+                        IsGamepadFocusableHitbox(g_layoutColorHitboxes[static_cast<std::size_t>(i)]))
+                    {
+                        logicalSample = g_layoutColorHitboxes[static_cast<std::size_t>(i)];
+                        logicalSampleRow = g_layoutColorRows[static_cast<std::size_t>(i)];
+                        break;
+                    }
+                }
+            }
+            if (logicalSampleRow >= 0)
+            {
+                const float baseContentY = (logicalSample.min.y + logicalSample.max.y) * 0.5f + scroll -
+                    rowHeight * static_cast<float>(logicalSampleRow);
+                for (int i = 0; i < static_cast<int>(LayoutSlider::Count); ++i)
+                {
+                    if (!g_layoutSliderVisible[static_cast<std::size_t>(i)] ||
+                        g_layoutSliderRows[static_cast<std::size_t>(i)] < 0)
+                        continue;
+                    LayoutSliderHitbox logical = logicalSample;
+                    const float centerY = baseContentY + rowHeight *
+                        static_cast<float>(g_layoutSliderRows[static_cast<std::size_t>(i)]) - scroll;
+                    const float halfHeight = (logicalSample.max.y - logicalSample.min.y) * 0.5f;
+                    logical.min.y = centerY - halfHeight;
+                    logical.max.y = centerY + halfHeight;
+                    entries.push_back({ 0x3000 + static_cast<std::uint64_t>(i), logical,
+                        centerY + scroll, i, -1 });
+                }
+            }
+
+            // Os seletores de cor não são LayoutSlider. Registrá-los pela
+            // própria linha lógica evita que COLORS pare na abertura ou perca
+            // todos os controles quando eles ainda estão fora do clip.
+            if (logicalSampleRow >= 0)
+            {
+                const float baseContentY = (logicalSample.min.y + logicalSample.max.y) * 0.5f + scroll -
+                    rowHeight * static_cast<float>(logicalSampleRow);
+                if (g_layoutMenuTitleRow >= 0)
+                {
+                    LayoutSliderHitbox menuAnchor = logicalSample;
+                    const float centerY = baseContentY + rowHeight *
+                        static_cast<float>(g_layoutMenuTitleRow) - scroll;
+                    const float halfHeight = (logicalSample.max.y - logicalSample.min.y) * 0.5f;
+                    menuAnchor.min.y = centerY - halfHeight;
+                    menuAnchor.max.y = centerY + halfHeight;
+                    entries.push_back({ 0x32F0, menuAnchor, centerY + scroll, -1, -1 });
+                }
+                for (int i = 0; i < static_cast<int>(LayoutColorControl::Count); ++i)
+                {
+                    const int row = g_layoutColorRows[static_cast<std::size_t>(i)];
+                    if (row < 0)
+                        continue;
+                    LayoutSliderHitbox logical = logicalSample;
+                    const float centerY = baseContentY + rowHeight * static_cast<float>(row) - scroll;
+                    const float halfHeight = (logicalSample.max.y - logicalSample.min.y) * 0.5f;
+                    logical.min.y = centerY - halfHeight;
+                    logical.max.y = centerY + halfHeight;
+                    entries.push_back({ 0x3300 + static_cast<std::uint64_t>(i), logical,
+                        centerY + scroll, -1, -1 });
+                }
+            }
+
+            // Os quatro círculos iniciais, Stardust e os toggles de Draw são
+            // âncoras lógicas independentes. Seus labels nunca entram na rota.
+            addCircle(0x3500, g_gameplayPreviewButtonCenter, g_gameplayPreviewButtonRadius);
+            addCircle(0x3501, g_gameplayDescriptionButtonCenter, g_gameplayDescriptionButtonRadius);
+            addCircle(0x3502, g_showItemQuantityButtonCenter, g_showItemQuantityButtonRadius);
+            addCircle(0x3503, g_showOverflowIconButtonCenter, g_showOverflowIconButtonRadius);
+            addCircle(0x3504, g_stardustButtonCenter, g_stardustButtonRadius);
+            for (std::size_t i = 0; i < g_drawToggleButtonCenters.size(); ++i)
+                addCircle(0x3510 + i, g_drawToggleButtonCenters[i], g_drawToggleButtonRadii[i]);
+            addRect(0x3100, g_layoutSaveButtonHitbox);
+            addRect(0x3101, g_layoutLoadButtonHitbox);
+            addRect(0x3102, g_fontFamilyButtonHitbox);
+            addRect(0x3103, g_fontFamilyResetHitbox);
+            for (std::size_t i = 0; i < g_layoutPresetHitboxes.size(); ++i)
+            {
+                addRect(0x3110 + i * 2, g_layoutPresetHitboxes[i].hitbox);
+                addRect(0x3111 + i * 2, g_layoutPresetHitboxes[i].deleteHitbox);
+            }
+            for (std::size_t i = 0; i < g_layoutGroupHitboxes.size(); ++i)
+                addRect(0x3200 + i, g_layoutGroupHitboxes[i]);
+            // Reset é ação auxiliar de mouse; não é um destino de D-pad.
+        }
+
+        std::stable_sort(entries.begin(), entries.end(), [](const auto& left, const auto& right) {
+            if (std::abs(left.contentY - right.contentY) > 2.0f)
+                return left.contentY < right.contentY;
+            const float leftX = (left.hitbox.min.x + left.hitbox.max.x) * 0.5f;
+            const float rightX = (right.hitbox.min.x + right.hitbox.max.x) * 0.5f;
+            return leftX < rightX;
+        });
+        return entries;
+    }
+
     void GamepadSettingsNavigate(int horizontal, int vertical)
     {
         if (!SettingsMenu::WheelSettingsMenu::IsOpen())
@@ -6435,9 +6784,41 @@ namespace Menu
             return;
         }
 
-        if (vertical < 0 && g_gamepadSettingsNavigationIndex == 0)
+        const auto entries = BuildGamepadSettingsFocusRegistry();
+        if (entries.empty())
+        {
+            // O painel ainda não foi desenhado neste frame. Mantemos o modo
+            // de foco ativo para o próximo input, sem usar geometrias velhas.
+            g_gamepadSettingsNavigationIndex = 0;
+            return;
+        }
+
+        int selectedIndex = std::clamp(g_gamepadSettingsNavigationIndex, 0,
+            static_cast<int>(entries.size()) - 1);
+        if (g_gamepadSettingsFocusedControlId != 0)
+        {
+            const auto it = std::find_if(entries.begin(), entries.end(), [](const auto& entry) {
+                return entry.id == g_gamepadSettingsFocusedControlId;
+            });
+            if (it != entries.end())
+                selectedIndex = static_cast<int>(std::distance(entries.begin(), it));
+        }
+        else if (g_gamepadSettingsSelectedLayoutSlider >= 0 &&
+            g_settingsSection == SettingsSection::Layout)
+        {
+            const auto it = std::find_if(entries.begin(), entries.end(), [](const auto& entry) {
+                return entry.layoutSlider == g_gamepadSettingsSelectedLayoutSlider;
+            });
+            if (it != entries.end())
+                selectedIndex = static_cast<int>(std::distance(entries.begin(), it));
+        }
+
+        if (vertical < 0 && selectedIndex == 0)
         {
             g_gamepadSettingsNavigationInPanel = false;
+            g_gamepadSettingsSelectedLayoutSlider = -1;
+            g_gamepadSettingsSelectedGeneralSlider = -1;
+            g_gamepadSettingsFocusedControlId = 0;
             const SettingsSectionLayout layout = GetSettingsSectionLayout();
             g_settingsMousePos = g_settingsSection == SettingsSection::Gameplay
                 ? layout.gameplay : g_settingsSection == SettingsSection::Layout
@@ -6447,157 +6828,60 @@ namespace Menu
             return;
         }
 
-        if (g_settingsSection == SettingsSection::Layout)
-        {
-            const int direction = vertical > 0 ? 1 : vertical < 0 ? -1 : 0;
-            std::vector<int> visibleSliders;
-            visibleSliders.reserve(static_cast<std::size_t>(LayoutSlider::Count));
-            for (int i = 0; i < static_cast<int>(LayoutSlider::Count); ++i)
-            {
-                if (g_layoutSliderVisible[static_cast<std::size_t>(i)])
-                    visibleSliders.push_back(i);
-            }
-            std::sort(visibleSliders.begin(), visibleSliders.end(), [](int a, int b) {
-                return g_layoutSliderRows[static_cast<std::size_t>(a)] <
-                    g_layoutSliderRows[static_cast<std::size_t>(b)];
-            });
-            int candidate = visibleSliders.empty() ? 0 : visibleSliders.front();
-            if (!visibleSliders.empty())
-            {
-                auto current = std::find(visibleSliders.begin(), visibleSliders.end(),
-                    g_gamepadSettingsNavigationIndex);
-                int position = current == visibleSliders.end() ? 0 :
-                    static_cast<int>(std::distance(visibleSliders.begin(), current));
-                if (direction != 0)
-                {
-                    position = std::clamp(position + direction, 0,
-                        static_cast<int>(visibleSliders.size()) - 1);
-                }
-                candidate = visibleSliders[static_cast<std::size_t>(position)];
-            }
-            g_gamepadSettingsNavigationIndex = candidate;
-            const float controlScale = 1.0f +
-                (std::clamp(Config::g_fontSizeScale, 1.0f, 2.5f) - 1.0f) * (2.0f / 3.0f);
-            const float rowHeight = std::max(
-                45.0f * controlScale, ImGui::GetFontSize() + 25.0f * controlScale);
-            const int row = g_layoutSliderRows[
-                static_cast<std::size_t>(g_gamepadSettingsNavigationIndex)];
-            g_layoutPanelScroll = std::clamp(
-                rowHeight * static_cast<float>(row - 2), 0.0f, g_layoutPanelMaxScroll);
-            g_gamepadSettingsNeedsCursorSync = true;
-            return;
-        }
+        const int direction = vertical > 0 ? 1 : vertical < 0 ? -1 : 0;
+        selectedIndex = std::clamp(selectedIndex + direction, 0,
+            static_cast<int>(entries.size()) - 1);
+        const auto& selected = entries[static_cast<std::size_t>(selectedIndex)];
+        g_gamepadSettingsNavigationIndex = selectedIndex;
+        g_gamepadSettingsFocusedControlId = selected.id;
+        g_gamepadSettingsSelectedLayoutSlider = selected.layoutSlider;
+        g_gamepadSettingsSelectedGeneralSlider = selected.generalSlider;
 
-        std::vector<LayoutSliderHitbox> targets;
-        
+        float* scroll = nullptr;
+        float maxScroll = 0.0f;
+        LayoutSliderHitbox viewport{};
         if (g_settingsSection == SettingsSection::Settings)
         {
-        
-            LayoutSliderHitbox firstKey{};
-        
-            firstKey.min = g_wheelKeyButtonMin;
-        
-            firstKey.max = g_wheelKeyButtonMax;
-        
-            targets.push_back(firstKey);
-        
-            LayoutSliderHitbox secondKey{};
-        
-            secondKey.min = g_secondaryKeyButtonMin;
-        
-            secondKey.max = g_secondaryKeyButtonMax;
-        
-            targets.push_back(secondKey);
-        
-            targets.insert(targets.end(),
-                g_generalSliderHitboxes.begin(), g_generalSliderHitboxes.end());
-        
-            targets.push_back(g_resetAllConfigHitbox);
+            scroll = &g_settingsPanelScroll;
+            maxScroll = g_settingsPanelMaxScroll;
+            viewport = g_settingsScrollbarHitbox;
         }
         else if (g_settingsSection == SettingsSection::Gameplay)
         {
-        
-            const auto addCircle = [&](const ImVec2& center, float radius) {
-                LayoutSliderHitbox hitbox{};
-                hitbox.min = ImVec2(center.x - radius, center.y - radius);
-                hitbox.max = ImVec2(center.x + radius, center.y + radius);
-                targets.push_back(hitbox);
-            };
-        
-            LayoutSliderHitbox language{};
-            language.min = g_languageButtonMin;
-            language.max = g_languageButtonMax;
-            targets.push_back(language);
-            addCircle(g_automaticArrowButtonCenter,
-                std::max(g_automaticArrowButtonRadius, 18.0f));
-            addCircle(g_pauseGameDuringHubButtonCenter,
-                std::max(g_pauseGameDuringHubButtonRadius, 18.0f));
-        
-            for (const auto& center : g_slowTimeScopeCenters)
-                addCircle(center, std::max(g_slowTimeScopeRadius, 10.0f));
-        
-            for (const auto& center : g_blurScopeCenters)
-                addCircle(center, std::max(g_blurScopeRadius, 10.0f));
-        
-            targets.push_back({ g_slowTimeSliderMin, g_slowTimeSliderMax });
-            targets.push_back(g_slowTimeResetHitbox);
-            addCircle(g_specialEffectsButtonCenter,
-                std::max(g_specialEffectsButtonRadius, 18.0f));
-            for (const auto& center : g_drawToggleButtonCenters)
-                addCircle(center, 18.0f);
-            targets.push_back(g_drawEdgeEffectStyleHitbox);
-            targets.push_back(g_drawMarkStyleHitbox);
-            targets.push_back(g_layoutSliderHitboxes[
-                static_cast<std::size_t>(LayoutSlider::DrawEdgeEffectSize)]);
-            targets.push_back(g_layoutSliderHitboxes[
-                static_cast<std::size_t>(LayoutSlider::DrawEdgeEffectOpacity)]);
-            targets.push_back(g_layoutSliderHitboxes[
-                static_cast<std::size_t>(LayoutSlider::DrawMarkDistance)]);
-        
-            for (const auto& center : g_gameplayIconButtonCenters)
-                addCircle(center, std::max(g_gameplayIconButtonRadius, 18.0f));
-        
-            addCircle(g_fastDragButtonCenter,
-                std::max(g_fastDragButtonRadius, 18.0f));
-        
-            if (IconCustom::HasValidConfiguration())
-                addCircle(g_customIconsReloadCenter, std::max(g_customIconsReloadRadius, 10.0f));
-        
-            targets.push_back({ g_radialShapeButtonMin, g_radialShapeButtonMax });
-            targets.push_back({ g_trackModeButtonMin, g_trackModeButtonMax });
-            targets.push_back({ g_trackEditorButtonMin, g_trackEditorButtonMax });
-            targets.push_back({ g_radialAnimationButtonMin, g_radialAnimationButtonMax });
-        
-            addCircle(g_gameplayPreviewButtonCenter, 18.0f);
-        
-            addCircle(g_gameplayDescriptionButtonCenter, 18.0f);
-
-            for (const auto& center : g_drawToggleButtonCenters)
-                addCircle(center, 18.0f);
-            targets.push_back(g_drawEdgeEffectStyleHitbox);
-            targets.push_back(g_drawMarkStyleHitbox);
+            scroll = &g_gameplayPanelScroll;
+            maxScroll = g_gameplayPanelMaxScroll;
+            viewport = g_gameplayScrollbarHitbox;
         }
-        
-        if (targets.empty())
-            return;
+        else
+        {
+            scroll = &g_layoutPanelScroll;
+            maxScroll = g_layoutPanelMaxScroll;
+            viewport = g_layoutScrollbarHitbox;
+        }
 
-        g_gamepadSettingsNavigationIndex = std::clamp(
-            g_gamepadSettingsNavigationIndex + (vertical > 0 ? 1 : vertical < 0 ? -1 : 0),
-            0, static_cast<int>(targets.size()) - 1);
-        
-        const auto& target = targets[g_gamepadSettingsNavigationIndex];
-        
+        const float safeTop = viewport.min.y + 42.0f;
+        // Começa a deslocar no antepenúltimo controle visível. Isso deixa
+        // duas linhas reais abaixo do foco para menus expansíveis como COLORS.
+        const float safeBottom = viewport.max.y - 58.0f - 92.0f;
+        const float halfHeight = (selected.hitbox.max.y - selected.hitbox.min.y) * 0.5f;
+        const float currentCenterY = selected.contentY - *scroll;
+        if (vertical != 0 && IsGamepadFocusableHitbox(viewport))
+        {
+            float requested = 0.0f;
+            if (currentCenterY + halfHeight > safeBottom)
+                requested = currentCenterY + halfHeight - safeBottom;
+            else if (currentCenterY - halfHeight < safeTop)
+                requested = currentCenterY - halfHeight - safeTop;
+            *scroll = std::clamp(*scroll + requested, 0.0f, maxScroll);
+        }
+
         g_settingsMousePos = ImVec2(
-            (target.min.x + target.max.x) * 0.5f,
-            (target.min.y + target.max.y) * 0.5f);
-        
+            (selected.hitbox.min.x + selected.hitbox.max.x) * 0.5f,
+            selected.contentY - *scroll);
         if (horizontal != 0)
-            g_settingsMousePos.x = std::clamp(
-                g_settingsMousePos.x + static_cast<float>(horizontal) * 18.0f,
-                target.min.x, target.max.x);
-        
+            g_settingsMousePos.x = std::clamp(g_settingsMousePos.x + horizontal * 18.0f,
+                selected.hitbox.min.x, selected.hitbox.max.x);
         ImGui::GetIO().MousePos = g_settingsMousePos;
-        
         Gamepad::PulseSelection();
     }
 
@@ -6608,7 +6892,7 @@ namespace Menu
 
         if (g_settingsSection == SettingsSection::Settings)
         {
-            const int sliderIndex = g_gamepadSettingsNavigationIndex - 3;
+            const int sliderIndex = g_gamepadSettingsSelectedGeneralSlider;
             if (sliderIndex == 0)
                 Config::g_sideMouseSensitivity = std::clamp(
                     Config::g_sideMouseSensitivity + 0.10f * direction, 0.25f, 3.0f);
@@ -6628,8 +6912,8 @@ namespace Menu
         }
 
         if (g_settingsSection != SettingsSection::Layout ||
-            g_gamepadSettingsNavigationIndex < 0 ||
-            g_gamepadSettingsNavigationIndex >= static_cast<int>(LayoutSlider::Count))
+            g_gamepadSettingsSelectedLayoutSlider < 0 ||
+            g_gamepadSettingsSelectedLayoutSlider >= static_cast<int>(LayoutSlider::Count))
             return;
 
         float* value = nullptr;
@@ -6637,7 +6921,7 @@ namespace Menu
         float maximum = 100.0f;
         float step = 2.0f;
         const auto selectedLayoutSlider = static_cast<LayoutSlider>(
-            g_gamepadSettingsNavigationIndex);
+            g_gamepadSettingsSelectedLayoutSlider);
         if (selectedLayoutSlider == LayoutSlider::RadialLineOpacity)
         {
             Track::SetRadialLineOpacity(std::clamp(
@@ -17213,7 +17497,8 @@ namespace Menu
         const float bagHoverDy = g_settingsMousePos.y - g_quickDrawSecondaryBagCenter.y;
         const bool bagHovered = bagHoverDx * bagHoverDx + bagHoverDy * bagHoverDy <=
             bagHoverRadius * bagHoverRadius;
-        const bool expanded = bagHovered || g_quickDrawSecondaryDragActive;
+        const bool expanded = (bagHovered && !g_quickDrawSecondaryGamepadBagSuppressed) ||
+            g_quickDrawSecondaryDragActive;
         g_quickDrawSecondaryBagExpandT = AnimateSettingsValue(
             g_quickDrawSecondaryBagExpandT, expanded ? 1.0f : 0.0f, 7.5f, dt);
         // Fechada, a área ampliada facilita revelar o nome. Aberta, ela volta
@@ -17490,6 +17775,13 @@ namespace Menu
             {
                 draw->AddCircle(itemCenter, itemRadius + 2.0f,
                     FadeColor(IM_COL32(245, 245, 245, 230), itemAlpha), 24, 1.35f);
+            }
+            if (g_quickDrawSecondaryGamepadSelecting &&
+                static_cast<int>(i) == g_quickDrawSecondaryGamepadIndex)
+            {
+                draw->AddCircle(itemCenter, itemRadius + 4.0f,
+                    FadeColor(MenuThemeColor(Config::MenuThemeColor::BorderHover, 245),
+                        itemAlpha), 24, 2.0f);
             }
             if (auto* icon = ItemIcon::Get(candidates[i].form))
             {
@@ -22402,6 +22694,7 @@ namespace Menu
         }
         SetQuickDrawHotkey(g_quickDrawEditorItem, key);
         g_quickDrawEditorWaitingHotkey = false;
+        g_quickDrawGamepadFocus = QuickDrawGamepadFocus::Settings;
         g_quickDrawKeyboardOpen = false;
         g_quickDrawKeyboardCards.clear();
         g_quickDrawEditorHotkeyClickFlash = 1.0f;
@@ -22700,6 +22993,21 @@ namespace Menu
         if (virtualKey == 'Q') ConfirmQuickDrawHotkeyHand(true);
         else if (virtualKey == 'E') ConfirmQuickDrawHotkeyHand(false);
         else return false;
+        return true;
+    }
+
+    bool HandleQuickDrawHotkeyHandGamepad(std::uint32_t button, bool firstPress)
+    {
+        if (!g_quickDrawHotkeyHandSelectionActive || !firstPress)
+            return false;
+
+        using Key = RE::BSWin32GamepadDevice::Key;
+        if (button == Key::kLeftShoulder)
+            ConfirmQuickDrawHotkeyHand(true);
+        else if (button == Key::kRightShoulder)
+            ConfirmQuickDrawHotkeyHand(false);
+        else
+            return false;
         return true;
     }
 
@@ -23055,6 +23363,7 @@ namespace Menu
         g_quickDrawSettingsExpanded = false;
         g_quickDrawSettingsOpenT = 0.0f;
         g_quickDrawSettingsActiveSlider = QuickDrawSettingsSlider::None;
+        g_quickDrawSettingsGamepadSliderIndex = -1;
         g_quickDrawEffectPreviewUntil = 0.0f;
         g_quickDrawEffectPreviewStyle = -1;
         g_quickDrawSettingsScroll = 0.0f;
@@ -23079,6 +23388,9 @@ namespace Menu
         g_quickDrawEditorAutoUseConnectionCommitted =
             g_quickDrawEditorAutoUseHadValidDrawConnection;
         g_quickDrawSecondaryDragActive = false;
+        g_quickDrawSecondaryGamepadSelecting = false;
+        g_quickDrawSecondaryGamepadIndex = -1;
+        g_quickDrawSecondaryGamepadBagSuppressed = false;
         g_quickDrawSecondaryDraggedItem = {};
         g_quickDrawSecondarySelectedItem = {};
         g_quickDrawSecondaryHoveredItem = {};
@@ -23180,6 +23492,8 @@ namespace Menu
         case QuickDrawGamepadFocus::AutoUse: return g_quickDrawEditorAutoUseCenter;
         case QuickDrawGamepadFocus::Ok: return g_quickDrawEditorOkCenter;
         case QuickDrawGamepadFocus::Clear: return g_quickDrawEditorResetCenter;
+        case QuickDrawGamepadFocus::HotkeyClear: return g_quickDrawEditorHotkeyClearCenter;
+        case QuickDrawGamepadFocus::OpenHotkeys: return g_quickDrawEditorHotkeyKeyboardCenter;
         default: return g_quickDrawSettingsButtonCenter;
         }
     }
@@ -23188,9 +23502,74 @@ namespace Menu
     {
         if (!g_quickDrawEditorOpen || g_quickDrawEditorWaitingHotkey)
             return g_quickDrawEditorOpen;
+
+        if (g_quickDrawSettingsExpanded &&
+            (g_quickDrawSettingsGamepadSliderIndex == 0 ||
+             g_quickDrawSettingsGamepadSliderIndex == 1))
+        {
+            if (g_quickDrawSettingsGamepadSliderIndex == 0)
+                Config::g_drawEffectsGameplay = !Config::g_drawEffectsGameplay;
+            else
+                Config::g_drawEffectsEditor = !Config::g_drawEffectsEditor;
+            Config::SaveConfig();
+            Gamepad::PulseSelection();
+            return true;
+        }
+
+        // A bolsa secundária vira uma pequena lista modal no controle. Não
+        // simulamos drag: confirmar grava diretamente o candidato destacado.
+        if (g_quickDrawSecondaryGamepadSelecting)
+        {
+            if (g_quickDrawSecondaryCandidates.empty())
+                return true;
+            g_quickDrawSecondaryGamepadIndex = std::clamp(
+                g_quickDrawSecondaryGamepadIndex, 0,
+                static_cast<int>(g_quickDrawSecondaryCandidates.size()) - 1);
+            const RadialItem& selected = g_quickDrawSecondaryCandidates[
+                static_cast<std::size_t>(g_quickDrawSecondaryGamepadIndex)].item;
+            if (CanQuickDrawUseSecondaryAutoUse(g_quickDrawEditorItem.form,
+                    selected.form))
+            {
+                if (QuickDrawGesture* gesture = FindQuickDrawGesture(g_quickDrawEditorItem))
+                    gesture->secondaryAutoUseKey = MakeQuickDrawKey(selected);
+                else
+                {
+                    QuickDrawGesture created{};
+                    created.key = MakeQuickDrawKey(g_quickDrawEditorItem);
+                    created.secondaryAutoUseKey = MakeQuickDrawKey(selected);
+                    g_quickDrawGestures.push_back(std::move(created));
+                }
+                g_quickDrawSecondarySelectedItem = selected;
+            }
+            g_quickDrawSecondaryGamepadSelecting = false;
+            g_quickDrawSecondaryGamepadIndex = -1;
+            g_quickDrawSecondaryGamepadBagSuppressed = true;
+            g_quickDrawGamepadFocus = QuickDrawGamepadFocus::Secondary;
+            g_settingsMousePos = g_quickDrawSecondaryAutoUseCenter;
+            ImGui::GetIO().MousePos = g_settingsMousePos;
+            Gamepad::PulseSelection();
+            return true;
+        }
+        if (g_quickDrawGamepadFocus == QuickDrawGamepadFocus::Secondary)
+        {
+            g_quickDrawSecondaryGamepadSelecting = true;
+            g_quickDrawSecondaryGamepadIndex = 0;
+            g_quickDrawSecondaryGamepadBagSuppressed = false;
+            // O ponteiro fica no centro por um frame; isso abre a bolsa pelo
+            // mesmo fluxo visual usado pelo mouse antes de selecionar itens.
+            g_settingsMousePos = g_quickDrawSecondaryAutoUseCenter;
+            ImGui::GetIO().MousePos = g_settingsMousePos;
+            Gamepad::PulseSelection();
+            return true;
+        }
         g_settingsMousePos = QuickDrawGamepadPosition();
         ImGui::GetIO().MousePos = g_settingsMousePos;
-        return HandleQuickDrawEditorMouseButton(0, true);
+        const bool togglingSettings =
+            g_quickDrawGamepadFocus == QuickDrawGamepadFocus::Settings;
+        const bool handled = HandleQuickDrawEditorMouseButton(0, true);
+        if (togglingSettings && g_quickDrawSettingsExpanded)
+            g_quickDrawSettingsGamepadSliderIndex = -1;
+        return handled;
     }
 
     bool HandleQuickDrawGamepadBack()
@@ -23198,7 +23577,20 @@ namespace Menu
         if (!g_quickDrawEditorOpen)
             return false;
         if (g_quickDrawEditorWaitingHotkey) { g_quickDrawEditorWaitingHotkey = false; return true; }
-        if (g_quickDrawSettingsExpanded) { g_quickDrawSettingsExpanded = false; return true; }
+        if (g_quickDrawSecondaryGamepadSelecting) {
+            g_quickDrawSecondaryGamepadSelecting = false;
+            g_quickDrawSecondaryGamepadIndex = -1;
+            g_quickDrawSecondaryGamepadBagSuppressed = true;
+            g_quickDrawGamepadFocus = QuickDrawGamepadFocus::Secondary;
+            g_settingsMousePos = g_quickDrawSecondaryAutoUseCenter;
+            ImGui::GetIO().MousePos = g_settingsMousePos;
+            return true;
+        }
+        if (g_quickDrawSettingsExpanded) {
+            g_quickDrawSettingsExpanded = false;
+            g_quickDrawSettingsGamepadSliderIndex = -1;
+            return true;
+        }
         ConfirmQuickDrawEditor();
         return true;
     }
@@ -23207,29 +23599,152 @@ namespace Menu
     {
         if (!g_quickDrawEditorOpen || g_quickDrawEditorWaitingHotkey)
             return g_quickDrawEditorOpen;
+        const QuickDrawGesture* gesture = FindQuickDrawGesture(g_quickDrawEditorItem);
+        const bool hasHotkey = gesture && gesture->hotkey != 0;
+        const bool hasAutoUse = IsQuickDrawAutoUseEligible(g_quickDrawEditorItem.form);
+        const auto syncFocusCursor = []() {
+            g_settingsMousePos = QuickDrawGamepadPosition();
+            ImGui::GetIO().MousePos = g_settingsMousePos;
+            Gamepad::PulseSelection();
+        };
+
+        if (g_quickDrawSecondaryGamepadSelecting)
+        {
+            if (horizontal != 0 && !g_quickDrawSecondaryCandidates.empty())
+            {
+                const int count = static_cast<int>(g_quickDrawSecondaryCandidates.size());
+                g_quickDrawSecondaryGamepadIndex = g_quickDrawSecondaryGamepadIndex < 0
+                    ? 0 : WrapIndex(g_quickDrawSecondaryGamepadIndex + horizontal, count);
+                const auto& candidate = g_quickDrawSecondaryCandidates[
+                    static_cast<std::size_t>(g_quickDrawSecondaryGamepadIndex)];
+                g_settingsMousePos = candidate.center;
+                ImGui::GetIO().MousePos = g_settingsMousePos;
+                Gamepad::PulseSelection();
+            }
+            return true;
+        }
+
         if (g_quickDrawSettingsExpanded)
         {
+            std::vector<QuickDrawSettingsSlider> sliders{
+                QuickDrawSettingsSlider::EffectsGameplay,
+                QuickDrawSettingsSlider::EffectsEditor,
+                QuickDrawSettingsSlider::Style };
+            if (Config::g_drawEdgeEffectStyle != 0)
+            {
+                sliders.push_back(QuickDrawSettingsSlider::Size);
+                sliders.push_back(QuickDrawSettingsSlider::Opacity);
+            }
             if (vertical != 0)
-                g_quickDrawSettingsScroll = std::clamp(g_quickDrawSettingsScroll + vertical * 48.0f, 0.0f, g_quickDrawSettingsMaxScroll);
+            {
+                g_quickDrawSettingsGamepadSliderIndex = std::clamp(
+                    g_quickDrawSettingsGamepadSliderIndex + vertical, 0,
+                    static_cast<int>(sliders.size()) - 1);
+                const auto slider = sliders[static_cast<std::size_t>(
+                    g_quickDrawSettingsGamepadSliderIndex)];
+                if (slider == QuickDrawSettingsSlider::EffectsGameplay ||
+                    slider == QuickDrawSettingsSlider::EffectsEditor)
+                {
+                    const std::size_t toggleIndex = slider ==
+                        QuickDrawSettingsSlider::EffectsGameplay ? 0u : 1u;
+                    g_settingsMousePos = g_quickDrawSettingsToggleCenters[toggleIndex];
+                }
+                else
+                {
+                    const ImVec2 min = slider == QuickDrawSettingsSlider::Style
+                        ? g_quickDrawSettingsStyleMin
+                        : slider == QuickDrawSettingsSlider::Size
+                            ? g_quickDrawSettingsSizeMin : g_quickDrawSettingsOpacityMin;
+                    const ImVec2 max = slider == QuickDrawSettingsSlider::Style
+                        ? g_quickDrawSettingsStyleMax
+                        : slider == QuickDrawSettingsSlider::Size
+                            ? g_quickDrawSettingsSizeMax : g_quickDrawSettingsOpacityMax;
+                    g_settingsMousePos = ImVec2((min.x + max.x) * 0.5f,
+                        (min.y + max.y) * 0.5f);
+                }
+                ImGui::GetIO().MousePos = g_settingsMousePos;
+                Gamepad::PulseSelection();
+                return true;
+            }
+            if (horizontal != 0 && g_quickDrawSettingsGamepadSliderIndex >= 0)
+            {
+                const auto slider = sliders[static_cast<std::size_t>(
+                    g_quickDrawSettingsGamepadSliderIndex)];
+                if (slider == QuickDrawSettingsSlider::Style)
+                    Config::g_drawEdgeEffectStyle = std::clamp(
+                        Config::g_drawEdgeEffectStyle + horizontal, 0,
+                        QuickDrawMagicEffects::kEdgeEffectStyleCount - 1);
+                else if (slider == QuickDrawSettingsSlider::Size)
+                    Config::g_drawEdgeEffectSize = std::clamp(
+                        Config::g_drawEdgeEffectSize + horizontal * 5.0f, 25.0f, 250.0f);
+                else if (slider == QuickDrawSettingsSlider::Opacity)
+                    Config::g_drawEdgeEffectOpacity = std::clamp(
+                        Config::g_drawEdgeEffectOpacity + horizontal * 5.0f, 0.0f, 100.0f);
+                Config::SaveConfig();
+                Gamepad::PulseSelection();
+            }
             return true;
         }
-        if (vertical < 0) { g_quickDrawGamepadFocus = QuickDrawGamepadFocus::Settings; return true; }
-        if (vertical > 0 && g_quickDrawGamepadFocus == QuickDrawGamepadFocus::Hotkey)
+
+        // Up sempre sobe ao Settings, exceto a pequena coluna abaixo do
+        // Waiting Key, que retorna passo a passo ao próprio Waiting Key.
+        if (vertical < 0)
         {
-            g_quickDrawGamepadFocus = FindQuickDrawGesture(g_quickDrawEditorItem) && FindQuickDrawGesture(g_quickDrawEditorItem)->hotkey ? QuickDrawGamepadFocus::Gate : QuickDrawGamepadFocus::Hotkey;
+            if (g_quickDrawGamepadFocus == QuickDrawGamepadFocus::OpenHotkeys)
+                g_quickDrawGamepadFocus = hasHotkey
+                    ? QuickDrawGamepadFocus::HotkeyClear
+                    : QuickDrawGamepadFocus::Hotkey;
+            else if (g_quickDrawGamepadFocus == QuickDrawGamepadFocus::HotkeyClear)
+                g_quickDrawGamepadFocus = QuickDrawGamepadFocus::Hotkey;
+            else
+                g_quickDrawGamepadFocus = QuickDrawGamepadFocus::Settings;
+            syncFocusCursor();
             return true;
         }
-        if (!horizontal) return true;
+        if (vertical > 0)
+        {
+            if (g_quickDrawGamepadFocus == QuickDrawGamepadFocus::Hotkey)
+                g_quickDrawGamepadFocus = hasHotkey
+                    ? QuickDrawGamepadFocus::HotkeyClear
+                    : QuickDrawGamepadFocus::OpenHotkeys;
+            else if (g_quickDrawGamepadFocus == QuickDrawGamepadFocus::HotkeyClear)
+                g_quickDrawGamepadFocus = QuickDrawGamepadFocus::OpenHotkeys;
+            syncFocusCursor();
+            return true;
+        }
+        if (!horizontal)
+            return true;
+
         std::vector<QuickDrawGamepadFocus> cycle{ QuickDrawGamepadFocus::Hotkey };
-        if (FindQuickDrawGesture(g_quickDrawEditorItem) && FindQuickDrawGesture(g_quickDrawEditorItem)->hotkey) cycle.push_back(QuickDrawGamepadFocus::Gate);
+        // Require Wheel Key é editável antes mesmo de existir uma hotkey;
+        // isso também deixa o D-pad Left a partir do Waiting Key consistente
+        // com o botão sempre desenhado ao lado dele.
+        cycle.push_back(QuickDrawGamepadFocus::Gate);
+        // O slot secundário é selecionável mesmo vazio: A/X abre a bolsa
+        // justamente para permitir escolher o primeiro item.
         cycle.push_back(QuickDrawGamepadFocus::Secondary);
-        if (IsQuickDrawAutoUseEligible(g_quickDrawEditorItem.form)) cycle.push_back(QuickDrawGamepadFocus::AutoUse);
-        cycle.push_back(QuickDrawGamepadFocus::Ok); cycle.push_back(QuickDrawGamepadFocus::Clear);
+        if (hasAutoUse)
+            cycle.push_back(QuickDrawGamepadFocus::AutoUse);
+        cycle.push_back(QuickDrawGamepadFocus::Ok);
+        cycle.push_back(QuickDrawGamepadFocus::Clear);
+
+        // Settings fica fora do anel. A saída inicial preserva a geometria
+        // pedida: esquerda começa no Waiting Key; direita no secundário.
+        if (g_quickDrawGamepadFocus == QuickDrawGamepadFocus::Settings)
+        {
+            if (horizontal < 0)
+                g_quickDrawGamepadFocus = QuickDrawGamepadFocus::Hotkey;
+            else
+                g_quickDrawGamepadFocus = QuickDrawGamepadFocus::Secondary;
+            syncFocusCursor();
+            return true;
+        }
         auto it = std::find(cycle.begin(), cycle.end(), g_quickDrawGamepadFocus);
-        int i = it == cycle.end() ? 0 : static_cast<int>(it - cycle.begin());
-        i = (i - horizontal + static_cast<int>(cycle.size())) % static_cast<int>(cycle.size());
-        g_quickDrawGamepadFocus = cycle[static_cast<size_t>(i)];
-        g_settingsMousePos = QuickDrawGamepadPosition(); ImGui::GetIO().MousePos = g_settingsMousePos;
+        int index = it == cycle.end() ? 0 : static_cast<int>(it - cycle.begin());
+        index = (index - horizontal + static_cast<int>(cycle.size())) %
+            static_cast<int>(cycle.size());
+        g_quickDrawGamepadFocus = cycle[static_cast<std::size_t>(index)];
+        syncFocusCursor();
         return true;
     }
 
@@ -24116,11 +24631,29 @@ namespace Menu
                 (cappedFontScale / globalFontScale);
             const ImVec2 textSize = ImGui::GetFont()->CalcTextSizeA(hotkeyFontSize,
                 FLT_MAX, 0.0f, hotkeyText.c_str());
+            // Rótulos longos (por exemplo nomes de gamepad) percorrem apenas
+            // a faixa interna do Waiting Key, sem vazar pelo círculo.
+            const float textWidth = kQuickDrawEditorHotkeyRadius * 2.0f - 10.0f;
+            const float overflow = std::max(0.0f, textSize.x - textWidth);
+            float textOffset = 0.0f;
+            if (overflow > 0.0f)
+            {
+                const float phase = std::fmod(static_cast<float>(ImGui::GetTime()) * 0.65f,
+                    2.0f);
+                textOffset = overflow * (phase <= 1.0f ? phase : 2.0f - phase);
+            }
+            draw->PushClipRect(
+                ImVec2(g_quickDrawEditorHotkeyCenter.x - textWidth * 0.5f,
+                    g_quickDrawEditorHotkeyCenter.y - kQuickDrawEditorHotkeyRadius + 4.0f),
+                ImVec2(g_quickDrawEditorHotkeyCenter.x + textWidth * 0.5f,
+                    g_quickDrawEditorHotkeyCenter.y + kQuickDrawEditorHotkeyRadius - 4.0f),
+                true);
             draw->AddText(ImGui::GetFont(), hotkeyFontSize,
-                ImVec2(g_quickDrawEditorHotkeyCenter.x - textSize.x * 0.5f,
+                ImVec2(g_quickDrawEditorHotkeyCenter.x - textSize.x * 0.5f - textOffset,
                     g_quickDrawEditorHotkeyCenter.y - textSize.y * 0.5f + 1.0f),
                 FadeColor(MenuThemeColor(Config::MenuThemeColor::PrimaryText, 255), alpha * hotkeyEntryAlpha *
                     SmoothSettingsProgress(g_quickDrawEditorHotkeyTextRevealT)), hotkeyText.c_str());
+            draw->PopClipRect();
         }
         else if (hotkeyHovered || g_quickDrawEditorWaitingHotkey)
         {
@@ -32245,6 +32778,13 @@ namespace Menu
             );
 
         float y = position.y;
+        const auto hideQuickDrawInfoHitbox = [](LayoutSliderHitbox& hitbox) {
+            hitbox.min = ImVec2(1.0f, 1.0f);
+            hitbox.max = ImVec2(0.0f, 0.0f);
+        };
+        hideQuickDrawInfoHitbox(g_settingsInfoDrawQuickDrawHitbox);
+        hideQuickDrawInfoHitbox(g_settingsInfoHotkeyQuickDrawHitbox);
+        hideQuickDrawInfoHitbox(g_settingsInfoOpenQuickDrawHitbox);
 
         // ========================================================
         // HEADER
@@ -32298,6 +32838,7 @@ namespace Menu
         // ========================================================
         if (radialItem)
         {
+            g_settingsInfoQuickDrawItem = *radialItem;
             // Os três indicadores compartilham o mesmo bloco, mas são
             // independentes: gesto, hotkey e Auto-Use podem existir em
             // qualquer combinação útil para o item.
@@ -32322,12 +32863,25 @@ namespace Menu
                     ImVec2 primaryCenter = visualCenter;
                     if (hasStroke)
                     {
-                        draw->AddCircle(visualCenter, gestureRadius,
+                        g_settingsInfoDrawQuickDrawHitbox.min = visualCenter -
+                            ImVec2(gestureRadius + 5.0f, gestureRadius + 5.0f);
+                        g_settingsInfoDrawQuickDrawHitbox.max = visualCenter +
+                            ImVec2(gestureRadius + 5.0f, gestureRadius + 5.0f);
+                        const bool drawHovered = PointInQuickDrawRect(g_settingsMousePos,
+                            g_settingsInfoDrawQuickDrawHitbox.min,
+                            g_settingsInfoDrawQuickDrawHitbox.max);
+                        g_settingsInfoDrawQuickDrawHoverT = AnimateSettingsValue(
+                            g_settingsInfoDrawQuickDrawHoverT,
+                            drawHovered ? 1.0f : 0.0f, 12.0f,
+                            std::clamp(ImGui::GetIO().DeltaTime, 0.0f, 0.05f));
+                        const float animatedGestureRadius = gestureRadius *
+                            (1.0f + 0.05f * g_settingsInfoDrawQuickDrawHoverT);
+                        draw->AddCircle(visualCenter, animatedGestureRadius,
                             FadeColor(IM_COL32(190, 190, 190, 115), alpha), 40, 1.0f);
                         QuickDrawMagicEffects::DrawStoredStrokeGlow(draw,
-                            quickDraw->points, visualCenter, gestureRadius, alpha);
+                            quickDraw->points, visualCenter, animatedGestureRadius, alpha);
                         DrawQuickDrawStroke(draw, quickDraw->points, visualCenter,
-                            gestureRadius,
+                            animatedGestureRadius,
                             FadeColor(IM_COL32(245, 245, 245, 235), alpha),
                             1.6f * descriptorScale);
                     }
@@ -32339,9 +32893,22 @@ namespace Menu
                                 hotkeyRadius, visualCenter.y)
                             : visualCenter;
                         primaryCenter = hasStroke ? visualCenter : hotkeyCenter;
-                        draw->AddCircleFilled(hotkeyCenter, hotkeyRadius,
+                        g_settingsInfoHotkeyQuickDrawHitbox.min = hotkeyCenter -
+                            ImVec2(hotkeyRadius + 5.0f, hotkeyRadius + 5.0f);
+                        g_settingsInfoHotkeyQuickDrawHitbox.max = hotkeyCenter +
+                            ImVec2(hotkeyRadius + 5.0f, hotkeyRadius + 5.0f);
+                        const bool hotkeyHovered = PointInQuickDrawRect(g_settingsMousePos,
+                            g_settingsInfoHotkeyQuickDrawHitbox.min,
+                            g_settingsInfoHotkeyQuickDrawHitbox.max);
+                        g_settingsInfoHotkeyQuickDrawHoverT = AnimateSettingsValue(
+                            g_settingsInfoHotkeyQuickDrawHoverT,
+                            hotkeyHovered ? 1.0f : 0.0f, 12.0f,
+                            std::clamp(ImGui::GetIO().DeltaTime, 0.0f, 0.05f));
+                        const float animatedHotkeyRadius = hotkeyRadius *
+                            (1.0f + 0.05f * g_settingsInfoHotkeyQuickDrawHoverT);
+                        draw->AddCircleFilled(hotkeyCenter, animatedHotkeyRadius,
                             FadeColor(MenuThemeColor(Config::MenuThemeColor::RaisedBackground, 220), alpha), 24);
-                        draw->AddCircle(hotkeyCenter, hotkeyRadius,
+                        draw->AddCircle(hotkeyCenter, animatedHotkeyRadius,
                             FadeColor(MenuThemeColor(Config::MenuThemeColor::BorderHover, 135), alpha), 24, 1.0f);
                         const std::string hotkeyText =
                             Config::KeyToString(quickDraw->hotkey);
@@ -32421,6 +32988,58 @@ namespace Menu
 
                     y += (visualRadius * 2.0f + 13.0f * descriptorScale);
                 }
+                else
+                {
+                    // Sem gesto nem hotkey, a mesma posição ganha uma porta
+                    // discreta para abrir o editor. No hover ela preenche em
+                    // branco opaco, sem alterar seu tamanho.
+                    constexpr float openRadiusBase = 10.0f;
+                    const ImVec2 openCenter(position.x + panelWidth * 0.5f,
+                        y + openRadiusBase + 2.0f);
+                    g_settingsInfoOpenQuickDrawHitbox.min = openCenter -
+                        ImVec2(openRadiusBase + 5.0f, openRadiusBase + 5.0f);
+                    g_settingsInfoOpenQuickDrawHitbox.max = openCenter +
+                        ImVec2(openRadiusBase + 5.0f, openRadiusBase + 5.0f);
+                    const bool openHovered = PointInQuickDrawRect(g_settingsMousePos,
+                        g_settingsInfoOpenQuickDrawHitbox.min,
+                        g_settingsInfoOpenQuickDrawHitbox.max);
+                    g_settingsInfoOpenQuickDrawHoverT = AnimateSettingsValue(
+                        g_settingsInfoOpenQuickDrawHoverT,
+                        openHovered ? 1.0f : 0.0f, 10.0f,
+                        std::clamp(ImGui::GetIO().DeltaTime, 0.0f, 0.05f));
+                    draw->AddCircleFilled(openCenter, openRadiusBase,
+                        FadeColor(MenuThemeColor(Config::MenuThemeColor::PrimaryText,
+                            static_cast<int>(125.0f * g_settingsInfoOpenQuickDrawHoverT)), alpha), 24);
+                    draw->AddCircle(openCenter, openRadiusBase,
+                        FadeColor(MenuThemeColor(Config::MenuThemeColor::BorderHover, 180), alpha),
+                        24, 1.0f);
+                    y += openRadiusBase * 2.0f + 13.0f * descriptorScale;
+                }
+            }
+            else
+            {
+                // Item ainda sem estrutura Quick Draw: também recebe o
+                // atalho vazio, não apenas um gesto já existente.
+                constexpr float openRadiusBase = 10.0f;
+                const ImVec2 openCenter(position.x + panelWidth * 0.5f,
+                    y + openRadiusBase + 2.0f);
+                g_settingsInfoOpenQuickDrawHitbox.min = openCenter -
+                    ImVec2(openRadiusBase + 5.0f, openRadiusBase + 5.0f);
+                g_settingsInfoOpenQuickDrawHitbox.max = openCenter +
+                    ImVec2(openRadiusBase + 5.0f, openRadiusBase + 5.0f);
+                const bool openHovered = PointInQuickDrawRect(g_settingsMousePos,
+                    g_settingsInfoOpenQuickDrawHitbox.min,
+                    g_settingsInfoOpenQuickDrawHitbox.max);
+                g_settingsInfoOpenQuickDrawHoverT = AnimateSettingsValue(
+                    g_settingsInfoOpenQuickDrawHoverT, openHovered ? 1.0f : 0.0f,
+                    10.0f, std::clamp(ImGui::GetIO().DeltaTime, 0.0f, 0.05f));
+                draw->AddCircleFilled(openCenter, openRadiusBase,
+                    FadeColor(MenuThemeColor(Config::MenuThemeColor::PrimaryText,
+                        static_cast<int>(125.0f * g_settingsInfoOpenQuickDrawHoverT)), alpha), 24);
+                draw->AddCircle(openCenter, openRadiusBase,
+                    FadeColor(MenuThemeColor(Config::MenuThemeColor::BorderHover, 180), alpha),
+                    24, 1.0f);
+                y += openRadiusBase * 2.0f + 13.0f * descriptorScale;
             }
         }
 
@@ -32954,6 +33573,27 @@ namespace Menu
 
         g_settingsInfoLastHasUniqueID =
             previewItem.hasUniqueID;
+    }
+
+    bool SettingsQuickDrawInfoClick()
+    {
+        if (!SettingsMenu::WheelSettingsMenu::IsOpen() ||
+            g_settingsSection != SettingsSection::ItemInfo ||
+            !g_settingsInfoQuickDrawItem.form)
+            return false;
+
+        const auto contains = [&](const LayoutSliderHitbox& hitbox) {
+            return PointInQuickDrawRect(g_settingsMousePos, hitbox.min, hitbox.max);
+        };
+        if (!contains(g_settingsInfoDrawQuickDrawHitbox) &&
+            !contains(g_settingsInfoHotkeyQuickDrawHitbox) &&
+            !contains(g_settingsInfoOpenQuickDrawHitbox))
+            return false;
+
+        g_settingsHoveredItem = g_settingsInfoQuickDrawItem.form;
+        g_settingsHoveredUniqueID = g_settingsInfoQuickDrawItem.uniqueID;
+        g_settingsHoveredHasUniqueID = g_settingsInfoQuickDrawItem.hasUniqueID;
+        return BeginQuickDrawEditor();
     }
 
         
@@ -35934,6 +36574,8 @@ namespace Menu
         g_layoutSliderRows.fill(-1);
         
         g_layoutSliderVisible.fill(false);
+        g_layoutColorRows.fill(-1);
+        g_layoutMenuTitleRow = -1;
         
         int nextRow = 0;
         
@@ -36027,6 +36669,7 @@ namespace Menu
         
         const auto addColorRow = [&](LayoutColorControl control, int& row) {
             row = nextRow++;
+            g_layoutColorRows[static_cast<std::size_t>(control)] = row;
             if (g_openLayoutColor == static_cast<int>(control))
             {
                 colorPickerRow = nextRow;
@@ -36186,6 +36829,7 @@ namespace Menu
         if (groupExpanded(LayoutGroup::ItemColors))
         {
             menuTitleRow = nextRow++;
+            g_layoutMenuTitleRow = menuTitleRow;
             for (std::size_t i = 0; i < menuColorRows.size(); ++i)
                 addColorRow(static_cast<LayoutColorControl>(
                     static_cast<std::size_t>(LayoutColorControl::MenuPrimaryTitle) + i),
@@ -37344,7 +37988,7 @@ namespace Menu
                 hideAuxiliary();
             }
             else if (g_gamepadSettingsNeedsCursorSync &&
-                static_cast<int>(i) == g_gamepadSettingsNavigationIndex)
+                static_cast<int>(i) == g_gamepadSettingsSelectedLayoutSlider)
             {
                 g_settingsMousePos = ImVec2(
                     (hitbox.min.x + hitbox.max.x) * 0.5f,

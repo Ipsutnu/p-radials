@@ -110,6 +110,64 @@ namespace SettingsMenu
 
 
     static bool g_blurApplied = false;
+    static bool g_hubOwnsPlayerInputBlock = false;
+    static bool g_playerInputWasBlockedBeforeHub = false;
+    static bool g_hubOwnsAnalogControlBlock = false;
+    static std::uint32_t g_enabledControlsBeforeHub = 0;
+    static std::uint32_t g_storedControlsBeforeHub = 0;
+
+    void UpdateHubPlayerInputBlock(bool a_shouldBlock)
+    {
+        auto* controls = RE::PlayerControls::GetSingleton();
+        if (controls && a_shouldBlock)
+        {
+            if (!g_hubOwnsPlayerInputBlock)
+            {
+                g_playerInputWasBlockedBeforeHub = controls->blockPlayerInput;
+                g_hubOwnsPlayerInputBlock = true;
+            }
+            controls->blockPlayerInput = true;
+        }
+        else if (controls && g_hubOwnsPlayerInputBlock)
+        {
+            controls->blockPlayerInput = g_playerInputWasBlockedBeforeHub;
+            g_hubOwnsPlayerInputBlock = false;
+        }
+
+        // PlayerControls é uma trava genérica e ainda pode ser consultado
+        // tarde demais no primeiro frame do stick. ControlMap é a camada que
+        // MovementHandler/LookHandler verificam antes de aplicar o eixo.
+        auto* controlMap = RE::ControlMap::GetSingleton();
+        if (!controlMap)
+            return;
+
+        using Flag = RE::UserEvents::USER_EVENT_FLAG;
+        constexpr auto analogFlags = static_cast<std::uint32_t>(Flag::kMovement) |
+            static_cast<std::uint32_t>(Flag::kLooking);
+
+        if (a_shouldBlock)
+        {
+            if (!g_hubOwnsAnalogControlBlock)
+            {
+                controlMap->GetControlsState(
+                    g_enabledControlsBeforeHub,
+                    g_storedControlsBeforeHub);
+                g_hubOwnsAnalogControlBlock = true;
+            }
+
+            std::uint32_t enabled = 0;
+            std::uint32_t stored = 0;
+            controlMap->GetControlsState(enabled, stored);
+            controlMap->SetControlsState(enabled & ~analogFlags, stored);
+        }
+        else if (g_hubOwnsAnalogControlBlock)
+        {
+            controlMap->SetControlsState(
+                g_enabledControlsBeforeHub,
+                g_storedControlsBeforeHub);
+            g_hubOwnsAnalogControlBlock = false;
+        }
+    }
 
     // ============================================================
     // CONSTRUCTOR
@@ -171,6 +229,11 @@ namespace SettingsMenu
         if (IsOpen())
             return;
 
+        // Quando o mundo continua rodando, o Hub assume o gamepad. Usar a
+        // trava nativa de PlayerControls evita que o primeiro frame do stick
+        // esquerdo chegue ao movimento antes do nosso sink de eventos.
+        UpdateHubPlayerInputBlock(!Config::g_pauseGameDuringHub);
+
         auto* queue =
             RE::UIMessageQueue::GetSingleton();
 
@@ -216,6 +279,7 @@ namespace SettingsMenu
     {
         TrackEditor::Cancel();
         ResetWheelInputState();
+        UpdateHubPlayerInputBlock(false);
 
         auto* queue =
             RE::UIMessageQueue::GetSingleton();
@@ -268,6 +332,7 @@ namespace SettingsMenu
     void WheelSettingsMenu::SetPauseGameDuringHub(bool a_enabled)
     {
         Config::g_pauseGameDuringHub = a_enabled;
+        UpdateHubPlayerInputBlock(!a_enabled && IsOpen());
 
         auto* ui = RE::UI::GetSingleton();
         if (!ui)
