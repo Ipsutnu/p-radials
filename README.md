@@ -66,10 +66,8 @@ The project currently uses:
 - [CommonLibSSE-NG](https://github.com/alandtse/CommonLibSSE-NG)
 - [Dear ImGui](https://github.com/ocornut/imgui)
 - [NanoSVG](https://github.com/memononen/nanosvg)
-- [JsonCpp](https://github.com/open-source-parsers/jsoncpp), used to read
-  Inventory Interface Information Injector (I4) rule files
-- [zlib](https://zlib.net/), used to decompress SWF data while reading I4 icon
-  sources
+- [JsonCpp](https://github.com/open-source-parsers/jsoncpp)
+- [zlib](https://zlib.net/)
 
 Additional dependencies may be managed through `vcpkg`.
 
