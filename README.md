@@ -66,6 +66,10 @@ The project currently uses:
 - [CommonLibSSE-NG](https://github.com/alandtse/CommonLibSSE-NG)
 - [Dear ImGui](https://github.com/ocornut/imgui)
 - [NanoSVG](https://github.com/memononen/nanosvg)
+- [JsonCpp](https://github.com/open-source-parsers/jsoncpp), used to read
+  Inventory Interface Information Injector (I4) rule files
+- [zlib](https://zlib.net/), used to decompress SWF data while reading I4 icon
+  sources
 
 Additional dependencies may be managed through `vcpkg`.
 
@@ -117,6 +121,10 @@ In particular:
 - **Dear ImGui** is licensed under the MIT License.
 - **NanoSVG** by Mikko Mononen is used to rasterize SVG icons in memory and is
   licensed under its permissive zlib-style license.
+- **JsonCpp** is used to parse I4 JSON rule files. It is public domain where
+  permitted and otherwise available under the MIT License.
+- **zlib** is used to decompress SWF data in memory and is licensed under the
+  zlib License.
 - **SkyUI Icons** — Some icons used by this project were originally created
   by **Psychosteve** for SkyUI. All credit for these original assets belongs
   to Psychosteve and the respective SkyUI contributors. These assets remain
@@ -125,14 +133,20 @@ In particular:
 
 The inclusion or use of third-party software does not transfer ownership of those projects to this project.
 
-See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) and
-[licenses/NanoSVG.txt](licenses/NanoSVG.txt) for the applicable notices.
+I4 configuration and SWF icon files are optional user-installed assets. They
+are read at runtime when present and are not bundled or redistributed by
+p-radials. They remain subject to their respective authors' permissions.
+
+See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) and the files in
+[licenses](licenses) for the applicable notices.
 
 ## Credits
 
 - **CommonLibSSE-NG contributors** — Skyrim runtime bindings and plugin support.
 - **Omar Cornut and Dear ImGui contributors** — user-interface framework.
 - **Mikko Mononen** — NanoSVG and NanoSVGRast, used for SVG icon parsing and rasterization.
+- **Baptiste Lepilleur and the JsonCpp Authors** — JSON parsing.
+- **Jean-loup Gailly and Mark Adler** — zlib decompression.
 - **Psychosteve and the SkyUI contributors** — original SkyUI icon assets used by this project.
 
 ## Disclaimer

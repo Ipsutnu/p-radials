@@ -56,6 +56,31 @@ in memory. NanoSVG is distributed under the following permissive license:
 > redistribute it freely, subject to the condition that this notice is not
 > removed or altered from any source distribution.
 
+The complete notice is also available in [licenses/NanoSVG.txt](licenses/NanoSVG.txt).
+
+## JsonCpp
+
+Copyright (c) 2007-2010 Baptiste Lepilleur and The JsonCpp Authors.
+
+Source: <https://github.com/open-source-parsers/jsoncpp>
+
+JsonCpp is public domain where that status is recognized. In jurisdictions
+where it is not, it is made available under the MIT License. p-radials uses it
+to parse optional Inventory Interface Information Injector (I4) JSON rules.
+
+The complete notice is available in [licenses/JsonCpp.txt](licenses/JsonCpp.txt).
+
+## zlib
+
+Copyright (C) 1995-2022 Jean-loup Gailly and Mark Adler.
+
+Source: <https://zlib.net/>
+
+p-radials uses zlib to decompress SWF data in memory for its optional I4 icon
+bridge. zlib is distributed under the zlib License.
+
+The complete notice is available in [licenses/zlib.txt](licenses/zlib.txt).
+
 ## SkyUI Icons
 
 Some icons used by p-radials were originally created for SkyUI.
@@ -67,3 +92,9 @@ remain subject to the original SkyUI permissions. Modifying or redistributing
 the original SkyUI icon files may require permission from their authors.
 
 SkyUI: https://www.nexusmods.com/skyrimspecialedition/mods/12604
+
+## Inventory Interface Information Injector compatibility
+
+p-radials can read I4-compatible JSON rules and user-installed SWF icon
+sources. Those rules and assets are not included with p-radials and remain
+subject to the license and permissions of the mod that provides them.
