@@ -11,9 +11,14 @@ namespace ItemPreview
     {
         bool g_visible = false;
         
+        // g_form preserva a identidade lógica exibida pela interface. Para
+        // TESShout, porém, o modelo 3D é o MDOB (Menu Display Object), e é
+        // esse objeto que o Inventory3DManager registra como item carregado.
         RE::TESForm* g_form = nullptr;
+        RE::TESForm* g_renderForm = nullptr;
         std::uint16_t g_uniqueID = 0;
         bool g_hasUniqueID = false;
+        bool g_useBaseModelForRender = false;
 
         RE::NiAVObject* g_attachedModel = nullptr;
 
@@ -126,7 +131,7 @@ namespace ItemPreview
                 {
                     category = Config::ItemPreviewCategory::Scroll;
                 }
-                else if (g_form->As<RE::SpellItem>())
+                else if (g_form->As<RE::SpellItem>() || g_form->As<RE::TESShout>())
                 {
                     visualFactor = 1.50f;
                     category = Config::ItemPreviewCategory::Spell;
@@ -238,6 +243,38 @@ namespace ItemPreview
                 }
 
                 ++index;
+            }
+
+            return nullptr;
+        }
+
+        RE::TESBoundObject* ResolvePreviewRenderObject(RE::TESForm* form)
+        {
+            if (!form)
+                return nullptr;
+
+            if (auto* bound = form->As<RE::TESBoundObject>())
+                return bound;
+
+            // Shouts não são TESBoundObject. O Magic Menu os renderiza pelo
+            // MDOB armazenado em BGSMenuDisplayObject; usar a mesma rota
+            // preserva o FormID do grito como identidade, sem tentar tratá-lo
+            // como um item físico de inventário.
+            if (auto* shout = form->As<RE::TESShout>())
+            {
+                if (auto* display = shout->GetMenuDisplayObject())
+                    return display;
+
+                // Alguns registros/mods deixam o MDOB no SpellItem de uma
+                // variação. É um fallback visual seguro para o mesmo grito.
+                for (const auto& variation : shout->variations)
+                {
+                    if (variation.spell)
+                    {
+                        if (auto* display = variation.spell->GetMenuDisplayObject())
+                            return display;
+                    }
+                }
             }
 
             return nullptr;
@@ -575,6 +612,27 @@ namespace ItemPreview
             if (!player)
                 return nullptr;
 
+            // A lista de alterações é a fonte autoritativa das instâncias
+            // individuais do ator. GetInventory() pode resumir as pilhas de
+            // armaduras equipadas e omitir o ExtraUniqueID, embora a peça
+            // ainda exista normalmente no inventário.
+            if (auto* changes = player->GetInventoryChanges();
+                changes && changes->entryList)
+            {
+                for (auto* entry : *changes->entryList)
+                {
+                    if (!entry || entry->object != object || !entry->extraLists)
+                        continue;
+                    for (auto* extra : *entry->extraLists)
+                    {
+                        auto* unique = extra ?
+                            extra->GetByType<RE::ExtraUniqueID>() : nullptr;
+                        if (unique && unique->uniqueID == uniqueID)
+                            return extra;
+                    }
+                }
+            }
+
             auto inventory = player->GetInventory();
 
             auto it = inventory.find(object);
@@ -598,8 +656,13 @@ namespace ItemPreview
                 if (!unique)
                     continue;
 
-                if (unique->uniqueID == uniqueID &&
-                    unique->baseID == player->GetFormID())
+                // O TESUniqueID pertence à instância dentro desta entrada de
+                // inventário (o objeto base já foi usado para localizar a
+                // entrada). Alguns itens vindos de contêiner/mod preservam
+                // um baseID diferente do FormID do jogador; exigir esse
+                // valor aqui descartava uma instância válida e fazia o
+                // preview 3D de armaduras/loadouts falhar.
+                if (unique->uniqueID == uniqueID)
                 {
                     return extra;
                 }
@@ -611,7 +674,8 @@ namespace ItemPreview
         bool BeginPreview(
             RE::TESForm* form,
             std::uint16_t uniqueID,
-            bool hasUniqueID
+            bool hasUniqueID,
+            bool useBaseModelForRender
         )
         {
             if (!form)
@@ -623,7 +687,7 @@ namespace ItemPreview
             if (!manager)
                 return false;
 
-            auto* bound = form->As<RE::TESBoundObject>();
+            auto* bound = ResolvePreviewRenderObject(form);
 
             if (!bound)
                 return false;
@@ -634,7 +698,11 @@ namespace ItemPreview
 
             RE::ExtraDataList* extra = nullptr;
 
-            if (hasUniqueID)
+            // UniqueID pertence à instância física original. Um TESShout usa
+            // um MDOB apenas para renderizar, portanto não deve procurar uma
+            // instância de inventário desse objeto visual.
+            const bool rendersOriginalBoundObject = form->As<RE::TESBoundObject>() == bound;
+            if (hasUniqueID && rendersOriginalBoundObject)
             {
                 extra = GetItemExtraByUniqueID(
                     bound,
@@ -642,7 +710,11 @@ namespace ItemPreview
                     hasUniqueID
                 );
 
-                // Não carregar outra instância por engano.
+                // Fora do fluxo de loadout, não carregar outra instância por
+                // engano. O loadout já preserva e passa a identidade inteira,
+                // mas o Inventory3D do Skyrim não encontra algumas peças
+                // equipadas/alteradas na tabela visual; nesse caso ele pode
+                // projetar o FormID base depois da validação lógica.
                 if (!extra)
                 {
                     Logger::GetSingleton().Print(
@@ -650,8 +722,8 @@ namespace ItemPreview
                         form->GetFormID(),
                         uniqueID
                     );
-
-                    return false;
+                    if (!useBaseModelForRender)
+                        return false;
                 }
             }
 
@@ -660,7 +732,7 @@ namespace ItemPreview
             // ============================================================
 
             const auto scheme =
-                form->As<RE::SpellItem>()
+                (form->As<RE::SpellItem>() || form->As<RE::TESShout>())
                 ? RE::INTERFACE_LIGHT_SCHEME::kInventoryMagic
                 : RE::INTERFACE_LIGHT_SCHEME::kInventory;
 
@@ -686,8 +758,14 @@ namespace ItemPreview
 
             manager->LoadInventoryItem(
                 bound,
-                extra
+                // Se a instância foi resolvida, ela ainda fornece ao 3D seus
+                // dados próprios (como encantamento). O FormID-base é apenas
+                // o fallback visual para a instância que o Skyrim não expõe
+                // ao Inventory3D.
+                (useBaseModelForRender && !extra) ? nullptr : extra
             );
+
+            g_renderForm = bound;
 
             // ============================================================
             // REINICIA O ESTADO DO PREVIEW
@@ -754,7 +832,8 @@ namespace ItemPreview
     bool Show(
         RE::TESForm* form,
         std::uint16_t uniqueID,
-        bool hasUniqueID)
+        bool hasUniqueID,
+        bool useBaseModelForRender)
     {
         if (!form)
             return false;
@@ -766,26 +845,29 @@ namespace ItemPreview
         if (g_visible &&
             g_form == form &&
             g_uniqueID == uniqueID &&
-            g_hasUniqueID == hasUniqueID
+            g_hasUniqueID == hasUniqueID &&
+            g_useBaseModelForRender == useBaseModelForRender
         )
         {
             // Mesmo item: não recarrega, mas mantém o manager
             // sincronizado com a posição atual do HUD.
             ApplyPreviewTransform();
 
-            auto* model = FindLoadedModel(form);
+            auto* model = FindLoadedModel(g_renderForm);
 
             return model != nullptr;
         }
 
-        const bool nextIsSpell = form->As<RE::SpellItem>() != nullptr;
+        const bool nextIsSpell = form->As<RE::SpellItem>() != nullptr ||
+            form->As<RE::TESShout>() != nullptr;
         const bool skipEntryFade = nextIsSpell && g_spellEntryFadeActive;
 
         // Ao abandonar o esquema de iluminação de uma spell, preserva uma
         // sombra curta na área do próximo preview. Ela suaviza a troca sem
         // atrasar o carregamento do novo modelo nem afetar spell -> spell.
-        if (g_visible && g_form && g_form->As<RE::SpellItem>() &&
-            !form->As<RE::SpellItem>() && g_hasHudPos)
+        if (g_visible && g_form &&
+            (g_form->As<RE::SpellItem>() || g_form->As<RE::TESShout>()) &&
+            !(form->As<RE::SpellItem>() || form->As<RE::TESShout>()) && g_hasHudPos)
         {
             const float radius = kBlurMaskBaseRadius * g_sizeScale *
                 GetPreviewVisualFactor() * kBlurMaskGlobalScale;
@@ -814,6 +896,7 @@ namespace ItemPreview
             g_currentEntry.reset();
             g_visible = false;
             g_form = nullptr;
+            g_renderForm = nullptr;
             g_modelReady = false;
         }
 
@@ -831,7 +914,8 @@ namespace ItemPreview
         if (!BeginPreview(
             form,
             uniqueID,
-            hasUniqueID
+            hasUniqueID,
+            useBaseModelForRender
         ))
         {
             Logger::GetSingleton().Print(
@@ -846,6 +930,7 @@ namespace ItemPreview
 
         g_uniqueID = uniqueID;
         g_hasUniqueID = hasUniqueID;
+        g_useBaseModelForRender = useBaseModelForRender;
 
         g_visible = true;
         g_opacityDirty = true;
@@ -922,7 +1007,7 @@ namespace ItemPreview
         // Mantém posição/escala do preview atualizadas
         ApplyPreviewTransform();
 
-        auto* model = FindLoadedModel(g_form);
+        auto* model = FindLoadedModel(g_renderForm);
 
         // Modelo ainda está carregando
         if (!model)
@@ -930,7 +1015,7 @@ namespace ItemPreview
             // Necessário para efetivamente criar certos previews.
             manager->Render();
 
-            model = FindLoadedModel(g_form);
+            model = FindLoadedModel(g_renderForm);
 
             if (!model)
             {
@@ -997,18 +1082,10 @@ namespace ItemPreview
         {
             RE::NiMatrix3 deltaRotation;
 
-            float rotationDirection = g_rotationDirection;
-
-            // AlchemyItem gira invertido em relação aos demais previews.
-            if (g_form && g_form->As<RE::IngredientItem>())
-            {
-                rotationDirection *= -1.0f;
-            }
-
             deltaRotation.SetEulerAnglesXYZ(
                 0.0f,
                 0.0f,
-                kRotationSpeed * rotationDirection
+                kRotationSpeed * g_rotationDirection
             );
 
             model->local.rotate =
@@ -1054,6 +1131,7 @@ namespace ItemPreview
         g_currentEntry.reset();
         g_visible = false;
         g_form = nullptr;
+        g_renderForm = nullptr;
         g_modelReady = false;
         g_opacity = 1.0f;
         g_opacityDirty = true;
@@ -1063,6 +1141,7 @@ namespace ItemPreview
         g_spellEntryFadeFrame = -1;
         g_uniqueID = 0;
         g_hasUniqueID = false;
+        g_useBaseModelForRender = false;
 
         TeardownWhenIdle();
     }

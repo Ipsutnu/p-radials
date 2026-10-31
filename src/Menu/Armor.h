@@ -2,6 +2,7 @@
 
 #include <array>
 #include <cstdint>
+#include <vector>
 
 namespace Armor
 {
@@ -58,7 +59,11 @@ namespace Armor
     };
 
     bool HasLoadout(int hotkey);
+    // IDs negativos representam conjuntos guardados somente na gaveta: não
+    // pertencem a nenhuma tecla até serem arrastados para o Keyboard Hub.
+    int AllocateUnboundHotkey();
     const Loadout* FindLoadout(int hotkey);
+    const std::vector<Loadout>& GetLoadouts();
     bool ExecuteLoadout(int hotkey);
     void ClearLoadout(int hotkey);
     bool MoveLoadout(int sourceHotkey, int destinationHotkey);
@@ -80,6 +85,10 @@ namespace Armor
     bool SetEditingSlot(Slot slot, RE::TESForm* form,
         std::uint16_t uniqueID = 0, bool hasUniqueID = false);
     Slot PreferredSlotFor(RE::TESForm* form);
+    // Magias que pertencem à lista jogável do personagem. Abilities,
+    // doenças e efeitos internos podem existir em addedSpells, mas não
+    // devem aparecer nos seletores do Hub.
+    bool IsPlayableSpell(const RE::SpellItem* spell);
     bool Accepts(Slot slot, RE::TESForm* form);
 
     void Save(SKSE::SerializationInterface* serialization);

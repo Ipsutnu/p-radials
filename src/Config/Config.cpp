@@ -23,6 +23,10 @@ namespace Config
 
     int g_toggleKey = 'X';
     int g_secondaryKey = 0;
+    int g_topRadialKey = 0;
+    int g_bottomRadialKey = 0;
+    int g_rightRadialKey = 0;
+    int g_leftRadialKey = 0;
     int g_altConfigKey = 0;
     bool g_automaticArrowMenus = false;
     bool g_pauseGameDuringHub = true;
@@ -108,12 +112,24 @@ namespace Config
     float g_drawMarkDistance = kDefaultDrawMarkDistance;
     bool g_drawEffectsGameplay = false;
     bool g_drawEffectsEditor = true;
+    bool g_invertDrawMouseHands = false;
+    bool g_invertSideRadialHands = false;
+    bool g_invertTopBottomMouseClickHands = false;
+    bool g_invertTopBottomScrollHands = false;
+    bool g_invertTopBottomGamepadHands = false;
+    bool g_invertHotkeyMouseClickHands = false;
+    bool g_invertHotkeyMouseDirectionHands = false;
+    bool g_invertHotkeyKeyboardHands = false;
+    bool g_invertHotkeyGamepadHands = false;
+    bool g_lockQuickDrawDrawing = true;
+    float g_quickDrawCircleRadius = kDefaultQuickDrawCircleRadius;
     int g_shortcutFeedbackStyle = 1;
     float g_shortcutPreviewPositionX = kDefaultShortcutPreviewPosition;
     float g_shortcutPreviewPositionY = kDefaultShortcutPreviewPosition;
     int g_shortcutHudStyle = 1;
     bool g_shortcutHudInverted = false;
     bool g_shortcutHudShowNames = false;
+    bool g_instantShouts = true;
     float g_shortcutHudNamePositionX = kDefaultShortcutHudNamePosition;
     float g_shortcutHudNamePositionY = kDefaultShortcutHudNamePosition;
     float g_shortcutHudPositionX = 0.0f;
@@ -137,6 +153,8 @@ namespace Config
     float g_itemBagPositionX = kDefaultItemBagPosition;
     float g_itemBagPositionY = kDefaultItemBagPosition;
     float g_itemBagExpandedScale = kDefaultItemBagExpandedScale;
+    float g_armorDrawerPositionX = kDefaultArmorDrawerPosition;
+    float g_armorDrawerPositionY = kDefaultArmorDrawerPosition;
     float g_quickDrawSecondaryBagRadius = kDefaultQuickDrawSecondaryBagRadius;
 
     ItemPreviewLayoutConfig& GetItemPreviewLayout(ItemPreviewProfile profile)
@@ -621,6 +639,7 @@ namespace Config
             return true;
         }
         if (key == "ShortcutHudShowNames") { g_shortcutHudShowNames = ParseEnabled(value); return true; }
+        if (key == "InstantShouts") { g_instantShouts = ParseEnabled(value); return true; }
         if (key == "ShortcutHudPositionX")
         {
             try { g_shortcutHudPositionX = std::clamp(std::stof(value), -1.0f, 1.0f); }
@@ -912,6 +931,7 @@ namespace Config
         write("ShortcutHudStyle", g_shortcutHudStyle);
         write("ShortcutHudInverted", g_shortcutHudInverted ? 1 : 0);
         write("ShortcutHudShowNames", g_shortcutHudShowNames ? 1 : 0);
+        write("InstantShouts", g_instantShouts ? 1 : 0);
         write("ShortcutHudNamePositionX", g_shortcutHudNamePositionX);
         write("ShortcutHudNamePositionY", g_shortcutHudNamePositionY);
         write("ShortcutHudPositionX", g_shortcutHudPositionX);
@@ -1164,6 +1184,21 @@ namespace Config
                         g_altConfigKey = 0;
                     }
                 }
+                else if (key == "TopRadialKey" || key == "BottomRadialKey" ||
+                    key == "RightRadialKey" || key == "LeftRadialKey")
+                {
+                    int* target = key == "TopRadialKey" ? &g_topRadialKey :
+                        key == "BottomRadialKey" ? &g_bottomRadialKey :
+                        key == "RightRadialKey" ? &g_rightRadialKey : &g_leftRadialKey;
+                    if (!value.empty() && ToUpper(value) != "NONE")
+                    {
+                        int gamepadBinding = 0;
+                        *target = Gamepad::ParseBinding(value, gamepadBinding)
+                            ? gamepadBinding : ParseKey(value);
+                    }
+                    else
+                        *target = 0;
+                }
                 else if (key == "AutomaticArrowMenus")
                 {
                     const std::string normalized = ToUpper(value);
@@ -1341,12 +1376,27 @@ namespace Config
                     else g_showOverflowIcon = enabled;
                 }
                 else if (key == "DrawEffectsGameplay" || key == "DrawEffectsEditor" ||
+                    key == "InvertDrawMouseHands" || key == "InvertSideRadialHands" ||
+                    key == "InvertTopBottomMouseClickHands" || key == "InvertTopBottomScrollHands" ||
+                    key == "InvertTopBottomGamepadHands" || key == "InvertHotkeyMouseClickHands" ||
+                    key == "InvertHotkeyMouseDirectionHands" || key == "InvertHotkeyKeyboardHands" ||
+                    key == "InvertHotkeyGamepadHands" || key == "LockQuickDrawDrawing" ||
                     key == "ItemPreviewDuringShortcuts" ||
                     key == "ShowDrawMark")
                 {
                     const bool enabled = ParseEnabled(value);
                     if (key == "DrawEffectsGameplay") g_drawEffectsGameplay = enabled;
                     else if (key == "DrawEffectsEditor") g_drawEffectsEditor = enabled;
+                    else if (key == "InvertDrawMouseHands") g_invertDrawMouseHands = enabled;
+                    else if (key == "InvertSideRadialHands") g_invertSideRadialHands = enabled;
+                    else if (key == "InvertTopBottomMouseClickHands") g_invertTopBottomMouseClickHands = enabled;
+                    else if (key == "InvertTopBottomScrollHands") g_invertTopBottomScrollHands = enabled;
+                    else if (key == "InvertTopBottomGamepadHands") g_invertTopBottomGamepadHands = enabled;
+                    else if (key == "InvertHotkeyMouseClickHands") g_invertHotkeyMouseClickHands = enabled;
+                    else if (key == "InvertHotkeyMouseDirectionHands") g_invertHotkeyMouseDirectionHands = enabled;
+                    else if (key == "InvertHotkeyKeyboardHands") g_invertHotkeyKeyboardHands = enabled;
+                    else if (key == "InvertHotkeyGamepadHands") g_invertHotkeyGamepadHands = enabled;
+                    else if (key == "LockQuickDrawDrawing") g_lockQuickDrawDrawing = enabled;
                     else if (key == "ItemPreviewDuringShortcuts") g_shortcutFeedbackStyle = enabled ? 1 : 0;
                     else { g_showDrawMark = enabled; g_drawMarkStyle = enabled ? 1 : 0; }
                 }
@@ -1392,6 +1442,13 @@ namespace Config
                     g_shortcutHudInverted = ParseEnabled(value);
                 else if (key == "ShortcutHudShowNames")
                     g_shortcutHudShowNames = ParseEnabled(value);
+                else if (key == "InstantShouts")
+                    g_instantShouts = ParseEnabled(value);
+                else if (key == "QuickDrawCircleRadius")
+                {
+                    try { g_quickDrawCircleRadius = std::clamp(std::stof(value), 120.0f, 1200.0f); }
+                    catch (...) {}
+                }
                 else if (key == "ShortcutHudPositionX")
                 {
                     try { g_shortcutHudPositionX = std::clamp(std::stof(value), -1.0f, 1.0f); }
@@ -1469,7 +1526,8 @@ namespace Config
                     }
                 }
                 else if (key == "ItemBagPositionX" || key == "ItemBagPositionY" ||
-                    key == "ItemBagExpandedScale" || key == "QuickDrawSecondaryBagRadius")
+                    key == "ItemBagExpandedScale" || key == "QuickDrawSecondaryBagRadius" ||
+                    key == "ArmorDrawerPositionX" || key == "ArmorDrawerPositionY")
                 {
                     try
                     {
@@ -1480,6 +1538,10 @@ namespace Config
                             g_quickDrawSecondaryBagRadius = std::clamp(parsed, 56.0f, 420.0f);
                         else if (key == "ItemBagPositionX")
                             g_itemBagPositionX = std::clamp(parsed, -1.0f, 100.0f);
+                        else if (key == "ArmorDrawerPositionX")
+                            g_armorDrawerPositionX = std::clamp(parsed, -1.0f, 100.0f);
+                        else if (key == "ArmorDrawerPositionY")
+                            g_armorDrawerPositionY = std::clamp(parsed, -1.0f, 100.0f);
                         else
                             g_itemBagPositionY = std::clamp(parsed, -1.0f, 100.0f);
                     }
@@ -1706,6 +1768,10 @@ namespace Config
     {
         g_toggleKey = 'X';
         g_secondaryKey = 0;
+        g_topRadialKey = 0;
+        g_bottomRadialKey = 0;
+        g_rightRadialKey = 0;
+        g_leftRadialKey = 0;
         g_altConfigKey = 0;
         g_automaticArrowMenus = false;
         g_pauseGameDuringHub = true;
@@ -1783,12 +1849,24 @@ namespace Config
         g_drawMarkDistance = kDefaultDrawMarkDistance;
         g_drawEffectsGameplay = false;
         g_drawEffectsEditor = true;
+        g_invertDrawMouseHands = false;
+        g_invertSideRadialHands = false;
+        g_invertTopBottomMouseClickHands = false;
+        g_invertTopBottomScrollHands = false;
+        g_invertTopBottomGamepadHands = false;
+        g_invertHotkeyMouseClickHands = false;
+        g_invertHotkeyMouseDirectionHands = false;
+        g_invertHotkeyKeyboardHands = false;
+        g_invertHotkeyGamepadHands = false;
+        g_lockQuickDrawDrawing = true;
+        g_quickDrawCircleRadius = kDefaultQuickDrawCircleRadius;
         g_shortcutFeedbackStyle = 1;
         g_shortcutPreviewPositionX = kDefaultShortcutPreviewPosition;
         g_shortcutPreviewPositionY = kDefaultShortcutPreviewPosition;
         g_shortcutHudStyle = 1;
         g_shortcutHudInverted = false;
         g_shortcutHudShowNames = false;
+        g_instantShouts = true;
         g_shortcutHudNamePositionX = kDefaultShortcutHudNamePosition;
         g_shortcutHudNamePositionY = kDefaultShortcutHudNamePosition;
         g_shortcutHudPositionX = 0.0f;
@@ -1810,6 +1888,8 @@ namespace Config
         g_itemBagPositionX = kDefaultItemBagPosition;
         g_itemBagPositionY = kDefaultItemBagPosition;
         g_itemBagExpandedScale = kDefaultItemBagExpandedScale;
+        g_armorDrawerPositionX = kDefaultArmorDrawerPosition;
+        g_armorDrawerPositionY = kDefaultArmorDrawerPosition;
         g_quickDrawSecondaryBagRadius = kDefaultQuickDrawSecondaryBagRadius;
         Language::SetCurrent(g_language);
         SaveConfig();
@@ -1861,6 +1941,14 @@ namespace Config
         );
         SetIniValue(lines, "Settings", "SecondaryKey",
             g_secondaryKey != 0 ? KeyToString(g_secondaryKey) : "NONE");
+        SetIniValue(lines, "Settings", "TopRadialKey",
+            g_topRadialKey != 0 ? KeyToString(g_topRadialKey) : "NONE");
+        SetIniValue(lines, "Settings", "BottomRadialKey",
+            g_bottomRadialKey != 0 ? KeyToString(g_bottomRadialKey) : "NONE");
+        SetIniValue(lines, "Settings", "RightRadialKey",
+            g_rightRadialKey != 0 ? KeyToString(g_rightRadialKey) : "NONE");
+        SetIniValue(lines, "Settings", "LeftRadialKey",
+            g_leftRadialKey != 0 ? KeyToString(g_leftRadialKey) : "NONE");
         SetIniValue(lines, "Settings", "AltConfigKey",
             g_altConfigKey != 0 ? KeyToString(g_altConfigKey) : "NONE");
         SetIniValue(lines, "Settings", "AutomaticArrowMenus",
@@ -1987,12 +2075,24 @@ namespace Config
         SetIniValue(lines, "Layout", "DrawMarkDistance", std::to_string(g_drawMarkDistance));
         SetIniValue(lines, "Layout", "DrawEffectsGameplay", g_drawEffectsGameplay ? "1" : "0");
         SetIniValue(lines, "Layout", "DrawEffectsEditor", g_drawEffectsEditor ? "1" : "0");
+        SetIniValue(lines, "Settings", "InvertDrawMouseHands", g_invertDrawMouseHands ? "1" : "0");
+        SetIniValue(lines, "Settings", "InvertSideRadialHands", g_invertSideRadialHands ? "1" : "0");
+        SetIniValue(lines, "Settings", "InvertTopBottomMouseClickHands", g_invertTopBottomMouseClickHands ? "1" : "0");
+        SetIniValue(lines, "Settings", "InvertTopBottomScrollHands", g_invertTopBottomScrollHands ? "1" : "0");
+        SetIniValue(lines, "Settings", "InvertTopBottomGamepadHands", g_invertTopBottomGamepadHands ? "1" : "0");
+        SetIniValue(lines, "Settings", "InvertHotkeyMouseClickHands", g_invertHotkeyMouseClickHands ? "1" : "0");
+        SetIniValue(lines, "Settings", "InvertHotkeyMouseDirectionHands", g_invertHotkeyMouseDirectionHands ? "1" : "0");
+        SetIniValue(lines, "Settings", "InvertHotkeyKeyboardHands", g_invertHotkeyKeyboardHands ? "1" : "0");
+        SetIniValue(lines, "Settings", "InvertHotkeyGamepadHands", g_invertHotkeyGamepadHands ? "1" : "0");
+        SetIniValue(lines, "Settings", "LockQuickDrawDrawing", g_lockQuickDrawDrawing ? "1" : "0");
+        SetIniValue(lines, "Settings", "QuickDrawCircleRadius", std::to_string(g_quickDrawCircleRadius));
         SetIniValue(lines, "Layout", "ShortcutPreviewStyle", std::to_string(g_shortcutFeedbackStyle));
         SetIniValue(lines, "Layout", "ShortcutPreviewPositionX", std::to_string(g_shortcutPreviewPositionX));
         SetIniValue(lines, "Layout", "ShortcutPreviewPositionY", std::to_string(g_shortcutPreviewPositionY));
         SetIniValue(lines, "Layout", "ShortcutHudStyle", std::to_string(g_shortcutHudStyle));
         SetIniValue(lines, "Layout", "ShortcutHudInverted", g_shortcutHudInverted ? "1" : "0");
         SetIniValue(lines, "Layout", "ShortcutHudShowNames", g_shortcutHudShowNames ? "1" : "0");
+        SetIniValue(lines, "Layout", "InstantShouts", g_instantShouts ? "1" : "0");
         SetIniValue(lines, "Layout", "ShortcutHudNamePositionX", std::to_string(g_shortcutHudNamePositionX));
         SetIniValue(lines, "Layout", "ShortcutHudNamePositionY", std::to_string(g_shortcutHudNamePositionY));
         SetIniValue(lines, "Layout", "ShortcutHudPositionX", std::to_string(g_shortcutHudPositionX));
@@ -2013,6 +2113,8 @@ namespace Config
         SetIniValue(lines, "Settings", "ItemBagPositionX", std::to_string(g_itemBagPositionX));
         SetIniValue(lines, "Settings", "ItemBagPositionY", std::to_string(g_itemBagPositionY));
         SetIniValue(lines, "Settings", "ItemBagExpandedScale", std::to_string(g_itemBagExpandedScale));
+        SetIniValue(lines, "Settings", "ArmorDrawerPositionX", std::to_string(g_armorDrawerPositionX));
+        SetIniValue(lines, "Settings", "ArmorDrawerPositionY", std::to_string(g_armorDrawerPositionY));
         SetIniValue(lines, "Settings", "QuickDrawSecondaryBagRadius", std::to_string(g_quickDrawSecondaryBagRadius));
         SetIniValue(lines, "Language", "Selected", g_language);
         RemoveIniSection(lines, "Layout");
