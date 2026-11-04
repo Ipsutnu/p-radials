@@ -1,5 +1,7 @@
 #include "Icon.h"
 #include "IconCustom.h"
+#include "IconResolver.h"
+#include "SWFBridge.h"
 #include "RenderManager.h"
 #include "Config.h"
 #include "Logger.h"
@@ -11,6 +13,7 @@
 #include <wincodec.h>
 
 #include <array>
+#include <cctype>
 #include <filesystem>
 #include <string>
 #include <unordered_map>
@@ -289,7 +292,59 @@ namespace ItemIcon
             if (!a_form)
                 return false;
 
-            return a_form->HasKeywordString(a_keyword);
+            // HasKeywordString() não enxerga de forma confiável keywords
+            // anexados em runtime (KID/OCF) e, em alguns formulários, também
+            // deixa passar aliases vanilla como WeapTypePickaxe.  A
+            // classificação de fallback precisa olhar a lista efetivamente
+            // presente no formulário, tal como o resolvedor I4.
+            for (const auto* keyword : a_form->GetKeywords())
+            {
+                if (!keyword || keyword->formEditorID.empty())
+                    continue;
+
+                const std::string_view editorID = keyword->formEditorID.c_str();
+                if (editorID.size() != a_keyword.size())
+                    continue;
+
+                bool equal = true;
+                for (std::size_t i = 0; i < editorID.size(); ++i)
+                {
+                    const auto lhs = static_cast<unsigned char>(editorID[i]);
+                    const auto rhs = static_cast<unsigned char>(a_keyword[i]);
+                    if (std::tolower(lhs) != std::tolower(rhs))
+                    {
+                        equal = false;
+                        break;
+                    }
+                }
+                if (equal)
+                    return true;
+            }
+
+            return false;
+        }
+
+        bool ContainsInsensitive(std::string_view a_text, std::string_view a_fragment)
+        {
+            if (a_fragment.empty() || a_fragment.size() > a_text.size())
+                return false;
+            for (std::size_t start = 0; start + a_fragment.size() <= a_text.size(); ++start)
+            {
+                bool equal = true;
+                for (std::size_t i = 0; i < a_fragment.size(); ++i)
+                {
+                    const auto lhs = static_cast<unsigned char>(a_text[start + i]);
+                    const auto rhs = static_cast<unsigned char>(a_fragment[i]);
+                    if (std::tolower(lhs) != std::tolower(rhs))
+                    {
+                        equal = false;
+                        break;
+                    }
+                }
+                if (equal)
+                    return true;
+            }
+            return false;
         }
 
 
@@ -567,123 +622,134 @@ namespace ItemIcon
             if (!a_armor)
                 return Type::DefaultArmor;
 
-            // Nem todo anel, sobretudo de mods, possui o keyword ArmorRing.
-            // O slot biped é a referência global usada por todos os menus.
-            if (a_armor->HasPartOf(RE::BIPED_MODEL::BipedObjectSlot::kRing))
+            using Slot = RE::BIPED_MODEL::BipedObjectSlot;
+            const auto hasSlot = [a_armor](Slot slot) {
+                return a_armor->HasPartOf(slot);
+            };
+
+            // O slot biped é a fonte mais confiável. Mods frequentemente
+            // omitem os keywords de joias, embora mantenham esses slots para
+            // o equipamento funcionar corretamente no jogo.
+            if (hasSlot(Slot::kRing))
                 return Type::ArmorRing;
-
-
-            // --------------------------------------------------------
-            // ESPECIAIS PRIMEIRO
-            // --------------------------------------------------------
+            if (hasSlot(Slot::kAmulet))
+                return Type::ArmorAmulet;
 
             if (HasKeyword(a_armor, "ArmorCloak"))
                 return Type::ClothingCloak;
-
             if (HasKeyword(a_armor, "ArmorBackpack"))
                 return Type::ClothingBackpack;
 
-
-            // --------------------------------------------------------
-            // JEWELRY
-            //
-            // IMPORTANT:
-            // Circlet é detectado pela classificação da peça,
-            // não por simplesmente possuir determinado slot.
-            // --------------------------------------------------------
-
-            if (HasKeyword(a_armor, "ArmorJewelry"))
-            {
-                if (HasKeyword(a_armor, "ArmorRing"))
-                    return Type::ArmorRing;
-
-                if (HasKeyword(a_armor, "ArmorNecklace") ||
-                    HasKeyword(a_armor, "ArmorAmulet"))
-                    return Type::ArmorAmulet;
-
-                if (HasKeyword(a_armor, "ArmorCirclet"))
-                    return Type::ArmorCirclet;
-            }
-
-
-            if (HasKeyword(a_armor, "ArmorCirclet"))
-                return Type::ArmorCirclet;
-
             if (HasKeyword(a_armor, "ArmorRing"))
                 return Type::ArmorRing;
-
             if (HasKeyword(a_armor, "ArmorNecklace") ||
                 HasKeyword(a_armor, "ArmorAmulet"))
                 return Type::ArmorAmulet;
 
+            // Alguns mods usam apenas os keywords de capacete/capuz e o
+            // slot Circlet técnico. Sem estes aliases, um elmo leve cai no
+            // ícone de circlet e um capuz no fallback de armadura pesada.
+            const bool head = hasSlot(Slot::kHead) || a_armor->IsHelmet() ||
+                HasKeyword(a_armor, "ArmorHelmet") ||
+                HasKeyword(a_armor, "ClothingHead") ||
+                HasKeyword(a_armor, "ClothingHood");
+            const bool body = hasSlot(Slot::kBody);
+            const bool hands = hasSlot(Slot::kHands);
+            const bool forearms = hasSlot(Slot::kForearms);
+            const bool feet = hasSlot(Slot::kFeet);
+            const bool calves = hasSlot(Slot::kCalves);
+            const bool shield = hasSlot(Slot::kShield);
+            const bool mask = HasKeyword(a_armor, "ArmorMask") ||
+                HasKeyword(a_armor, "ClothingMask") ||
+                HasKeyword(a_armor, "ArmorDragonPriestMask") ||
+                HasKeyword(a_armor, "VendorItemDragonPriestMask");
+            // Vários elmos ocupam também o slot técnico de circlet para
+            // bloquear a combinação visual. Isso não os torna circlets.
+            const bool circletOnly = (hasSlot(Slot::kCirclet) ||
+                a_armor->IsCirclet() || HasKeyword(a_armor, "ArmorCirclet")) &&
+                !head && !mask;
+            const auto armorType = a_armor->GetArmorType();
+            const bool heavy = a_armor->IsHeavyArmor() ||
+                armorType == RE::BGSBipedObjectForm::ArmorType::kHeavyArmor ||
+                HasKeyword(a_armor, "ArmorHeavy");
+            const bool light = a_armor->IsLightArmor() ||
+                armorType == RE::BGSBipedObjectForm::ArmorType::kLightArmor ||
+                HasKeyword(a_armor, "ArmorLight");
+            const bool clothing = a_armor->IsClothing() ||
+                armorType == RE::BGSBipedObjectForm::ArmorType::kClothing ||
+                HasKeyword(a_armor, "ArmorClothing") ||
+                HasKeyword(a_armor, "VendorItemClothing");
 
-            // --------------------------------------------------------
-            // HEAVY
-            // --------------------------------------------------------
-
-            if (HasKeyword(a_armor, "ArmorHeavy"))
+            // Clothing vem antes de light/heavy. Alguns capuzes usam o slot
+            // técnico de cabeça (ou até flags herdadas de armadura), mas o
+            // ArmorType/keyword de roupa é a intenção visual mais específica.
+            // Sem essa precedência eles acabavam em armor_head.
+            if (clothing)
             {
-                if (HasKeyword(a_armor, "ArmorHelmet"))
-                    return Type::ArmorHead;
-
-                if (HasKeyword(a_armor, "ArmorCuirass"))
-                    return Type::ArmorBody;
-
-                if (HasKeyword(a_armor, "ArmorGauntlets"))
-                    return Type::ArmorHands;
-
-                if (HasKeyword(a_armor, "ArmorBoots"))
-                    return Type::ArmorFeet;
-
-                if (HasKeyword(a_armor, "ArmorShield"))
-                    return Type::ArmorShield;
-
-                return Type::DefaultArmor;
+                if (mask) return Type::ClothingMask;
+                if (shield || HasKeyword(a_armor, "ClothingShield")) return Type::ClothingShield;
+                if (HasKeyword(a_armor, "ClothingRobe")) return Type::ClothingRobe;
+                if (HasKeyword(a_armor, "ClothingPants")) return Type::ClothingPants;
+                if (HasKeyword(a_armor, "ClothingShoes")) return Type::ClothingShoes;
+                if (head) return Type::ClothingHead;
+                // Vestes normalmente ocupam corpo e uma extensão de braço ou
+                // perna; roupas de corpo simples conservam clothing_body.
+                if (body && (forearms || calves)) return Type::ClothingRobe;
+                if (body) return Type::ClothingBody;
+                if (forearms) return Type::ClothingForearms;
+                if (hands) return Type::ClothingHands;
+                if (calves) return Type::ClothingCalves;
+                if (feet) return Type::ClothingFeet;
             }
 
-
-            // --------------------------------------------------------
-            // LIGHT
-            // --------------------------------------------------------
-
-            if (HasKeyword(a_armor, "ArmorLight"))
+            // A ordem abaixo evita que uma máscara/bracer seja reduzida ao
+            // slot mais genérico de cabeça/mãos.
+            if (heavy)
             {
-                if (HasKeyword(a_armor, "ArmorHelmet"))
-                    return Type::LightArmorHead;
-
-                if (HasKeyword(a_armor, "ArmorCuirass"))
-                    return Type::LightArmorBody;
-
-                if (HasKeyword(a_armor, "ArmorGauntlets"))
-                    return Type::LightArmorHands;
-
-                if (HasKeyword(a_armor, "ArmorBoots"))
-                    return Type::LightArmorFeet;
-
-                if (HasKeyword(a_armor, "ArmorShield"))
-                    return Type::LightArmorShield;
-
-                return Type::DefaultArmor;
+                // Máscaras de Dragon Priest costumam trazer material Daedric,
+                // mas visualmente continuam sendo máscaras, não armaduras
+                // Daedric genéricas.
+                if (mask) return Type::ArmorMask;
+                if (HasKeyword(a_armor, "ArmorMaterialDaedric") ||
+                    HasKeyword(a_armor, "ArmorDaedric")) return Type::ArmorDaedra;
+                if (HasKeyword(a_armor, "ArmorBracer")) return Type::ArmorBracer;
+                if (shield) return Type::ArmorShield;
+                if (head) return Type::ArmorHead;
+                if (forearms) return Type::ArmorForearms;
+                if (hands) return Type::ArmorHands;
+                if (calves) return Type::ArmorCalves;
+                if (feet) return Type::ArmorFeet;
+                if (body) return Type::ArmorBody;
             }
 
+            if (light)
+            {
+                if (mask) return Type::LightArmorMask;
+                if (shield) return Type::LightArmorShield;
+                if (head) return Type::LightArmorHead;
+                if (forearms) return Type::LightArmorForearms;
+                if (hands) return Type::LightArmorHands;
+                if (calves) return Type::LightArmorCalves;
+                if (feet) return Type::LightArmorFeet;
+                if (body) return Type::LightArmorBody;
+            }
 
-            // --------------------------------------------------------
-            // CLOTHING
-            // --------------------------------------------------------
+            // Circlets ficam depois de todas as peças de cabeça completas.
+            if (circletOnly) return Type::ArmorCirclet;
 
-            if (HasKeyword(a_armor, "ClothingHead"))
-                return Type::ClothingHead;
-
-            if (HasKeyword(a_armor, "ClothingBody"))
-                return Type::ClothingBody;
-
-            if (HasKeyword(a_armor, "ClothingHands"))
-                return Type::ClothingHands;
-
-            if (HasKeyword(a_armor, "ClothingFeet"))
-                return Type::ClothingFeet;
-
-
+            // Fallback para armaduras de mods que não classificam material,
+            // mas expõem corretamente os slots físicos. DefaultArmor só fica
+            // para casos realmente sem tipo/slot representável.
+            if (mask) return Type::ArmorMask;
+            if (shield) return Type::ArmorShield;
+            if (head) return Type::ArmorHead;
+            if (forearms) return Type::ArmorForearms;
+            if (hands) return Type::ArmorHands;
+            if (calves) return Type::ArmorCalves;
+            if (feet) return Type::ArmorFeet;
+            if (body) return Type::ArmorBody;
+            if (hasSlot(Slot::kCirclet) || a_armor->IsCirclet())
+                return Type::ArmorCirclet;
             return Type::DefaultArmor;
         }
 
@@ -703,7 +769,21 @@ namespace ItemIcon
             if (HasKeyword(a_weapon, "WeapTypeWarhammer"))
                 return Type::WeaponHammer;
 
-            if (HasKeyword(a_weapon, "VendorItemPickaxe"))
+            // A picareta vanilla e várias de mods usam WeapTypePickaxe;
+            // outras expõem apenas VendorItemPickaxe. Ambas precisam vencer
+            // o tipo interno OneHandAxe.
+            // A picareta vanilla não tem WeapTypePickaxe/VendorItemPickaxe:
+            // ela é internamente OneHandAxe. Seu FormID base é a única
+            // identificação estável nesse caminho; GetFormEditorID() não é
+            // garantido para TESObjectWEAP. Mods normalmente expõem um dos
+            // keywords abaixo.
+            constexpr RE::FormID kVanillaPickaxe = 0x000E3C16;
+            const std::string_view editorID = a_weapon->GetFormEditorID()
+                ? a_weapon->GetFormEditorID() : "";
+            if (a_weapon->GetFormID() == kVanillaPickaxe ||
+                HasKeyword(a_weapon, "VendorItemPickaxe") ||
+                HasKeyword(a_weapon, "WeapTypePickaxe") ||
+                ContainsInsensitive(editorID, "pickaxe"))
                 return Type::WeaponPickaxe;
 
             if (HasKeyword(a_weapon, "VendorItemWoodAxe"))
@@ -944,6 +1024,7 @@ namespace ItemIcon
         // A base interna continua disponível mesmo se o leitor I4 não
         // encontrar nenhum arquivo ou uma fonte externa não puder ser lida.
         IconCustom::Initialize(device);
+        SWFBridge::Initialize(device);
 
         return true;
     }
@@ -956,6 +1037,7 @@ namespace ItemIcon
     void Shutdown()
     {
         IconCustom::Shutdown();
+        SWFBridge::Shutdown();
 
         for (auto& [type, srv] : g_icons)
         {
@@ -1190,6 +1272,15 @@ namespace ItemIcon
         if (Config::g_customIcons)
         {
             if (auto* icon = IconCustom::Get(a_form))
+                return icon;
+        }
+        // Ícones locais do p-radials continuam tendo prioridade. O bridge
+        // I4 entra apenas antes do símbolo genérico calculado por tipo.
+        if (const auto resolved = IconResolver::Resolve({ a_form }); resolved &&
+            resolved->iconSource && resolved->iconLabel)
+        {
+            if (auto* icon = SWFBridge::GetTexture(*resolved->iconSource,
+                    *resolved->iconLabel))
                 return icon;
         }
         return Get(

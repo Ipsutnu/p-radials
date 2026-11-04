@@ -66,9 +66,15 @@ namespace Config
     
     extern int g_toggleKey;
     extern int g_secondaryKey;
+    extern int g_topRadialKey;
+    extern int g_bottomRadialKey;
+    extern int g_rightRadialKey;
+    extern int g_leftRadialKey;
     extern int g_altConfigKey;
     extern bool g_automaticArrowMenus;
     extern bool g_pauseGameDuringHub;
+    extern bool g_selectItemWhenTopBottomOpens;
+    extern bool g_topBottomLineSelection;
     extern int g_radialAnimation;
     extern int g_radialShape;
     extern bool g_customRadial;
@@ -103,6 +109,7 @@ namespace Config
     extern float g_sideMouseSmooth;
     extern float g_gamepadAnalogSensitivity;
     extern float g_gamepadAnalogSmooth;
+    extern bool g_mouseGuard;
     extern bool g_lockSideScroll;
     extern bool g_showItemPreviewGameplay;
     extern bool g_showItemQuantity;
@@ -174,7 +181,7 @@ namespace Config
         0xEBE6D7, // SliderFillActive
         0xB4B4B9, // SliderTick
         0x5AD287, // EditorSuccess
-        0xE15F55, // EditorError
+        0xDC3E3E, // EditorError — vermelho semântico já usado pelo Quick Draw
         0xFFFFFF  // QuickDrawLine
     };
     extern std::array<std::uint32_t,
@@ -203,6 +210,27 @@ namespace Config
     extern float g_drawMarkDistance;
     extern bool g_drawEffectsGameplay;
     extern bool g_drawEffectsEditor;
+    // Preferências globais do Draw: não pertencem a um preset de layout.
+    extern bool g_invertDrawMouseHands;
+    // Preferências globais de mão. Elas reproduzem, quando desejado, a
+    // convenção nativa do Skyrim sem alterar o layout visual dos radiais.
+    extern bool g_invertSideRadialHands;
+    extern bool g_invertTopBottomMouseClickHands;
+    extern bool g_invertTopBottomScrollHands;
+    extern bool g_invertTopBottomGamepadHands;
+    extern bool g_invertHotkeyMouseClickHands;
+    extern bool g_invertHotkeyMouseDirectionHands;
+    extern bool g_invertHotkeyKeyboardHands;
+    extern bool g_invertHotkeyGamepadHands;
+    // Bloqueado preserva o gesto clássico, ancorado no centro. Desbloqueado
+    // permite vários traços livres dentro do círculo de Draw.
+    extern bool g_lockQuickDrawDrawing;
+    extern float g_quickDrawCircleRadius;
+    inline constexpr float kDefaultQuickDrawCircleRadius = 250.0f;
+    // Percentual mínimo de semelhança exigido para aceitar um gesto do
+    // Quick Draw. 50 mantém o comportamento histórico do plugin.
+    extern float g_drawPrecision;
+    inline constexpr float kDefaultDrawPrecision = 50.0f;
     // 0 = nada; 1 = preview do item; 2 = ícone compacto.
     extern int g_shortcutFeedbackStyle;
     // Deslocamentos percentuais relativos à área visível, mantendo 0 no
@@ -213,6 +241,9 @@ namespace Config
     extern int g_shortcutHudStyle;
     extern bool g_shortcutHudInverted;
     extern bool g_shortcutHudShowNames;
+    // Shouts com Auto-Use primário podem imitar a tecla nativa imediatamente,
+    // sem abrir o HUD de hotkey.
+    extern bool g_instantShouts;
     extern float g_shortcutHudNamePositionX;
     extern float g_shortcutHudNamePositionY;
     // -1..1: deslocamento horizontal relativo ao espaço seguro do HUD.
@@ -231,6 +262,7 @@ namespace Config
     extern int g_drawMarkStyle;
     extern bool g_showDrawMark;
     extern int g_fontFamily;
+    extern std::string g_fontFamilyPath;
     extern float g_sideRadialPosition;
     extern float g_topVerticalPosition;
     extern float g_bottomVerticalPosition;
@@ -241,6 +273,10 @@ namespace Config
     extern float g_itemBagPositionX;
     extern float g_itemBagPositionY;
     extern float g_itemBagExpandedScale;
+    // Gaveta de loadouts: centro normalizado preso ao perímetro; -1 restaura
+    // o encaixe padrão no centro da borda superior.
+    extern float g_armorDrawerPositionX;
+    extern float g_armorDrawerPositionY;
     // Raio aberto da bolsa de Auto-Use secundário do Quick Draw.
     extern float g_quickDrawSecondaryBagRadius;
 
@@ -253,6 +289,7 @@ namespace Config
     inline constexpr float kDefaultSideMouseSmooth = 0.0f;
     inline constexpr float kDefaultGamepadAnalogSensitivity = 1.0f;
     inline constexpr float kDefaultGamepadAnalogSmooth = 0.0f;
+    inline constexpr bool kDefaultMouseGuard = false;
     inline constexpr float kDefaultItemNameOpacity = 100.0f;
     inline constexpr float kDefaultItemOpacity = 100.0f;
     inline constexpr float kDefaultGeneralItemSize = 100.0f;
@@ -311,6 +348,7 @@ namespace Config
     inline constexpr float kDefaultBottomHorizontalStretch = 42.86f;
     inline constexpr float kDefaultItemBagPosition = -1.0f;
     inline constexpr float kDefaultItemBagExpandedScale = 1.0f;
+    inline constexpr float kDefaultArmorDrawerPosition = -1.0f;
     // Metade do limite máximo atual (420 px) na primeira abertura.
     inline constexpr float kDefaultQuickDrawSecondaryBagRadius = 210.0f;
 
